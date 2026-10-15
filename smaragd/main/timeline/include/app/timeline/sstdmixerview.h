@@ -887,6 +887,47 @@ public:
     void updateTrackDrag( int yInControlBox );
     void endTrackDrag( int yInControlBox );
 
+    // --- CLEAN UP TAKES (plan 53 §6.3, QBX-195) --------------------------
+    //
+    // P6 shipped the sweep (`cleanup-takes`) and nothing that invoked it. This
+    // is the one worker behind all three surfaces, and the scope is the only
+    // thing they disagree about:
+    //
+    //   SelectionOrProject  the Edit menu and the Unused recordings dock's
+    //                       button. The CLIP SELECTION, or -- with nothing
+    //                       selected -- the whole project. One command whose
+    //                       scope follows the selection, rather than two the
+    //                       user has to choose between (ticket AC4).
+    //   Tracks              the lane context menu: every take column on the
+    //                       clicked track, and on the other selected tracks
+    //                       when there are any. That menu is aimed at a lane
+    //                       and already says out loud how many it acts on, so
+    //                       it is the track-scoped surface.
+    //
+    // THE SELECTION IS TRANSLATED HERE AND NOT AT THE VERB, and that is a
+    // layering fact rather than a choice: `objects/cut` may depend only on
+    // {actions, model, objects/recplan, objects/wave, persistence}, so
+    // `cleanup-takes` cannot see what is selected. It takes `clips=`, and the
+    // caller turns a selection into one -- the same split `split-selection`
+    // makes against `split-clip`.
+    //
+    // `scripted`, when non-null, is the answer the confirmation would have
+    // given, and the dialog is skipped. That is the ONE seam a scripted run
+    // uses; the alternative -- a test-mode branch inside this function --
+    // would mean the interactive path and the gated path are not the same
+    // code.
+    //
+    // Returns how many takes were removed. ZERO covers "nothing to do", "the
+    // user cancelled" and "no project"; the log line tells them apart and no
+    // caller needs to.
+    struct CleanupTakesChoices {
+        bool includeOriginals = false;
+        bool files            = false;
+    };
+    enum class CleanupScope { SelectionOrProject, Tracks };
+    int cleanupTakesGesture( CleanupScope scope,
+                             const CleanupTakesChoices *scripted );
+
 public slots:
     void ctAddTrack();
     // Add a new track whose parent is the same container as the last visible
@@ -907,6 +948,15 @@ public slots:
     void ctRemoveSample();
     void ctDeleteSample();
     void ctSplitSample();
+    // --- clean up takes (plan 53 §6.3, QBX-195) -------------------------
+    //
+    // P6 shipped the sweep and no command for it. These are the commands; the
+    // scopes and the one worker behind them are documented on
+    // cleanupTakesGesture() above. Both of these are INTERACTIVE -- they put
+    // the confirmation up and do nothing without it, which under
+    // `--test-case` means they do nothing at all (SCleanupTakesDialog::ask).
+    void ctCleanupTakes();
+    void ctCleanupTakesTracks();
     // Proposal 41 M2, arranger surface: pack the current clip selection into
     // fragments, ONE PER LANE, leaving any lane that holds a single selected
     // clip alone (pack-selection). Named automatically -- no prompt.

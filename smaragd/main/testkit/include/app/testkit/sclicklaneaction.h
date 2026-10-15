@@ -80,6 +80,70 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 };
 
+// cleanup-takes-gesture (plan 53 §6.3, QBX-195) — the CLEAN-UP SWEEP AS A
+// USER REACHES IT, which is a different thing from `cleanup-takes` and is why
+// this verb exists at all.
+//
+// `cleanup_takes.qxa` already drives the VERB, so a second case submitting the
+// same verb would gate nothing new. What P6 left unbuilt was everything
+// between a menu click and that verb: resolving the scope, translating the
+// clip SELECTION into `clips=` (which the verb cannot do -- `objects/cut` may
+// not see a selection), asking the confirmation, and submitting the result as
+// one undo step. This drives exactly that, through
+// SMainWindow::cleanupTakesGesture -> SStdMixerView::cleanupTakesGesture, the
+// same two calls the Edit menu and the lane context menu make.
+//
+//   scope             "selection" (default) — the Edit menu's and the dock
+//                     button's scope: the CLIP SELECTION, or the whole project
+//                     when nothing is selected. Set up the selection first
+//                     (set-selection / click-lane).
+//                     "tracks" — the lane context menu's scope: every take
+//                     column on the last-clicked track and on the other
+//                     selected tracks. Set up the click first (click-lane).
+//   answer            "yes" (default) — supply the confirmation's two answers
+//                     from the attributes below instead of opening it. This is
+//                     the ONE seam a scripted run uses, and it has to exist:
+//                     a modal in a headless run is a hang, so the interactive
+//                     path can only ever DECLINE there.
+//                     "ask" — drive the interactive path instead, which under
+//                     --test-case declines and therefore removes nothing. That
+//                     is the gate on "nothing happens without a confirmation".
+//   includeOriginals  "0" — the dialog's first checkbox, as answered.
+//   files             "0" — its second. **No case sets this to 1**: it moves
+//                     files to the OS trash, which a -j4 suite may not do. The
+//                     verb carries it so the attribute is reachable at all and
+//                     so a hand-run can exercise it.
+//   expectRemoved     "-1" (unset = not checked) — how many takes the gesture
+//                     removed. ZERO is a legitimate answer (nothing to do, or
+//                     declined), so this is EXACT rather than a floor: a gate
+//                     that only said "at least one" could not tell the cancel
+//                     branch from the sweep.
+//
+// Not undoable itself: the gesture submits its own `cleanup-takes`, and
+// undoing THAT is what reverses the sweep.
+class SCleanupTakesGestureAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "cleanup-takes-gesture" ); }
+    QStringList knownAttributes() const override
+    {
+        return { QStringLiteral( "scope" ), QStringLiteral( "answer" ),
+                 QStringLiteral( "includeOriginals" ),
+                 QStringLiteral( "files" ),
+                 QStringLiteral( "expectRemoved" ) };
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString scope_            = QStringLiteral( "selection" );
+    QString answer_           = QStringLiteral( "yes" );
+    bool    includeOriginals_ = false;
+    bool    files_            = false;
+    int     expectRemoved_    = -1;
+};
+
 // wheel-scroll (AC-g1) — one REAL QWheelEvent to the arranger canvas, exactly
 // as a physical notch would be delivered, so the follow-playhead HOLD
 // (SMVActualView::armFollowHold) is exercised through its actual call site

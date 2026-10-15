@@ -30,18 +30,30 @@ SUnusedRecordingsView::SUnusedRecordingsView( QWidget *parent )
     // and the removal is `cleanup-takes`. Nothing here acts on a row.
     list_->setToolTip(
         tr( "Recordings this project does not play. The audio is still on "
-            "disk; nothing here is deleted. Use Clean up takes to remove "
-            "them." ) );
+            "disk; nothing here is deleted. Use Clean up takes... below, or "
+            "Edit > Clean up takes..., to remove them." ) );
     root->addWidget( list_, 1 );
 
     refresh_ = new QPushButton( tr( "Refresh" ), this );
     refresh_->setObjectName( QStringLiteral( "unusedRecordingsRefresh" ) );
+    // THE BUTTON REMOVES NOTHING (see the header): it asks, and the shell runs
+    // the one gesture the Edit menu runs. The ellipsis is the promise that a
+    // confirmation comes first, and it is kept.
+    cleanup_ = new QPushButton( tr( "Clean up takes..." ), this );
+    cleanup_->setObjectName( QStringLiteral( "unusedRecordingsCleanup" ) );
+    cleanup_->setToolTip(
+        tr( "Removes the takes nothing plays and nothing comps, after asking. "
+            "Moving the recording files themselves to the trash is a separate "
+            "choice in that dialog, and is off by default." ) );
     QHBoxLayout *row = new QHBoxLayout;
+    row->addWidget( cleanup_ );
     row->addStretch( 1 );
     row->addWidget( refresh_ );
     root->addLayout( row );
     connect( refresh_, &QPushButton::clicked,
              this, &SUnusedRecordingsView::refresh );
+    connect( cleanup_, &QPushButton::clicked,
+             this, &SUnusedRecordingsView::cleanupRequested );
 
     refresh();
 }

@@ -80,39 +80,37 @@ bool compMapUsesTake( STakeStack *stack, int i )
 
 } // namespace
 
-SCleanupTakesAction::SCleanupTakesAction( const QString &scope,
-                                          const QString &clips,
-                                          bool includeOriginals, bool files )
-    : scope_( scope ), clips_( clips ), includeOriginals_( includeOriginals ),
-      files_( files )
-{
-}
+// ---------------------------------------------------------------------------
+// scleanuptakes::plan -- the decision, with nothing moved
+// ---------------------------------------------------------------------------
 
-SApplyResult SCleanupTakesAction::apply( SProject *project )
+scleanuptakes::Plan scleanuptakes::plan( SProject *project,
+                                        const QString &pathRoot,
+                                        const QString &scope,
+                                        const QString &clips,
+                                        bool includeOriginals )
 {
-    if( !project ) return { false, nullptr };
-    removedTakes_  = 0;
-    keptOriginals_ = 0;
-
-    SObject *root = splacements::rootNamed( project, pathRoot_ );
-    if( !root ) return { false, nullptr };
+    Plan out;
+    if( !project ) return out;
+    SObject *root = splacements::rootNamed( project, pathRoot );
+    if( !root ) return out;
 
     // ---- WHICH COLUMNS ----------------------------------------------------
     QList<QList<int>> columns;
-    if( !clips_.isEmpty() ) {
-        for( const QString &one : clips_.split( QLatin1Char( ';' ),
-                                                Qt::SkipEmptyParts ) ) {
+    if( !clips.isEmpty() ) {
+        for( const QString &one : clips.split( QLatin1Char( ';' ),
+                                               Qt::SkipEmptyParts ) ) {
             bool ok = false;
             const QList<int> p = strackpath::stringToPath( one.trimmed(), &ok );
             if( ok && !p.isEmpty() ) columns.append( p );
         }
-    } else if( scope_ == QLatin1String( "project" ) ) {
+    } else if( scope == QLatin1String( "project" ) ) {
         collectColumns( root, QList<int>(), columns );
     } else {
-        qWarning() << "cleanup-takes: scope" << scope_
+        qWarning() << "cleanup-takes: scope" << scope
                    << "needs a clips= list (see the header: this slice cannot"
                       " see a selection)";
-        return { false, nullptr };
+        return out;
     }
 
     // ---- WHAT TO REMOVE, DECIDED BEFORE ANYTHING MOVES -------------------
@@ -121,8 +119,6 @@ SApplyResult SCleanupTakesAction::apply( SProject *project )
     // one pass would read indices that the previous removal had already
     // renumbered -- `removeTake` shifts every take above the one it drops, and
     // so does the comp map.
-    SCompositeAction *macro = new SCompositeAction;
-
     for( const QList<int> &clipPath : columns ) {
         QList<int> lanePath = clipPath;
         const int idx = lanePath.takeLast();
@@ -133,6 +129,7 @@ SApplyResult SCleanupTakesAction::apply( SProject *project )
 
         const int active = stack->activeTakeIndex();
         QList<int> doomed;
+        QStringList doomedNames;
         for( int t = 0; t < stack->nTakes(); ++t ) {
             if( t == active ) continue;               // what sounds, stays
             if( compMapUsesTake( stack, t ) ) continue;  // what is comped, stays
@@ -146,17 +143,54 @@ SApplyResult SCleanupTakesAction::apply( SProject *project )
                 // `includeOriginals` the same take is removed, and reporting
                 // it as kept would make the confirmation line contradict what
                 // the sweep did.
-                if( !includeOriginals_ ) { ++keptOriginals_; continue; }
+                if( !includeOriginals ) { ++out.keptOriginals; continue; }
             }
             doomed.append( t );
+            doomedNames.append( nm.isEmpty() ? QStringLiteral( "(unnamed)" )
+                                             : nm );
         }
+        if( doomed.isEmpty() ) continue;
+        out.perColumn.append( qMakePair( clipPath, doomed ) );
+        out.removedTakes += doomed.size();
+        out.removedNames += doomedNames;
+        ++out.columnsTouched;
+    }
+    return out;
+}
+
+SCleanupTakesAction::SCleanupTakesAction( const QString &scope,
+                                          const QString &clips,
+                                          bool includeOriginals, bool files )
+    : scope_( scope ), clips_( clips ), includeOriginals_( includeOriginals ),
+      files_( files )
+{
+}
+
+SApplyResult SCleanupTakesAction::apply( SProject *project )
+{
+    if( !project ) return { false, nullptr };
+
+    // ONE AUTHORITY ON WHAT THE SWEEP DOES (QBX-195). This used to decide here;
+    // it now asks `scleanuptakes::plan`, which is also what the confirmation
+    // dialog asks -- so the numbers the user agreed to and the removals that
+    // follow come out of the same walk rather than out of two readings of
+    // decision D5 (a)'s name test.
+    const scleanuptakes::Plan p =
+        scleanuptakes::plan( project, pathRoot_, scope_, clips_,
+                             includeOriginals_ );
+    removedTakes_  = p.removedTakes;
+    keptOriginals_ = p.keptOriginals;
+
+    SCompositeAction *macro = new SCompositeAction;
+    for( const auto &col : p.perColumn ) {
         // HIGHEST INDEX FIRST, so each removal leaves the lower indices -- and
         // therefore every index still queued -- meaning what it meant when the
-        // plan was made.
-        for( int k = doomed.size() - 1; k >= 0; --k ) {
-            macro->append( new SRemoveTakeAction( clipPath, doomed[ k ] ) );
-            ++removedTakes_;
-        }
+        // plan was made. The plan lists them ascending; this is the one place
+        // that order matters, so it is reversed here rather than in the plan,
+        // where ascending is what a dialog listing them wants.
+        for( int k = col.second.size() - 1; k >= 0; --k )
+            macro->append( new SRemoveTakeAction( col.first,
+                                                  col.second[ k ] ) );
     }
 
     if( macro->count() == 0 ) {

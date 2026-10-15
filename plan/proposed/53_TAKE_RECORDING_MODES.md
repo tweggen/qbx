@@ -2019,6 +2019,54 @@ something a case may do, and the PR says so).
 > confirmation dialog are not — so a user can see the list and not act on it.
 > Named here rather than discovered later; it needs the selection translation
 > of (a) as well.
+>
+> **...AND IT IS BUILT NOW (QBX-195).** Three surfaces, one worker
+> (`SStdMixerView::cleanupTakesGesture`): *Clean up takes...* in the **Edit**
+> menu, whose scope FOLLOWS THE SELECTION (the selected columns, or the whole
+> project when nothing is selected — one command rather than two the user has
+> to choose between); *Clean up takes* in the **lane context menu**, scoped to
+> the clicked and selected tracks, carrying the same `(N tracks)` suffix the
+> other items there carry and disabled with its reason in its own text when
+> those tracks hold no take column; and a **button in the Unused recordings
+> dock**, which is where the user is looking when they want this. The dock
+> stays read-only in the sense its header means — the button removes nothing,
+> it emits `cleanupRequested()` and the shell runs the one gesture, so there is
+> one confirmation and one undo step rather than two.
+>
+> Three things that fell out of building it and are worth keeping:
+>
+> **(e) THE CONFIRMATION MAY NOT COUNT FOR ITSELF**, so `apply()`'s plan
+> computation moved out to `scleanuptakes::plan()`. The dialog cannot ask it
+> directly — `app/servicesui` may not depend on `app/objects/cut` — so it is
+> handed the numbers by the arranger, which may see both. A dialog with its own
+> count would be a second reading of D5 (a)'s name test and a confirmation that
+> lied about the next click.
+>
+> **(f) "NOTHING TO REMOVE" IS NOT THE SAME QUESTION AS "NOTHING TO ASK".**
+> The first version bailed out with a hint when the DEFAULT plan was empty —
+> and the dialog's two boxes reach things that plan does not. Measured on the
+> first run of `cleanup_takes_gesture.qxa`: a column whose only sweepable take
+> was the user's OWN clip reported "nothing to clean up" and closed, so the one
+> checkbox that could have removed it never appeared. The gesture now offers
+> the dialog when either box can still reach something (an original take, or an
+> orphan FILE, which no take count can see at all), and the dialog says so
+> instead of claiming the sweep is empty.
+>
+> **(g) THE ACTIVE TAKE IS NEVER SWEPT, WHATEVER THE BOX SAYS**, which
+> `includeOriginals` does not override — the `t == active` test runs first.
+> Worth stating because the obvious reading of the checkbox ("remove the
+> original too") is wrong when the original is the take that sounds, and the
+> gesture case's first draft asked for two removals and got one.
+>
+> **AND ONE THING THIS DID NOT TOUCH.** There is a SECOND, older answer to
+> "which recordings does this project not use": `SCleanupDialog`
+> (`app/servicesui`, reached from the resources window's context menu) has its
+> own `kRecordingPattern` regex, its own reference walk, and **deletes
+> permanently** where `cleanup-takes files="1"` moves to the trash. Two
+> user-facing commands that both claim to remove unused recordings, by two
+> name tests that can disagree, one of them irreversible. Changing what an
+> existing command does is the author's call, so it is filed rather than folded
+> in: **QBX-197**.
 
 ### P7 — QBX-157 backdrop and cut marks — depends on A0b, B4 — **SHIPPED**
 
@@ -2196,7 +2244,7 @@ existing tickets. Order within a group is landing order.
 | P3 (**QBX-181**) | MIDI parity: union/split over event columns, tick extents (D6 (a)), X16, mode semantics documented per kind — **SHIPPED**, on QBX-188's shared planner module. Five corrections in §8's P3 row, of which two are defects it had to fix to be writable at all: an event column's `duration_` and comp map had no musical anchor, and the MIDI recorder had no punch (which silently dropped the whole take of a punched press) | P2, QBX-188 | M |
 | P4 (**QBX-182**) | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names — **SHIPPED** for AUDIO. `armed="0"` gained meaning and a gate on the same day; `merge-columns` gained an explicit extent, which is what lets a member's column be the GROUP's and not its own clip's. The MIDI recorder does not enumerate members (QBX-191); the take NAME landed for both kinds. Three corrections in §8's P4 row | P2 | M |
 | P5 (**QBX-183**) | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; the selection fade surface — **SHIPPED**. The whole policy is one new module, `app/model/sautofade.h`, because the feature has two consumers in slices that may not see each other (`objects/track` at clip edges, `objects/cut` at comp boundaries) and a third READER in the panel. At a boundary it is a LENGTH handed to the crossfade that was already there, in `clampedXfade_nolock` — so a 3 ms auto-fade renders byte-identically to an explicit `xfade=144`. Three corrections in §8's P5 row, one of which is a plain error in this plan's own text | A0a, B8 | M |
-| P6 (**QBX-184**) | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse — **SHIPPED**. The real inverse landed FIRST, as its own change, because one non-undoable child makes a whole composite non-undoable and a sweep that could not be undone is not shippable. Four corrections in §8's P6 row, two of them defects outside this row's subject: `add-take` carried no NAME, so undoing a removal turned a recording into an "original clip"; and four committed assertions used a `minClips` attribute `assert-recorded-clip` does not have | P2, A0b, B10 | M |
+| P6 (**QBX-184**, UI in **QBX-195**) | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse — **SHIPPED**. Its UI — the Edit-menu and lane-menu commands, the dock button and the confirmation dialog — shipped separately as **QBX-195**, with three corrections of its own in §8's P6 row ((e) the dialog may not count for itself, (f) "nothing to remove" is not "nothing to ask", (g) the active take is never swept). The real inverse landed FIRST, as its own change, because one non-undoable child makes a whole composite non-undoable and a sweep that could not be undone is not shippable. Four corrections in §8's P6 row, two of them defects outside this row's subject: `add-take` carried no NAME, so undoing a removal turned a recording into an "original clip"; and four committed assertions used a `minClips` attribute `assert-recorded-clip` does not have | P2, A0b, B10 | M |
 | QBX-157 | **SHIPPED as P7.** Cut marks (comp boundaries, take-extent edges, column edges) plus the PIXEL gate on the comp-result paint A0b shipped ungated. The laned-track BACKDROP needed nothing built: the composite lane has painted the comp result since A0b, on the parent row, expanded or not — §4.4 correction (i) | A0b, B4 | M |
 | QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |
 

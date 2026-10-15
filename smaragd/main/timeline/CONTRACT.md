@@ -1757,3 +1757,44 @@ the two checkboxes have no bespoke gate; the checkboxes' effect on the model is
 covered end-to-end through the VERB in `auto_fade_override.qxa`, which is the
 same code path `onAutoFadeClicked` submits into. The status line's TEXT is not
 gated at all, and `laneSeams` being shared is what makes that acceptable.
+
+## `cleanupTakesGesture` — the selection becomes `clips=` here (plan 53 §6.3, QBX-195)
+
+`cleanup-takes` cannot see a selection: `objects/cut` may depend only on
+`{actions, model, objects/recplan, objects/wave, persistence}`. So it takes a
+`clips=` path list and the CALLER translates — the same split
+`split-selection` makes against `split-clip`, and this is that caller.
+
+One worker, two scopes. `SelectionOrProject` is the Edit menu's and the dock
+button's: `SApplication::getCurrentSelectionPaths()`, filtered to the
+placements that actually ARE take columns. `Tracks` is the lane context menu's:
+every take column on `selectionTargets( lastClickTrack_ )`.
+
+**AN EMPTY `clips=` IS THE PROJECT-WIDE SWEEP**, which is `cleanup-takes`'s own
+default scope — so "the whole project" is the ABSENCE of a list rather than a
+third branch here. Which makes two emptinesses different answers, and they are
+kept apart deliberately: an empty SELECTION means the whole project, while a
+selection of plain clips that holds no take column means **nothing to do** and
+must never become a project-wide sweep by accident.
+
+**"NOTHING TO REMOVE" IS NOT THE SAME QUESTION AS "NOTHING TO ASK".** The
+dialog's two boxes reach things the default plan does not — an original take,
+and orphan FILES, which no take count can see at all — so the no-op exit tests
+all three counts. The first version tested `removedTakes` alone, and a column
+whose only sweepable take was the user's own clip reported "nothing to clean
+up" and closed, with the one checkbox that could have removed it never shown.
+Measured on the first run of `cleanup_takes_gesture.qxa`.
+
+**THE PREVIEW IS COMPUTED WITH `includeOriginals = false`** because that is the
+state the dialog OPENS in: the numbers on screen have to be the numbers for the
+boxes as they are. The sweep recomputes its own plan when it runs, so the
+preview is the question and not the contract — and the status line afterwards
+reports `SCleanupTakesAction::removedTakes()`, which is what the sweep actually
+did, not what the preview predicted.
+
+**THE LANE MENU'S ITEM CARRIES THE `(N tracks)` SUFFIX** the other track items
+there carry, for the reason that convention exists: an item that silently hits
+four lanes when the pointer is on one is the whole risk of a multi-selection,
+and this one REMOVES things. It is disabled **with the reason in its own text**
+("(no take columns)") when the targets hold none, which is the precedent
+`"Create &asset from range"` set.

@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE CLEAN-UP SWEEP AS A USER REACHES IT (plan 53 §6.3, QBX-195).
+
+  WHY A SECOND CASE. `cleanup_takes.qxa` drives the VERB, and P6 shipped that
+  verb with nothing invoking it: a user could open the Unused recordings dock,
+  read the list, and had no command to act on it. The dock's own tooltip said
+  "Use Clean up takes to remove them" and named something that did not exist.
+  Everything QBX-195 built sits BETWEEN a menu click and that verb, so a case
+  that submitted `cleanup-takes` again would gate none of it:
+
+    * resolving which columns the command means, from the SELECTION or from
+      the clicked TRACK;
+    * translating that into `clips=` — which the verb cannot do for itself,
+      because `objects/cut` may depend on {actions, model, objects/recplan,
+      objects/wave, persistence} and so cannot see a selection. That is the
+      same split `split-selection` makes against `split-clip`;
+    * asking the confirmation, and doing NOTHING without it;
+    * submitting the result as one undo step.
+
+  `cleanup-takes-gesture` drives exactly that, through
+  SMainWindow::cleanupTakesGesture -> SStdMixerView::cleanupTakesGesture, the
+  two calls the Edit menu and the lane context menu make.
+
+  THE SHAPE. Two tracks, each one 4 s column holding the user's own clip plus
+  ONE sweepable recorded take:
+
+    track 0, clip 0,0   take 0 "Guitar comp"  (the user's, ACTIVE)
+                        take 1 "Take 1 · 12:00"  — unused, a recording
+    track 1, clip 1,0   take 0 "Bass comp"    (the user's, ACTIVE)
+                        take 1 "Take 2 · 12:00"  — unused, a recording
+
+  Both columns are identical in every way that matters, which is what makes
+  the SCOPE assertions mean something: a gesture that ignored the selection
+  and swept the project would remove two takes where one is expected, and a
+  gesture that swept nothing would remove none. Only the right answer is 1.
+
+  WHAT IS ASSERTED, in order:
+
+   1. `answer="ask"` REMOVES NOTHING. A scripted run cannot dismiss a modal,
+      so the interactive path declines — and the answer it gives has to be
+      "no", or a menu click would sweep a project as a side effect of being
+      unable to ask. This is the gate on "nothing happens without the user
+      saying so", and it is the FIRST thing asserted because every assertion
+      after it would also pass on a build that never confirmed anything.
+   2. A CLIP SELECTION sweeps ONLY the selected column.
+   3. ONE UNDO puts it back.
+   4. NOTHING SELECTED sweeps the WHOLE PROJECT — both columns, one undo step.
+   5. `scope="tracks"` (the lane context menu) sweeps the CLICKED track only.
+   6. A TIDY PROJECT is a no-op that says so, not an error: the same gesture
+      run twice succeeds the second time with nothing removed.
+   7. `includeOriginals` reaches the sweep through the gesture.
+   8. AN EVENT TAKE comes back, which is what QBX-184's pin pattern made
+      possible and what makes the sweep safe to offer from a menu at all.
+-->
+<SActionScript version="1" name="cleanup_takes_gesture">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-clip-name clip="0,0" name="Guitar comp"/>
+    <add-take clip="0,0" filePath="../test_gapsaw.wav" startOffset="0"
+              activate="0"/>
+    <set-clip-name clip="0,0" take="1" name="Take 1 · 12:00" broadcast="0"/>
+
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-clip-name clip="1,0" name="Bass comp"/>
+    <add-take clip="1,0" filePath="../test_gapsaw.wav" startOffset="0"
+              activate="0"/>
+    <set-clip-name clip="1,0" take="1" name="Take 2 · 12:00" broadcast="0"/>
+
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+
+    <!-- The sound to compare against: no sweep below may change it, because
+         every take any of them removes is one nothing plays. -->
+    <render filename="ctg_before.wav" format="wav" quality="10"
+            durationSec="4.0"/>
+
+    <!-- ===== 1. NOTHING WITHOUT A CONFIRMATION ====================== -->
+    <!-- The interactive path, in a run that cannot answer a modal. It must
+         decline, and declining must remove nothing. A build whose dialog
+         opened here would HANG rather than fail, which is the other half of
+         why this is asserted first. -->
+    <set-selection paths="0,0"/>
+    <cleanup-takes-gesture scope="selection" answer="ask" expectRemoved="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+
+    <!-- ===== 2. THE SELECTION IS THE SCOPE ========================== -->
+    <!-- One column selected, one take removed — and the OTHER column is
+         untouched, which is the assertion a project-wide sweep fails. -->
+    <cleanup-takes-gesture scope="selection" answer="yes" expectRemoved="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+    <render filename="ctg_sel.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="ctg_sel.wav" expected="ctg_before.wav"/>
+
+    <!-- ===== 3. ONE UNDO ============================================ -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"/>
+
+    <!-- ===== 4. NOTHING SELECTED IS THE WHOLE PROJECT =============== -->
+    <set-selection paths=""/>
+    <cleanup-takes-gesture scope="selection" answer="yes" expectRemoved="2"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <assert-take-column clip="1,0" shape="none"/>
+    <!-- ...and still ONE undo step for the whole sweep. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+
+    <!-- ===== 5. THE LANE MENU'S SCOPE IS THE CLICKED TRACK ========== -->
+    <!-- A real click into track 1's lane, so the gesture reads the same
+         lastClickTrack_ the context menu is aimed at. The selection is left
+         empty on purpose: if `scope="tracks"` fell back to the selection it
+         would sweep the project and remove two. -->
+    <set-selection paths=""/>
+    <click-lane trackPath="1" time="48000"/>
+    <cleanup-takes-gesture scope="tracks" answer="yes" expectRemoved="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"/>
+    <assert-take-column clip="1,0" shape="none"/>
+
+    <!-- ===== 6. A TIDY TARGET IS A NO-OP THAT SAYS SO =============== -->
+    <!-- The same gesture again, on the track it has just swept: nothing to
+         remove, no dialog, no refusal. The log line is the statement. -->
+    <cleanup-takes-gesture scope="tracks" answer="yes" expectRemoved="0"/>
+    <assert-log contains="cleanup-takes: nothing to remove" minCount="1"/>
+    <assert-take-column clip="1,0" shape="none"/>
+
+    <undo count="1"/>
+    <assert-take-column clip="1,0" shape="direct" takes="2" activeTake="0"/>
+
+    <!-- ===== 7. includeOriginals REACHES THE SWEEP ================== -->
+    <!-- The dialog's first checkbox is the ONLY way the user's own clip is
+         ever removed, and the pair below is what makes that a measurement
+         rather than a claim: the same gesture over the same column, twice,
+         differing in nothing but the box.
+
+         The RECORDED take is made active first, so the user's own clip is the
+         inactive, uncomped take — the only shape `includeOriginals` is about.
+         (The first draft of this section asked for two removals with take 0
+         ACTIVE, and got one: the active take is never swept, whatever the box
+         says, which is a second defence and a good one.) -->
+    <set-selection paths="0,0"/>
+    <select-take clip="0,0" take="1" broadcast="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <!-- Without the box: the original is EXEMPT, so there is nothing to
+         remove at all — not "nothing happened", but nothing to do. -->
+    <cleanup-takes-gesture scope="selection" answer="yes" expectRemoved="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+
+    <!-- With it: the same sweep removes exactly that take, and the column
+         collapses back to a plain clip (invariant 3'). -->
+    <cleanup-takes-gesture scope="selection" answer="yes"
+                           includeOriginals="1" expectRemoved="1"/>
+    <assert-take-column clip="0,0" shape="none"/>
+    <undo count="1"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="1"/>
+    <select-take clip="0,0" take="0" broadcast="0"/>
+
+    <!-- ===== 8. AN EVENT TAKE COMES BACK ============================ -->
+    <!-- A take with no file behind it could not be undone at all before
+         QBX-184 gave `remove-take` a real inverse (plan 52 §6's hole). It is
+         asserted HERE, through the gesture, because a menu item that could
+         silently lose a MIDI take is not one that may ship. -->
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="2" timePos="0" duration="7680" name="Keys comp"/>
+    <add-note clip="2,0" tick="0" dur="480" key="48" velocity="100" channel="0"/>
+    <add-midi-take clip="2,0" atTicks="0" extentTicks="7680"
+                   name="Take 1 · 12:02">
+      <n tick="960" dur="480" key="72" velocity="100" channel="0"/>
+    </add-midi-take>
+    <select-take clip="2,0" take="0" broadcast="0"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"/>
+
+    <set-selection paths="2,0"/>
+    <cleanup-takes-gesture scope="selection" answer="yes" expectRemoved="1"/>
+    <assert-take-column clip="2,0" shape="none"/>
+    <assert-midi-events scope="clip" clip="2,0" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="2,0" contains="key=48"/>
+
+    <undo count="1"/>
+    <assert-take-column clip="2,0" shape="direct" takes="2" activeTake="0"/>
+    <assert-midi-events scope="clip" clip="2,0" take="1" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="2,0" take="1" contains="key=72"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>

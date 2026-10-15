@@ -159,6 +159,59 @@ bool SSplitSelectionAction::readXml( const QDomElement & /*elem*/, int /*version
     return true;
 }
 
+// --- cleanup-takes-gesture (plan 53 §6.3, QBX-195) -----------------------
+
+SApplyResult SCleanupTakesGestureAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "cleanup-takes-gesture: no main window";
+        return { false, nullptr };
+    }
+    const bool tracks = ( scope_ == QLatin1String( "tracks" ) );
+    const bool scripted = ( answer_ != QLatin1String( "ask" ) );
+    const int removed = win->cleanupTakesGesture( tracks, scripted,
+                                                  includeOriginals_, files_ );
+    if( expectRemoved_ >= 0 && removed != expectRemoved_ ) {
+        qWarning() << "cleanup-takes-gesture FAILED: removed" << removed
+                   << "take(s), expected" << expectRemoved_
+                   << "- scope" << scope_ << "answer" << answer_;
+        return { false, nullptr };
+    }
+    qDebug() << "cleanup-takes-gesture: scope" << scope_ << "answer" << answer_
+             << "removed" << removed;
+    // The gesture submits its own `cleanup-takes`, whose undo reverses the
+    // sweep; there is nothing for this verb to invert.
+    return { true, nullptr };
+}
+
+void SCleanupTakesGestureAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "scope", scope_ );
+    elem.setAttribute( "answer", answer_ );
+    if( includeOriginals_ ) elem.setAttribute( "includeOriginals", "1" );
+    if( files_ )            elem.setAttribute( "files", "1" );
+    if( expectRemoved_ >= 0 )
+        elem.setAttribute( "expectRemoved", expectRemoved_ );
+}
+
+bool SCleanupTakesGestureAction::readXml( const QDomElement &elem, int )
+{
+    scope_  = elem.attribute( "scope", "selection" );
+    answer_ = elem.attribute( "answer", "yes" );
+    includeOriginals_ =
+        elem.attribute( "includeOriginals", "0" ) != QLatin1String( "0" );
+    files_ = elem.attribute( "files", "0" ) != QLatin1String( "0" );
+    expectRemoved_ = elem.attribute( "expectRemoved", "-1" ).toInt();
+    return true;
+}
+
+static const bool s_reg_cleanup_takes_gesture =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "cleanup-takes-gesture" ),
+          [] { return new SCleanupTakesGestureAction; } ),
+      true );
+
 // --- wheel-scroll (AC-g1) ------------------------------------------------
 
 SApplyResult SWheelScrollAction::apply( SProject * /*project*/ )

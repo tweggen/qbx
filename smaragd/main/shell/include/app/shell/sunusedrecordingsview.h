@@ -42,6 +42,16 @@ class QPushButton;
  * "the same scan without the removal", and the removal is `cleanup-takes`. A
  * dock that could bin a file would be a second route to a destructive
  * operation, with its own confirmation to get wrong.
+ *
+ * IT IS STILL READ-ONLY SINCE QBX-195, and the "Clean up takes..." button is
+ * not an exception to that rule but an application of it. The button REMOVES
+ * NOTHING: it emits `cleanupRequested()`, and the shell runs the same gesture
+ * the Edit menu runs -- one route, one confirmation, one undo step. What the
+ * paragraph above forbids is a second destructive path with its own
+ * confirmation to get wrong, and the button is the opposite of that. It is
+ * here because this dock is where the user is looking when they want the
+ * sweep: reading a list of recordings nothing plays and then having to go
+ * find a menu is the gap QBX-195 was filed about.
  */
 class SUnusedRecordingsView : public QWidget
 {
@@ -64,10 +74,20 @@ public slots:
      */
     void onRecordingLanesSkipped( int count, const QString &firstWhy );
 
+signals:
+    /**
+     * The user asked for the clean-up sweep from this dock. The SHELL runs it
+     * (SMainWindow::cleanupTakesFromMenu), exactly as it runs the Edit menu's
+     * item -- this dock may not reach the arranger and must not grow its own
+     * removal. See the header's read-only note.
+     */
+    void cleanupRequested();
+
 private:
     QListWidget *list_    = nullptr;
     QLabel      *summary_ = nullptr;
     QPushButton *refresh_ = nullptr;
+    QPushButton *cleanup_ = nullptr;
 
     /// Everything this SESSION reported as skipped, newest last. Strings only
     /// (see the class comment).
