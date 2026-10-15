@@ -315,6 +315,21 @@ QColor sClipBodyOf( STrack *track )
     return sclipcolors::body( idx, false, track && track->isMuted() );
 }
 
+// The CUT MARK the same track's take column rules its comp boundaries with
+// (plan 53 §4.4 / QBX-157). The unselected variant, for exactly the reason
+// sClipBodyOf() takes it: this verb does not know which clip it is about to
+// meet, and the mark is resolved in the SAME state as the body it is drawn on
+// (sclipcolors::cutMark's own note), so the pair has to be asked for the same
+// way or the classifier would be looking for a colour nothing painted.
+QColor sClipCutMarkOf( STrack *track )
+{
+    SProject *proj = SAppContext::get().getCurrentProject();
+    SObject *root = proj ? proj->getRootComponent() : nullptr;
+    const int idx = ( root && track )
+        ? sclipcolors::indexForLane( *root, *track ) : 0;
+    return sclipcolors::cutMark( idx, false, track && track->isMuted() );
+}
+
 }  // namespace
 
 // --- the mixer pane's TEST SEAMS (proposal 48 M1) -------------------------
@@ -4579,6 +4594,11 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
         : ( QColor( 13, 19, 25 ).rgb() | 0xff000000u );
     const QRgb bodyDim  = sTakeDim( bodyLit );
     const QRgb fillDim  = sTakeDim( fillLit );
+    // THE CUT MARK, read from the same function the painter draws it with
+    // (sclipcolors.h rule 3), so this measurement cannot drift from the paint
+    // by a rounding step. Both states, because the dim is decided below.
+    const QRgb markLit  = sClipCutMarkOf( track ).rgb() | 0xff000000u;
+    const QRgb markDim  = sTakeDim( markLit );
 
     // ACTIVE or INACTIVE is read off the image rather than off the model, so
     // the verb measures the paint on its own terms: whichever body colour is
@@ -4597,12 +4617,20 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
     // everything that is neither body nor lane fill, whose most frequent
     // member IS the waveform (the file name drawn bottom-right is the same
     // class of pixel and is one to two orders of magnitude rarer).
+    const QRgb markRgb = dimmed ? markDim : markLit;
     QVector<int> bodyPerCol( img.width(), 0 );
+    QVector<int> markPerCol( img.width(), 0 );
     QHash<QRgb, int> other;
     for( int y = top; y < top + bandH; ++y )
         for( int x = 0; x < img.width(); ++x ) {
             const QRgb c = img.pixel( x, y ) | 0xff000000u;
             if( c == bodyRgb ) { ++bodyPerCol[x]; continue; }
+            // THE CUT MARK IS TAKEN OUT OF THE HISTOGRAM, not merely counted
+            // beside it: `waveRgb` below is "the most frequent colour that is
+            // neither body nor fill", and on a short clip with several marks
+            // that is a description the marks could win. Then `waveMeanPct`
+            // would measure the marks and go blind to the waveform.
+            if( c == markLit || c == markDim ) { ++markPerCol[x]; continue; }
             if( c == fillLit || c == fillDim ) continue;
             ++other[c];
         }
@@ -4672,18 +4700,67 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
         return cols > 0 ? (int) qRound( 100.0 * ( x - spanFirst ) / cols ) : -1;
     };
 
+    // THE CUT MARKS (plan 53 §4.4 / QBX-157), counted in RUNS and reported as
+    // positions, over the SAME span everything else here is relative to, so the
+    // assertions are zoom-independent like the gap percentages.
+    //
+    // A column counts as marked when the mark colour appears ANYWHERE in it,
+    // which is deliberate rather than lenient: a mark is two short ticks at the
+    // clip's top and bottom edges (STakeStackRendererInline::drawCutMarks), and
+    // the clip's own chrome covers one of them at each outer edge -- the tag
+    // chip sits bottom-left, the reference count top-right -- so a rule that
+    // wanted both ticks would report the column edges as unmarked and nothing
+    // else would be wrong.
+    //
+    // RUNS rather than columns is what makes the count mean "how many cuts":
+    // a mark is one pixel wide today, but a mark at a run boundary and the
+    // column edge beside it can land on adjacent columns at a low zoom, and
+    // anti-aliasing is not what this gate is about.
+    //
+    // THE SCAN IS THE WHOLE WIDTH, NOT THE MATERIAL SPAN, and that is a
+    // measurement the first run of this verb got wrong. The span begins at the
+    // outermost column that carries MATERIAL, and a column's first pixels can
+    // legitimately be silent -- test_sawtooth.wav is a ramp, so its first two
+    // columns round to zero and the span starts at x=2 while the clip starts at
+    // x=1. The mark AT the column's left edge therefore sits one column OUTSIDE
+    // the material span, and scanning only inside it dropped exactly the mark
+    // the gate is about while reporting a confident three-of-four.
+    //
+    // The percentages stay relative to the span, so they remain comparable with
+    // the gap ones -- which means a mark just outside it reports a small
+    // NEGATIVE percentage (or just over 100), and that is the honest number
+    // rather than a clamped 0. A lane carrying several take columns reports all
+    // of their marks, in x order: the report is about the LANE.
+    int markCols = 0, markRuns = 0;
+    QStringList markPcts;
+    bool inMark = false;
+    for( int x = 0; x < img.width(); ++x ) {
+        if( markPerCol[x] <= 0 ) { inMark = false; continue; }
+        ++markCols;
+        if( !inMark ) {
+            inMark = true;
+            ++markRuns;
+            markPcts << QString::number( pct( x, spanFirst ) );
+        }
+    }
+
     return QString( "row=%1 dimmed=%2 band=%3,%4 spanFirst=%5 spanLast=%6"
                     " cols=%7 materialCols=%8 gapCols=%9 gapRuns=%10"
                     " firstGapStartPct=%11 firstGapEndPct=%12 waveMeanPct=%13"
-                    " waveColor=#%14 bodyColor=#%15" )
+                    " cutMarkCols=%14 cutMarkRuns=%15 cutMarkPcts=%16"
+                    " waveColor=#%17 bodyColor=#%18 cutMarkColor=#%19" )
         .arg( row ).arg( dimmed ? 1 : 0 ).arg( top ).arg( bandH )
         .arg( spanFirst ).arg( spanLast ).arg( cols ).arg( materialCols )
         .arg( gapCols ).arg( gapRuns )
         .arg( firstGapStart < 0 ? -1 : pct( firstGapStart, spanFirst ) )
         .arg( firstGapEnd   < 0 ? -1 : pct( firstGapEnd,   spanFirst ) )
         .arg( waveMeanPct )
+        .arg( markCols ).arg( markRuns )
+        .arg( markPcts.isEmpty() ? QStringLiteral( "-" )
+                                 : markPcts.join( QLatin1Char( ',' ) ) )
         .arg( (uint) ( waveRgb & 0xffffff ), 6, 16, QChar( '0' ) )
-        .arg( (uint) ( bodyRgb & 0xffffff ), 6, 16, QChar( '0' ) );
+        .arg( (uint) ( bodyRgb & 0xffffff ), 6, 16, QChar( '0' ) )
+        .arg( (uint) ( markRgb & 0xffffff ), 6, 16, QChar( '0' ) );
 }
 
 QString SMainWindow::describeLaneOverlay( const QString &trackPath, int w, int h,

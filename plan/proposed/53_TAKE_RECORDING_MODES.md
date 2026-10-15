@@ -721,7 +721,7 @@ load-bearing:
   `SSelectTakeAction::setPreviousCompMap()` now also marks the action as an
   inverse, and that mark — not the take's extent — is the discriminator.
 
-### 4.4 The painter and QBX-157 — **SHIPPED as A0b (QBX-178)**, except the pixels
+### 4.4 The painter and QBX-157 — **SHIPPED**: A0b (QBX-178) drew it, P7 (QBX-157) gated it and added the marks
 
 - Compact: the column draws the COMP RESULT — per segment, the selected
   take's envelope over that span; a span whose selected take has no material
@@ -730,7 +730,57 @@ load-bearing:
   `collectEnvelope`. **A0b landed first and owns both**, plus
   `drawTake`/`collectTakeEnvelope`.
 - Expanded: each take row draws its material over its extent only.
-- Cut marks at comp boundaries and column edges: QBX-157 part 2.
+- Cut marks at comp boundaries and column edges: QBX-157 part 2. **SHIPPED as
+  P7**, as two short ticks at the clip's top and bottom rather than one
+  full-height line — see correction (i) below for why that is not a detail.
+
+**Correction (i), from the build (P7).** This section's part 1 has two halves
+and only one of them was work left for QBX-157.
+
+- The **pixels** were the real debt, and A0b wrote it down at the site: it
+  measured that reverting `STakeStackRendererInline::draw`'s comp branch to the
+  old active-take-only paint passed the WHOLE suite, because the comp result is
+  pure PAINT and nothing in the suite looked at it. P7 closes that with
+  `take_comp_backdrop.qxa`, which asserts the comp result's SHAPE on the
+  grabbed canvas (`assert-take-lane takeRow="-1"`) and the same three quarters
+  as ENERGY through the audio path, on one fixture — so "picture = sound" is
+  two measurements rather than an argument about shared code.
+- The **backdrop** QBX-157's own ticket asks for ("when the lanes are expanded,
+  draw it in the track's own row / behind the take lanes") **needs nothing
+  built, and P7 built nothing.** It was specified while the compact column drew
+  the active take only, so a faint backdrop was the only place the comp result
+  could be shown. Since A0b the composite lane paints the comp result itself —
+  through `collectEnvelope` for the body fill and `draw` for the waveform — and
+  it keeps doing so while the take lanes are expanded, because the parent row
+  is painted by the track renderer either way (`SMVActualView::paintEvent`
+  dispatches on `row->isSubLane()`). A second, fainter copy of the same
+  envelope on the same row would be a redundant overlay, so the folder-sum
+  comparison the ticket draws does not transfer: a folder lane has no clips of
+  its own, which is exactly why it needs an overlay and a laned track does not.
+
+**Correction (j): the cut marks are TICKS, and the gates depend on it.** The
+pixel classifiers (`assert-take-lane`, `assert-lane-overlay`) decide "material"
+per COLUMN by whether the clip body colour appears anywhere in it. An opaque
+full-height mark leaves its own column with no body pixel in it, so the
+classifier reads the mark as a GAP — a cut mark manufacturing the very
+discontinuity it describes — and `spanFirst` / `gapRuns` move in every
+composite-lane case in the suite. Two short ticks at the clip's top and bottom
+are visible to a classifier that LOOKS for the mark colour and invisible to
+every one that does not. `take_comp_backdrop.qxa` holds it shut by asserting
+four marks and still exactly one hole.
+
+**Correction (k): no crossfade BAND, and the reason is the one this section
+already gives.** The brief allows a crossfade to be drawn "as a short shaded
+band instead of a line". The span it would have to draw is not
+`twCompSegment::xfade`: the effective length is
+`twCompColumn::clampedXfade_nolock`, which folds in P5's project auto-fade as
+the fallback and then clamps against both neighbouring boundaries and both
+takes' extents. That function is private to `tw303a/mix`, and a painter
+computing its own version would be exactly the parallel interpretation §4.4
+forbids — the picture would disagree with the sound wherever a clamp bites.
+Exposing it is a public-header change, which this project lands on its own
+rather than folded into the work that wanted it: filed as a follow-up. Until
+then a boundary is a line, which understates a fade but never misstates it.
 
 **Correction (h), from the build.** The expanded row's parenthesis — "the
 comp-aware per-region paint already exists; it learns the extent" — understates
@@ -1970,11 +2020,22 @@ something a case may do, and the PR says so).
 > Named here rather than discovered later; it needs the selection translation
 > of (a) as well.
 
-### P7 — QBX-157 backdrop and cut marks — depends on A0b, B4
+### P7 — QBX-157 backdrop and cut marks — depends on A0b, B4 — **SHIPPED**
 
 Its own ticket; its acceptance is written there. It depends on A0 because the
 collected envelope must honour extents (a take's envelope outside its extent
 is nothing, not the source's continuation).
+
+**What it turned out to be**, and §4.4's corrections (i)–(k) carry the
+reasoning: the BACKDROP needed nothing built (A0b's composite-lane paint is
+already the comp result, on the parent row, expanded or not), the PIXELS were
+the debt A0b wrote down at the site, and the CUT MARKS were the new behaviour.
+Shipped as one authority for the colour (`sclipcolors::cutMark`, derived from
+the clip anchor so it follows selection and mute for free and the pixel gate
+reads the same function the painter does), one mark walk sharing the paint's
+own comp runs (`STakeStackRendererInline::drawCutMarks`), three new
+`assert-take-lane` bounds (`cutMarkRuns`, `minCutMarkCols`, `cutMarkPcts`) and
+`take_comp_backdrop.qxa`. No crossfade band — correction (k).
 
 ## 9. What each existing gate does when A lands (the flip list, in one place)
 
@@ -2136,7 +2197,7 @@ existing tickets. Order within a group is landing order.
 | P4 (**QBX-182**) | un-armed group members with group extent (D4 (a)); `select-take take="newest"`; take names — **SHIPPED** for AUDIO. `armed="0"` gained meaning and a gate on the same day; `merge-columns` gained an explicit extent, which is what lets a member's column be the GROUP's and not its own clip's. The MIDI recorder does not enumerate members (QBX-191); the take NAME landed for both kinds. Three corrections in §8's P4 row | P2 | M |
 | P5 (**QBX-183**) | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; the selection fade surface — **SHIPPED**. The whole policy is one new module, `app/model/sautofade.h`, because the feature has two consumers in slices that may not see each other (`objects/track` at clip edges, `objects/cut` at comp boundaries) and a third READER in the panel. At a boundary it is a LENGTH handed to the crossfade that was already there, in `clampedXfade_nolock` — so a 3 ms auto-fade renders byte-identically to an explicit `xfade=144`. Three corrections in §8's P5 row, one of which is a plain error in this plan's own text | A0a, B8 | M |
 | P6 (**QBX-184**) | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse — **SHIPPED**. The real inverse landed FIRST, as its own change, because one non-undoable child makes a whole composite non-undoable and a sweep that could not be undone is not shippable. Four corrections in §8's P6 row, two of them defects outside this row's subject: `add-take` carried no NAME, so undoing a removal turned a recording into an "original clip"; and four committed assertions used a `minClips` attribute `assert-recorded-clip` does not have | P2, A0b, B10 | M |
-| QBX-157 | laned-track backdrop = comp result, cut marks | A0b, B4 | M |
+| QBX-157 | **SHIPPED as P7.** Cut marks (comp boundaries, take-extent edges, column edges) plus the PIXEL gate on the comp-result paint A0b shipped ungated. The laned-track BACKDROP needed nothing built: the composite lane has painted the comp result since A0b, on the parent row, expanded or not — §4.4 correction (i) | A0b, B4 | M |
 | QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |
 
 ## 13. Review 1 dispositions

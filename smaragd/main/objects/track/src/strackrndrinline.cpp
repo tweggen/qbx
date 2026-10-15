@@ -508,6 +508,10 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
             SClipColors cc;
             cc.body = bodyColor;
             cc.wave = sclipcolors::wave( colorIndex, isSelected, laneMuted );
+            // The CUT MARK a take column rules its comp boundaries with (plan
+            // 53 §4.4): resolved here with the other two, in the same state, so
+            // `app/objects/cut` never has to know what a track or a palette is.
+            cc.cutMark = sclipcolors::cutMark( colorIndex, isSelected, laneMuted );
             myctx.setClipColors( cc );
         }
         //qWarning( "lk is $%08x.\n", (unsigned ) lk );

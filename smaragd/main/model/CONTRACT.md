@@ -540,10 +540,20 @@ composite lane, `app/objects/wave` and `app/objects/midi` paint the content on
 it, `app/timeline` paints the take lanes, and `app/shell` MEASURES all three.
 
 **A track carries an INDEX; only the anchor is stored.** The selected body, the
-muted body and the waveform colour are HSL moves off that one anchor
-(`body()` / `wave()`), never separate constants. So the picker this is built for
-— any colour, later — gets its whole family for free, and there is no way for
-one mount to invent a "bright" variant another mount disagrees with.
+muted body, the waveform colour and the CUT MARK are HSL moves off that one
+anchor (`body()` / `wave()` / `cutMark()`), never separate constants. So the
+picker this is built for — any colour, later — gets its whole family for free,
+and there is no way for one mount to invent a "bright" variant another mount
+disagrees with.
+
+`cutMark()` (plan 53 §4.4, QBX-157) is the body one step DARKER, and the
+direction is the specification: the thing a cut mark is drawn over is the
+WAVEFORM, which sits at L 0.80, so a lighter mark would vanish into exactly the
+content it annotates. The step is a shared constant and is small on purpose —
+a mark the colour of the near-black lane fill would read as a hole in the clip,
+which is the one thing a cut is not. It resolves in the SAME state as the body
+under it (selected first, then muted), because the pair is drawn together and
+only a mismatched pair could come out lighter than its own clip.
 
 | Rule | Why |
 |---|---|
@@ -551,7 +561,8 @@ one mount to invent a "bright" variant another mount disagrees with.
 | It is written to the file **only when it is not -1** | Every project saved before the palette — and every committed golden — serializes byte-unchanged. The same discipline as `editGroup`, `midiRouting` and `recordingChannels`. |
 | The resolved pair travels on **`SRenderContext::clipColors()`** | A wave, a cut and an event clip all draw in their track's colour while none of them may include `app/objects/track`. Whoever fills the body sets it; every nested `InlineRenderContext` inherits its parent's. |
 | The auto index is resolved **ONCE PER LANE**, never per clip | It walks the project's lanes. Per clip that is O(lanes x clips) on every repaint. |
-| **THE PIXEL GATES CALL THE SAME FUNCTIONS THE PAINTER DOES** | `assert-lane-overlay` and `assert-take-lane` classify a grabbed lane by exact colour and by luminance band, and they used to hardcode `QColor(160,160,160)` as "the clip body" — true only while every clip in every project was one grey. `smainwindow.cpp`'s `sClipBodyOf()` is the shared spelling, exactly as proposal 41 M7 gave paint and hit-test one `tagChipRect()`. |
+| **THE PIXEL GATES CALL THE SAME FUNCTIONS THE PAINTER DOES** | `assert-lane-overlay` and `assert-take-lane` classify a grabbed lane by exact colour and by luminance band, and they used to hardcode `QColor(160,160,160)` as "the clip body" — true only while every clip in every project was one grey. `smainwindow.cpp`'s `sClipBodyOf()` and `sClipCutMarkOf()` are the shared spellings, exactly as proposal 41 M7 gave paint and hit-test one `tagChipRect()`. |
+| The CUT MARK colour is taken **OUT of `describeTakeLane`'s waveform histogram** | `waveRgb` is "the most frequent colour that is neither body nor fill", and on a short clip with several marks that is a description the marks could win — `waveMeanPct` would then measure the marks and go blind to the waveform. |
 | The anchors are **mid-tone and quiet** (S 20-44 %, L 36-48 %), ordered so NEIGHBOURS DIFFER IN HUE | The selected variant is the same hue made lighter, so an anchor near white would have nowhere to go. And the auto assignment is by lane order: a hue RAMP would make two lanes stacked on top of each other nearly identical. |
 
 **A luminance BAND is no longer a safe way to describe a third colour.** The

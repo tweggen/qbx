@@ -307,8 +307,29 @@ picture — an envelope that stops at the extent inside a waveform that does not
   take across the whole column (plan 53's X10: the picture showed material the
   column does not play and hid material it does). A run whose take has no
   material is HATCHED, in the same brush the "no take" column uses, because the
-  statement is the same one. The HATCH's pixels are QBX-157's gate; what A0b
-  gates is that the span is silent and its envelope empty.
+  statement is the same one. **The PIXELS are gated since P7** (QBX-157,
+  `take_comp_backdrop.qxa`): A0b gated that the span is silent and its envelope
+  empty, and recorded at the site that reverting the paint itself to the old
+  active-take draw passed the whole suite. P7 grabs the composite lane and
+  asserts the comp result's SHAPE on it, next to the same three quarters
+  measured as ENERGY on one fixture.
+- The COMPACT painter also RULES THE CUTS (plan 53 §4.4 part 2, P7 / QBX-157):
+  a mark at every boundary of the same run walk the paint makes — so a comp
+  boundary and the edge of a take's EXTENT are marked by one rule, because to a
+  listener they are one thing — and at the column's own two edges, which is the
+  case the brief is about (two columns a `takes-split` pass left abutting carry
+  the same body colour over continuous-looking material, and the cut between
+  them is otherwise invisible). An edge is told apart from a VIEWPORT CLAMP by
+  TIME, in one pixel's worth of it, because the clip loop hands this renderer a
+  rect already cut down to the viewport — and that same test answers correctly
+  for a slipped WRAPPER window, where the clip edge is a window edge and not a
+  cut in the material. The colour is `sclipcolors::cutMark`, derived from the
+  clip anchor like every other variant and therefore readable by the pixel gate
+  through the same function the painter uses. **The mark is two short TICKS and
+  not a full-height line**, and that is load-bearing: the pixel classifiers
+  decide "material" per column by whether the body colour appears in it, so an
+  opaque full-height mark would read as a GAP — a cut mark manufacturing the
+  discontinuity it describes.
 - The TAKE-LANE terminals (`drawTake`/`collectTakeEnvelope`) draw one take over
   ITS EXTENT only, and the lane's own region walk breaks at EXTENT edges as
   well as map boundaries (`nextCompEdgeAfter`), or a region would straddle the
@@ -326,8 +347,14 @@ picture — an envelope that stops at the extent inside a waveform that does not
   take renderers read its loop, stretch and colours from it.
 - `nextCompEdgeAfter` ignores CROSSFADES, deliberately. A crossfade is a BLEND
   that a per-column envelope cannot express; `twCompColumn` splits runs at its
-  two ends because it has to MIX them, and the cut marks that would draw a
-  boundary are QBX-157's.
+  two ends because it has to MIX them. **And P7's cut marks do not draw one
+  either**: the span a band would have to cover is not `twCompSegment::xfade`
+  but `twCompColumn::clampedXfade_nolock`, which folds in P5's project
+  auto-fade as the fallback and clamps against both neighbouring boundaries and
+  both takes' extents — private to `tw303a/mix`, and a painter recomputing it
+  would be the parallel interpretation this whole section forbids. A boundary is
+  a line, which understates a fade but never misstates it; exposing the clamped
+  length is a public-header change and has its own ticket.
 
 Still unwindowed by the extent, deliberately: `resolveEventClip` (plan 53 P3,
 MIDI parity — an event column needs the RECORD cut, not just its position

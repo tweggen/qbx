@@ -490,6 +490,21 @@ SApplyResult SAssertTakeLaneAction::apply( SProject * )
     const long long wavePct   = field( QStringLiteral( "waveMeanPct" ) );
     const long long spanFirst = field( QStringLiteral( "spanFirst" ) );
     const long long spanLast  = field( QStringLiteral( "spanLast" ) );
+    const long long markCols  = field( QStringLiteral( "cutMarkCols" ) );
+    const long long markRuns  = field( QStringLiteral( "cutMarkRuns" ) );
+    // `cutMarkPcts` is a LIST, so field() -- which stops at the first
+    // non-digit -- would read only its first entry. Taken as text instead.
+    QString markPcts;
+    {
+        const QString key = QStringLiteral( "cutMarkPcts=" );
+        const int i = rep.indexOf( key );
+        if( i >= 0 ) {
+            const int j = i + key.size();
+            int k = j;
+            while( k < rep.size() && !rep[k].isSpace() ) ++k;
+            markPcts = rep.mid( j, k - j );
+        }
+    }
 
     auto fail = [&]( const QString &what ) {
         qWarning() << "assert-take-lane FAILED:" << trackPath_
@@ -540,6 +555,33 @@ SApplyResult SAssertTakeLaneAction::apply( SProject * )
                                      " +/- %3" )
                          .arg( spanLast ).arg( spanLast_ )
                          .arg( spanTolerance_ ) );
+    if( cutMarkRuns_ >= 0 && markRuns != cutMarkRuns_ )
+        return fail( QStringLiteral( "expected %1 cut mark(s), got %2 - a comp"
+                                     " boundary, a take extent's edge and the"
+                                     " column's own edges each rule one" )
+                         .arg( cutMarkRuns_ ).arg( markRuns ) );
+    if( minCutMarkCols_ >= 0 && markCols < minCutMarkCols_ )
+        return fail( QStringLiteral( "expected at least %1 cut mark columns,"
+                                     " got %2" )
+                         .arg( minCutMarkCols_ ).arg( markCols ) );
+    if( !cutMarkPcts_.isEmpty() ) {
+        const QStringList want =
+            cutMarkPcts_.split( QLatin1Char( ',' ), Qt::SkipEmptyParts );
+        const QStringList got =
+            markPcts.split( QLatin1Char( ',' ), Qt::SkipEmptyParts );
+        if( want.size() != got.size() )
+            return fail( QStringLiteral( "expected cut marks at %1, got %2"
+                                         " - a different NUMBER of marks" )
+                             .arg( cutMarkPcts_ ).arg( markPcts ) );
+        for( int i = 0; i < want.size(); ++i )
+            if( qAbs( want[i].toInt() - got[i].toInt() ) > pctTolerance_ )
+                return fail( QStringLiteral( "cut mark %1 is at %2%% of the"
+                                             " clip, expected %3%% +/- %4"
+                                             " (all: %5 against %6)" )
+                                 .arg( i ).arg( got[i] ).arg( want[i] )
+                                 .arg( pctTolerance_ )
+                                 .arg( markPcts ).arg( cutMarkPcts_ ) );
+    }
     if( !contains_.isEmpty() && !rep.contains( contains_ ) )
         return fail( QStringLiteral( "report does not contain '%1'" )
                          .arg( contains_ ) );
@@ -570,6 +612,13 @@ void SAssertTakeLaneAction::writeXml( QDomElement &elem ) const
     if( spanFirst_        >= 0 ) elem.setAttribute( "spanFirst", spanFirst_ );
     if( spanLast_         >= 0 ) elem.setAttribute( "spanLast", spanLast_ );
     elem.setAttribute( "spanTolerance", spanTolerance_ );
+    // "Written only when set", the same discipline the bounds above keep, so
+    // every case predating QBX-157 round-trips byte-unchanged.
+    if( cutMarkRuns_      >= 0 ) elem.setAttribute( "cutMarkRuns", cutMarkRuns_ );
+    if( minCutMarkCols_   >= 0 )
+        elem.setAttribute( "minCutMarkCols", minCutMarkCols_ );
+    if( !cutMarkPcts_.isEmpty() )
+        elem.setAttribute( "cutMarkPcts", cutMarkPcts_ );
 }
 
 bool SAssertTakeLaneAction::readXml( const QDomElement &elem, int )
@@ -591,6 +640,9 @@ bool SAssertTakeLaneAction::readXml( const QDomElement &elem, int )
     spanFirst_        = elem.attribute( "spanFirst", "-1" ).toInt();
     spanLast_         = elem.attribute( "spanLast", "-1" ).toInt();
     spanTolerance_    = elem.attribute( "spanTolerance", "2" ).toInt();
+    cutMarkRuns_      = elem.attribute( "cutMarkRuns", "-1" ).toInt();
+    minCutMarkCols_   = elem.attribute( "minCutMarkCols", "-1" ).toInt();
+    cutMarkPcts_      = elem.attribute( "cutMarkPcts" );
     return true;
 }
 

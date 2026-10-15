@@ -1200,11 +1200,98 @@ static QBrush noMaterialBrush()
     return QBrush( QColor( 70, 70, 70 ), Qt::BDiagPattern );
 }
 
+/**
+ * THE CUT MARKS (plan 53 §4.4 part 2, QBX-157): "lightly indicating the
+ * cutting positions".
+ *
+ * There are two kinds and they are one kind in the code, which is the point:
+ *
+ *   INSIDE the column, every boundary of the run walk `draw()` has already
+ *   made -- so a comp boundary and the edge of a take's EXTENT are marked by
+ *   the same rule, because they are the same thing to a listener (the material
+ *   changes here). Walking the runs rather than `compMap().segments()` is what
+ *   buys that: `takeIndexAt` folds the extents in, and a mark loop over the
+ *   segments alone would miss the edge where a partial take runs out and leave
+ *   the one visible discontinuity in the picture unexplained.
+ *
+ *   AT the column's own two edges, where a split or a record edge cut the
+ *   material. This is the case the brief is really about: two columns a
+ *   `takes-split` pass left abutting carry the same body colour over
+ *   continuous-looking material, so without a mark the cut between them is
+ *   invisible.
+ *
+ * TWO SHORT TICKS, NOT ONE FULL-HEIGHT LINE, and that is load-bearing twice
+ * over. On screen a full-height ruling drawn across the waveform competes with
+ * the content it annotates, which is the opposite of recessive. And for the
+ * gates: the pixel classifiers (`assert-take-lane`, `assert-lane-overlay`)
+ * decide "material" per COLUMN by whether the body colour appears anywhere in
+ * it, so an opaque full-height mark would turn its own column into a GAP --
+ * a cut mark would manufacture the very discontinuity it describes, and
+ * `spanFirst` / `gapRuns` would move in every composite-lane case already in
+ * the suite. Ticks leave the middle of the column alone, so they are visible
+ * to a classifier that LOOKS for them and invisible to every one that does not.
+ */
+static void drawCutMarks( QPainter &p, const QRect &vr, SRenderContext &ctx,
+                          STakeStack &st, SLink &lk,
+                          const std::vector<CompRun> &runs )
+{
+    if( vr.width() < 1 || vr.height() < 4 ) return;
+
+    const int tick = qMax( 2, vr.height() / 6 );
+    const int yTop = vr.top();
+    const int yBot = vr.bottom() - tick + 1;
+    p.setPen( ctx.clipColors().cutMark );
+    auto mark = [&]( int x ) {
+        if( x < vr.left() || x > vr.right() ) return;
+        p.drawLine( x, yTop, x, yTop + tick - 1 );
+        p.drawLine( x, yBot, x, yBot + tick - 1 );
+    };
+
+    // INSIDE: one mark per run boundary. Run 0 starts at the left edge of the
+    // visible rect, which is NOT a boundary of anything -- it is where the
+    // viewport happens to begin -- so the walk starts at 1.
+    for( size_t i = 1; i < runs.size(); ++i )
+        mark( vr.left() + runs[ i ].c0 );
+
+    // THE COLUMN'S OWN EDGES, told apart from a VIEWPORT CLAMP by TIME and not
+    // by geometry. The clip loop hands this renderer a rect already cut down to
+    // the viewport (`vr.setLeft( visibRect.x() )`), so `vr.left()` is the
+    // column's left edge on one repaint and an arbitrary scroll position on the
+    // next; marking it unconditionally would draw a cut in the middle of the
+    // arrangement as soon as the user scrolled.
+    //
+    // The comparison is in ONE PIXEL'S WORTH OF TIME rather than in frames: the
+    // clip is inset by a pixel (`startX + 1`), and how many frames a pixel is
+    // depends on the zoom and, on a warped clip, on where you ask -- so a frame
+    // tolerance would be right at exactly one zoom level.
+    //
+    // It also answers correctly for the WRAPPED shape (`SLink -> SCut ->
+    // STakeStack`, a placed column): a slipped wrapper window shows the middle
+    // of the material, the column's own frame 0 is nowhere on screen, and no
+    // edge mark is drawn -- which is right, because that clip edge is a WINDOW
+    // edge and not a cut in the material.
+    const offset_t base = lk.getStartTime();
+    const offset_t t0   = ctx.getTimeOf( vr.left() );
+    const offset_t px   = qAbs( ctx.getTimeOf( vr.left() + 1 ) - t0 );
+    const offset_t tol  = 2 * px + 1;
+    const offset_t dur  = (offset_t) st.getDuration();
+    if( qAbs( t0 - base ) <= tol ) mark( vr.left() );
+    if( qAbs( ctx.getTimeOf( vr.right() + 1 ) - base - dur ) <= tol )
+        mark( vr.right() );
+}
+
 void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
 {
     QPainter &p = ctx.getPainter();
     const QRect vr = ctx.getVisibRect();
     STakeStack &st = stack();
+
+    // HOISTED out of the comp branch below so the cut marks can walk the SAME
+    // runs the paint did, rather than making a second walk that could disagree
+    // with it about where a take begins. A degenerate column leaves it empty,
+    // which is the honest answer: no map and no partial take means no cut
+    // INSIDE the column, only its own two edges.
+    std::vector<CompRun> runs;
 
     if( !st.activeTakeObject() && st.nTakes() == 0 ) {
         p.fillRect( vr, noMaterialBrush() );
@@ -1228,21 +1315,23 @@ void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
         // clip, so the picture showed material the column does not play and
         // hid material it does.
         //
-        // NOT GATED, AND MEASURED TO BE SO. Reverting this branch to the old
-        // active-take-only draw passes the WHOLE suite, 449/449 — because this
-        // is pure PAINT, and a paint behaviour needs a PIXEL gate, which plan
-        // 53 §4.4 allocates to QBX-157's part 1. What IS gated is
-        // `collectEnvelope` below, through `assert-envelope` (clip and
-        // `take=`). The two share ONE run walk (`compRuns`) precisely so they
-        // cannot drift while only one of them is gated — but that is an
-        // argument, not a gate, and whoever lands QBX-157 should know that the
-        // pixels here have never been asserted.
+        // GATED SINCE P7 (QBX-157) — and it is worth knowing what it took,
+        // because for one whole ticket it was not. A0b shipped this branch with
+        // a note saying that reverting it to the old active-take-only draw
+        // passed the WHOLE suite, 449/449: this is pure PAINT, and a paint
+        // behaviour needs a PIXEL gate. `collectEnvelope` below was gated
+        // (`assert-envelope`, clip and `take=`) and the two share ONE run walk
+        // (`compRuns`) so they cannot drift — but that is an argument, not a
+        // gate. `take_comp_backdrop.qxa` is the gate: it grabs the composite
+        // lane and asserts the comp result's SHAPE on it (a hole where the
+        // selected take has no material, at 25–75 % of a column whose active
+        // take covers all of it), and the same three quarters as ENERGY through
+        // the audio path, on one fixture.
         const offset_t base = lk.getStartTime();
-        const std::vector<CompRun> runs =
-            compRuns( st, vr.width(),
-                      [&ctx, &vr, base]( int i ) -> offset_t {
-                          return ctx.getTimeOf( vr.left() + i ) - base;
-                      } );
+        runs = compRuns( st, vr.width(),
+                         [&ctx, &vr, base]( int i ) -> offset_t {
+                             return ctx.getTimeOf( vr.left() + i ) - base;
+                         } );
         for( const CompRun &r : runs ) {
             const QRect rr( vr.left() + r.c0, vr.y(), r.c1 - r.c0, vr.height() );
             if( rr.width() < 1 ) continue;
@@ -1260,6 +1349,12 @@ void STakeStackRendererInline::draw( SLink &lk, SRenderContext &ctx )
             p.restore();
         }
     }
+
+    // AFTER the content and BEFORE the badge: a mark annotates the material, so
+    // it goes on top of it -- and the "no take" column has no cut in it to show
+    // (its whole extent is the absence the hatch already states).
+    if( st.activeTakeObject() || st.nTakes() > 0 )
+        drawCutMarks( p, vr, ctx, st, lk, runs );
 
     if( st.nTakes() > 1 ) {
         p.setPen( QColor( 240, 220, 80 ) );

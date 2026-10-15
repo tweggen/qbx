@@ -303,7 +303,10 @@ public:
                  QStringLiteral( "minWaveMeanPct" ),
                  QStringLiteral( "maxWaveMeanPct" ),
                  QStringLiteral( "spanFirst" ),   QStringLiteral( "spanLast" ),
-                 QStringLiteral( "spanTolerance" ) };
+                 QStringLiteral( "spanTolerance" ),
+                 QStringLiteral( "cutMarkRuns" ),
+                 QStringLiteral( "minCutMarkCols" ),
+                 QStringLiteral( "cutMarkPcts" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -324,6 +327,13 @@ private:
     int     pctTolerance_     = 3;
     int     minWaveMeanPct_   = -1;
     int     maxWaveMeanPct_   = -1;
+    // THE CUT MARKS (plan 53 §4.4 / QBX-157). `cutMarkRuns_` is EXACT, because
+    // the number of cuts in a column is a closed fact and a floor would let a
+    // mark go missing; `cutMarkPcts_` is the ordered list of where they are, in
+    // per cent of the clip's own span, compared with `pctTolerance_`.
+    int     cutMarkRuns_      = -1;
+    int     minCutMarkCols_   = -1;
+    QString cutMarkPcts_;
     int     spanFirst_        = -1;
     int     spanLast_         = -1;
     int     spanTolerance_    = 2;
