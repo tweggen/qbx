@@ -492,6 +492,7 @@ SApplyResult SAssertTakeLaneAction::apply( SProject * )
     const long long spanLast  = field( QStringLiteral( "spanLast" ) );
     const long long markCols  = field( QStringLiteral( "cutMarkCols" ) );
     const long long markRuns  = field( QStringLiteral( "cutMarkRuns" ) );
+    const long long markHigh  = field( QStringLiteral( "cutMarkHeightPct" ) );
     // `cutMarkPcts` is a LIST, so field() -- which stops at the first
     // non-digit -- would read only its first entry. Taken as text instead.
     QString markPcts;
@@ -582,6 +583,17 @@ SApplyResult SAssertTakeLaneAction::apply( SProject * )
                                  .arg( pctTolerance_ )
                                  .arg( markPcts ).arg( cutMarkPcts_ ) );
     }
+    if( minCutMarkHeightPct_ >= 0 && markHigh < minCutMarkHeightPct_ )
+        return fail( QStringLiteral( "the tallest cut mark is %1%% of the lane"
+                                     " band, expected at least %2%%" )
+                         .arg( markHigh ).arg( minCutMarkHeightPct_ ) );
+    if( maxCutMarkHeightPct_ >= 0 && markHigh > maxCutMarkHeightPct_ )
+        return fail( QStringLiteral( "the tallest cut mark is %1%% of the lane"
+                                     " band, expected at most %2%% - a cut mark"
+                                     " drawn FULL HEIGHT leaves its own column"
+                                     " with no body pixel in it, so every pixel"
+                                     " classifier reads the mark as a GAP" )
+                         .arg( markHigh ).arg( maxCutMarkHeightPct_ ) );
     if( !contains_.isEmpty() && !rep.contains( contains_ ) )
         return fail( QStringLiteral( "report does not contain '%1'" )
                          .arg( contains_ ) );
@@ -619,6 +631,10 @@ void SAssertTakeLaneAction::writeXml( QDomElement &elem ) const
         elem.setAttribute( "minCutMarkCols", minCutMarkCols_ );
     if( !cutMarkPcts_.isEmpty() )
         elem.setAttribute( "cutMarkPcts", cutMarkPcts_ );
+    if( minCutMarkHeightPct_ >= 0 )
+        elem.setAttribute( "minCutMarkHeightPct", minCutMarkHeightPct_ );
+    if( maxCutMarkHeightPct_ >= 0 )
+        elem.setAttribute( "maxCutMarkHeightPct", maxCutMarkHeightPct_ );
 }
 
 bool SAssertTakeLaneAction::readXml( const QDomElement &elem, int )
@@ -643,6 +659,10 @@ bool SAssertTakeLaneAction::readXml( const QDomElement &elem, int )
     cutMarkRuns_      = elem.attribute( "cutMarkRuns", "-1" ).toInt();
     minCutMarkCols_   = elem.attribute( "minCutMarkCols", "-1" ).toInt();
     cutMarkPcts_      = elem.attribute( "cutMarkPcts" );
+    minCutMarkHeightPct_ =
+        elem.attribute( "minCutMarkHeightPct", "-1" ).toInt();
+    maxCutMarkHeightPct_ =
+        elem.attribute( "maxCutMarkHeightPct", "-1" ).toInt();
     return true;
 }
 

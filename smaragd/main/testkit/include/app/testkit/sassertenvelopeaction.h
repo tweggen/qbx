@@ -306,7 +306,9 @@ public:
                  QStringLiteral( "spanTolerance" ),
                  QStringLiteral( "cutMarkRuns" ),
                  QStringLiteral( "minCutMarkCols" ),
-                 QStringLiteral( "cutMarkPcts" ) };
+                 QStringLiteral( "cutMarkPcts" ),
+                 QStringLiteral( "minCutMarkHeightPct" ),
+                 QStringLiteral( "maxCutMarkHeightPct" ) };
     }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
@@ -334,6 +336,14 @@ private:
     int     cutMarkRuns_      = -1;
     int     minCutMarkCols_   = -1;
     QString cutMarkPcts_;
+    // How TALL the tallest mark is, in per cent of the measured band. The pair
+    // exists because the mark being two short TICKS rather than one full-height
+    // line is a decision the pixel classifiers depend on (plan 53 §4.4
+    // correction (j)) and nothing else here can see: a full-height mark at a
+    // column edge only moves `spanLast` one column in, which takes the mark
+    // back out of the span and leaves every other number untouched.
+    int     minCutMarkHeightPct_ = -1;
+    int     maxCutMarkHeightPct_ = -1;
     int     spanFirst_        = -1;
     int     spanLast_         = -1;
     int     spanTolerance_    = 2;
