@@ -88,6 +88,28 @@ QColor wave( int index, bool selected, bool muted )
     return fromHsl( a.h, 0.10, 0.80 );
 }
 
+// ONE STEP DARKER, and the step is stated once here. 0.14 of lightness is
+// enough to read against every anchor (L 0.36-0.48) and against the waveform
+// on it, and leaves the mark clear of the near-black lane fill (QColor(20,35,
+// 50), L 0.14) that a bigger step would walk it into -- a mark the colour of
+// the lane background would read as a gap in the clip rather than as a cut in
+// it.
+static const double kCutMarkDarken = 0.14;
+
+QColor cutMark( int index, bool selected, bool muted )
+{
+    const Anchor &a = anchorAt( index );
+    // THE SAME PRECEDENCE body() HAS -- selected first, then muted -- because
+    // the mark is drawn ON that body and the pair has to move together. A mark
+    // resolved in a different state from the body under it is the one
+    // combination that could come out lighter than its own clip.
+    if( selected ) return fromHsl( a.h, a.s + 0.06,
+                                   a.l + 0.13 - kCutMarkDarken );
+    if( muted )    return fromHsl( a.h, a.s * 0.22,
+                                   a.l - 0.07 - kCutMarkDarken );
+    return fromHsl( a.h, a.s, a.l - kCutMarkDarken );
+}
+
 namespace {
 
 // Depth-first over LANES ONLY. Recursing into everything would walk every clip

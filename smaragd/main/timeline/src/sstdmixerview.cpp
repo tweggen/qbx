@@ -2443,6 +2443,13 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
             SClipColors cc;
             cc.body = bodyColor;
             cc.wave = sclipcolors::wave( colorIndex, false, laneMuted );
+            // Carried for COMPLETENESS, not because a take lane rules cuts: a
+            // take row draws ONE alternative, whose own edges are the extent
+            // ringing further down this loop. It is set anyway so the triple is
+            // never half-resolved on a context -- a renderer reached from here
+            // that did draw a mark would otherwise get the struct's default
+            // grey, which is the kind of difference nobody looks for.
+            cc.cutMark = sclipcolors::cutMark( colorIndex, false, laneMuted );
             myctx.setClipColors( cc );
         }
         const bool paintedByMaterial = rndr

@@ -67,6 +67,24 @@ QColor body( int index, bool selected, bool muted );
 QColor wave( int index, bool selected, bool muted );
 
 /**
+ * The CUT MARK drawn on a take column (plan 53 §4.4 / QBX-157): the ruling at
+ * a comp boundary, at a take extent's edge and at the column's own two edges.
+ *
+ * The same hue and saturation as the body, one step DARKER -- which is the
+ * whole specification. DARKER rather than lighter because the thing it is
+ * drawn over is the WAVEFORM (`wave()` above sits at L 0.80), so a light mark
+ * would vanish into exactly the content it annotates; ONE step rather than
+ * several because the brief asks for marks that stay "readable but recessive"
+ * -- a mark that reads as a hole in the clip would claim a discontinuity in
+ * the material, which is the one thing a cut is not.
+ *
+ * DERIVED from the anchor like every other variant here, so a user-chosen
+ * colour gets its mark for free -- and so the pixel gate can read this same
+ * function instead of a constant (header rule 3).
+ */
+QColor cutMark( int index, bool selected, bool muted );
+
+/**
  * The AUTO index of a lane: its position in the project's flattened lane
  * order, counting lanes only (a folder's children follow it, exactly as their
  * rows do). Returns 0 when the lane is not reachable from `root`, so a colour
@@ -97,6 +115,12 @@ struct SClipColors
 {
     QColor body { 160, 160, 160 };
     QColor wave { 200, 200, 200 };
+    // The cut mark (plan 53 §4.4 / QBX-157). It travels with the other two
+    // rather than being derived from `body` where it is drawn: a second
+    // derivation is how the same grey came to mean two things on two lanes
+    // (see fillBodyByMaterial's note), and `app/objects/cut` -- which draws
+    // the marks -- may not see `app/objects/track`, which resolves the index.
+    QColor cutMark { 110, 110, 110 };
 };
 
 #endif

@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE COMP RESULT IS WHAT THE COLUMN SHOWS, AND THE CUTS ARE MARKED
+  (plan 53 §4.4 / P7, QBX-157).
+
+  TWO THINGS THIS CASE EXISTS FOR, and the first one is a debt A0b left
+  written down in the code. `STakeStackRendererInline::draw` has drawn the
+  COMP RESULT segment by segment since QBX-178 — before that a comped column
+  drew the ACTIVE take across its whole width, so the picture showed material
+  the column does not play and hid material it does (QBX-156's X10). That fix
+  shipped with a note saying so: reverting the branch to the old active-take
+  draw passed the WHOLE suite, because it is pure PAINT and nothing in the
+  suite looked at the pixels. §4.4 allocated the pixel gate to this ticket.
+  It is below, and it was measured to bite.
+
+  The second is the CUT MARKS, which are new here: thin, low-contrast marks
+  at every boundary of the comp walk and at the column's own two edges.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav, at the default 30 px/s:
+
+    take 0 — FULL extent [0, 192000), ACTIVE
+    take 1 — PARTIAL extent [0, 48000) only, never activated
+    map    — `0:1 ; 144000:0`
+
+  so `takeIndexAt` answers, quarter by quarter:
+
+    [0 s, 1 s)  take 1, over its own material            -> take 1 -> MATERIAL
+    [1 s, 3 s)  take 1 still, past the end of it -> -1   ->          NOTHING
+    [3 s, 4 s)  take 0                                   -> take 0 -> MATERIAL
+
+  TWO SEGMENTS AND THREE RUNS, which is the point of writing the map this way
+  round: the boundary at 1 s is in NO segment. It is where take 1's EXTENT
+  ends, and the map says nothing about it. So a mark loop written over
+  `compMap().segments()` — the obvious shape, and the wrong one — marks the
+  boundary at 3 s and misses the one at 1 s, leaving the only visible
+  discontinuity in the picture unexplained. Walking the run boundaries instead
+  gets both, because `takeIndexAt` folds the extents in. `cutMarkPcts` below
+  is what holds that apart: measured, a segments-only loop reports three marks
+  at `-1,75,98` instead of four.
+
+  THE MIDDLE IS THE GATE, and the fixture is built this way round on purpose.
+  A no-material run at the START or the END of a column would merely SHORTEN
+  the measured span (`assert-take-lane` takes the span from the outermost
+  material column), so a leading or trailing hole reports gapCols=0 and the
+  broken paint would differ only in a span number. Put it in the MIDDLE and
+  the whole clip is still spanned, the hole is inside it, and the two builds
+  disagree about the shape of the picture rather than about its width:
+
+    correct : material, HOLE at 25%..75%, material   -> gapRuns 1
+    broken  : material all the way across            -> gapRuns 0
+
+  ...AND -1 IS NOT A FALL-BACK (§3.1 step 5). Take 0 covers the middle two
+  seconds perfectly well and must NOT be drawn there: the map selected a take
+  that has nothing to say, and silence is the honest picture of that. A build
+  that fell back would look entirely reasonable and would fail here.
+
+  WHY A PIXEL VERB AT ALL. Everything a script can reach through
+  `collectEnvelope` sits BELOW the paint — which is how proposal 39 M2 and
+  proposal 41 M5 each shipped a green gate over a broken paint, and how the
+  comp-result draw went a whole ticket ungated. `assert-take-lane`'s
+  `takeRow="-1"` addresses the track's OWN composite lane, which is the
+  surface §4.4 calls the compact column.
+
+  AND THE PICTURE IS CHECKED AGAINST THE SOUND. The render at the end asserts
+  the same three quarters as ENERGY, through the audio path (`twCompColumn`),
+  against the same fixture: source second 0 (RMS 0.0667), then silence, then
+  source second 3 (0.4055). Per-source-second RMS of test_sawtooth.wav is
+  0.0667 / 0.1764 / 0.2906 / 0.4055, so "material / nothing / material" is
+  not a shape two different readings of the map could both produce. §4.4's
+  requirement is that picture = sound; this is that stated as two
+  measurements of one fixture rather than as an argument about shared code.
+
+  THE CUT MARKS. Four of them, and the count is EXACT:
+
+    0%    the column's left edge
+    25%   where take 1 runs out of material (an EXTENT edge, no segment)
+    75%   where the map hands the position back to take 0 (a SEGMENT)
+    100%  the column's right edge
+
+  The two inner ones come from the SAME run walk the paint makes, and they are
+  deliberately of the two different kinds — see the note on the map above. The
+  two outer ones are the case the brief is really about: a `takes-split` pass
+  leaves two columns abutting with the same body colour over
+  continuous-looking material, and without a mark that cut is invisible.
+
+  The percentages are of the clip's MATERIAL span, and the left-edge mark
+  reports -1 rather than 0 because of it: test_sawtooth.wav is a ramp, so its
+  first two columns round to silence and the span starts one column INSIDE the
+  clip. That is the honest number, not a rounding error — see
+  `SMainWindow::describeTakeLane`, where scanning marks only inside the span
+  cost this gate the left-edge mark on its first run.
+
+  The marks are two short TICKS at the clip's top and bottom rather than one
+  full-height line, for a reason worth not undoing: an opaque full-height mark
+  would leave its own column with no body pixels in it, so the classifier
+  would read the mark as a GAP — a cut mark manufacturing the discontinuity it
+  describes — and `spanFirst`/`gapRuns` would move in every composite-lane
+  case already in the suite. `gapRuns="1"` below is the assertion that holds
+  that shut: four marks and still exactly one hole.
+-->
+<SActionScript version="1" name="take_comp_backdrop">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The partial take. `activate="0"` keeps take 0 active, which is what
+         makes the broken paint's answer (the active take, everywhere)
+         different from the right one. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="0" length="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;0-48000" duration="192000"/>
+
+    <!-- The map: take 1 from the column's start — so it runs out of material
+         at 1 s with no segment there — and back to take 0 at 3 s. -->
+    <set-comp-segment clip="0,0" at="0" take="1"/>
+    <set-comp-segment clip="0,0" at="144000" take="0"/>
+    <assert-take-column clip="0,0" comp="0:1;144000:0" activeTake="0"
+                        takeAtPos="96000" expectTake="-1"/>
+
+    <!-- THE GRID MUST BE OFF, and after every layout change — a
+         non-emphasised grid line is drawn in EXACTLY the clip-body colour and
+         OVER the lanes, so it reads as a full-height column of material and
+         drags the span and every percentage off it. See take_lane_domain.qxa's
+         header for the measurement. -->
+    <grid-disable/>
+
+    <assert-take-lane trackPath="0" takeRow="-1"
+                      grabWidth="900" grabHeight="600"
+                      grabPng="take_comp_backdrop_composite.png"
+                      minGapCols="1" gapRuns="1"
+                      firstGapStartPct="25" firstGapEndPct="75"
+                      pctTolerance="3"
+                      cutMarkRuns="4" cutMarkPcts="0,25,75,100"
+                      minCutMarkCols="4"
+                      minWaveMeanPct="10"/>
+
+    <!-- ...AND THE SOUND AGREES WITH IT, over the same three quarters. -->
+    <render filename="tcb_comped.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tcb_comped.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="tcb_comped.wav"
+                         startFrame="48000" frameCount="96000"
+                         minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="tcb_comped.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.36" maxRms="0.45"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
