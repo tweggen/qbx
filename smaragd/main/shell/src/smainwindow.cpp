@@ -4731,24 +4731,37 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
     // NEGATIVE percentage (or just over 100), and that is the honest number
     // rather than a clamped 0. A lane carrying several take columns reports all
     // of their marks, in x order: the report is about the LANE.
-    int markCols = 0, markRuns = 0;
+    //
+    // ...AND HOW TALL THEY ARE, which is not decoration. The mark is two short
+    // TICKS and not a full-height line on purpose (plan 53 §4.4 correction
+    // (j)), and the first sabotage pass measured that NOTHING here caught the
+    // difference: a full-height mark turns its own column into a gap, and at
+    // the column's right edge that merely moves `spanLast` one column in, which
+    // takes the mark back out of the span and leaves every other number alone.
+    // So the height is reported directly: a tick pair is ~30 % of the band, a
+    // full-height line ~95 %.
+    int markCols = 0, markRuns = 0, markTallest = 0;
     QStringList markPcts;
     bool inMark = false;
     for( int x = 0; x < img.width(); ++x ) {
         if( markPerCol[x] <= 0 ) { inMark = false; continue; }
         ++markCols;
+        if( markPerCol[x] > markTallest ) markTallest = markPerCol[x];
         if( !inMark ) {
             inMark = true;
             ++markRuns;
             markPcts << QString::number( pct( x, spanFirst ) );
         }
     }
+    const int markHeightPct = bandH > 0
+        ? (int) qRound( 100.0 * markTallest / bandH ) : 0;
 
     return QString( "row=%1 dimmed=%2 band=%3,%4 spanFirst=%5 spanLast=%6"
                     " cols=%7 materialCols=%8 gapCols=%9 gapRuns=%10"
                     " firstGapStartPct=%11 firstGapEndPct=%12 waveMeanPct=%13"
                     " cutMarkCols=%14 cutMarkRuns=%15 cutMarkPcts=%16"
-                    " waveColor=#%17 bodyColor=#%18 cutMarkColor=#%19" )
+                    " cutMarkHeightPct=%17"
+                    " waveColor=#%18 bodyColor=#%19 cutMarkColor=#%20" )
         .arg( row ).arg( dimmed ? 1 : 0 ).arg( top ).arg( bandH )
         .arg( spanFirst ).arg( spanLast ).arg( cols ).arg( materialCols )
         .arg( gapCols ).arg( gapRuns )
@@ -4758,6 +4771,7 @@ QString SMainWindow::describeTakeLane( const QString &trackPath, int takeRow,
         .arg( markCols ).arg( markRuns )
         .arg( markPcts.isEmpty() ? QStringLiteral( "-" )
                                  : markPcts.join( QLatin1Char( ',' ) ) )
+        .arg( markHeightPct )
         .arg( (uint) ( waveRgb & 0xffffff ), 6, 16, QChar( '0' ) )
         .arg( (uint) ( bodyRgb & 0xffffff ), 6, 16, QChar( '0' ) )
         .arg( (uint) ( markRgb & 0xffffff ), 6, 16, QChar( '0' ) );

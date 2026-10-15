@@ -18,8 +18,8 @@
 
   THE SHAPE. One 4 s column over test_sawtooth.wav, at the default 30 px/s:
 
-    take 0 — FULL extent [0, 192000), ACTIVE
-    take 1 — PARTIAL extent [0, 48000) only, never activated
+    take 0 — FULL extent [0, 192000), reading the source from 0, ACTIVE
+    take 1 — PARTIAL extent [0, 48000), reading the source from 144000
     map    — `0:1 ; 144000:0`
 
   so `takeIndexAt` answers, quarter by quarter:
@@ -27,6 +27,25 @@
     [0 s, 1 s)  take 1, over its own material            -> take 1 -> MATERIAL
     [1 s, 3 s)  take 1 still, past the end of it -> -1   ->          NOTHING
     [3 s, 4 s)  take 0                                   -> take 0 -> MATERIAL
+
+  THE TWO TAKES DISAGREE ABOUT LOUDNESS IN THE FIRST QUARTER, and that is the
+  whole reason take 1 is slipped to source second 3. Per-source-second RMS of
+  test_sawtooth.wav is 0.0667 / 0.1764 / 0.2906 / 0.4055, so over column
+  second 0 take 1 is the LOUD end of the file and take 0 is the quiet end:
+
+    correct : LOUD / nothing / LOUD      (0.4055, silence, 0.4055)
+    broken  : quiet / nothing / LOUD     (0.0667, silence, 0.4055)
+
+  THE FIRST DRAFT OF THIS CASE DID NOT GATE THE PAINT AT ALL, and the sabotage
+  pass is what said so. It had both takes reading the source from 0, so the
+  comp result and the active take drew the SAME material and differed only in
+  the hole — and the hole comes out of `fillBodyByMaterial`, which rides
+  `collectEnvelope`, i.e. the COLLECT terminal that A0b already gated. Every
+  gap metric in this verb is a collect measurement. `waveMeanPct` is the ONE
+  field that rides the DRAW, so the two builds have to disagree about the
+  drawn LEVEL or the paint is not gated by anything. Measured on the first
+  draft: reverting the comp branch to the old active-take-only draw passed
+  this case. With the slip it does not.
 
   TWO SEGMENTS AND THREE RUNS, which is the point of writing the map this way
   round: the boundary at 1 s is in NO segment. It is where take 1's EXTENT
@@ -83,20 +102,27 @@
   leaves two columns abutting with the same body colour over
   continuous-looking material, and without a mark that cut is invisible.
 
-  The percentages are of the clip's MATERIAL span, and the left-edge mark
-  reports -1 rather than 0 because of it: test_sawtooth.wav is a ramp, so its
-  first two columns round to silence and the span starts one column INSIDE the
-  clip. That is the honest number, not a rounding error — see
-  `SMainWindow::describeTakeLane`, where scanning marks only inside the span
-  cost this gate the left-edge mark on its first run.
+  The percentages are of the clip's MATERIAL span, so a mark can legitimately
+  report a small NEGATIVE percentage: the span begins at the outermost column
+  that carries material, and a column's first pixels can round to silence. It
+  does not happen in THIS fixture any more — take 1's slip puts the loud end of
+  the file at the clip's left edge — but it did while both takes read the source
+  from 0, and scanning marks only inside the span cost this gate the left-edge
+  mark on its very first run while reporting a confident three of four. See
+  `SMainWindow::describeTakeLane`.
 
   The marks are two short TICKS at the clip's top and bottom rather than one
   full-height line, for a reason worth not undoing: an opaque full-height mark
   would leave its own column with no body pixels in it, so the classifier
   would read the mark as a GAP — a cut mark manufacturing the discontinuity it
   describes — and `spanFirst`/`gapRuns` would move in every composite-lane
-  case already in the suite. `gapRuns="1"` below is the assertion that holds
-  that shut: four marks and still exactly one hole.
+  case already in the suite. `maxCutMarkHeightPct` below is the assertion that
+  holds that shut — and it is here because the first sabotage pass found that
+  nothing else could see it: a full-height mark at the column's RIGHT edge only
+  moves `spanLast` one column in, which takes the mark back out of the span and
+  leaves every other number in the report unchanged. Measured: 30 % of the band
+  for the tick pair, 96 % for a full-height line. `gapRuns="1"` says the
+  obverse: four marks and still exactly one hole.
 -->
 <SActionScript version="1" name="take_comp_backdrop">
 
@@ -106,10 +132,12 @@
     <add-track index="-1"/>
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
 
-    <!-- The partial take. `activate="0"` keeps take 0 active, which is what
-         makes the broken paint's answer (the active take, everywhere)
-         different from the right one. -->
-    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+    <!-- The partial take, SLIPPED to the loud end of the file. `activate="0"`
+         keeps take 0 active, which is what makes the broken paint's answer
+         (the active take, everywhere) different from the right one — and
+         `startOffset` is what makes the difference VISIBLE rather than only
+         structural. See the header. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="144000"
               index="-1" activate="0" at="0" length="48000"/>
     <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
                         extents="0-192000;0-48000" duration="192000"/>
@@ -136,14 +164,17 @@
                       pctTolerance="3"
                       cutMarkRuns="4" cutMarkPcts="0,25,75,100"
                       minCutMarkCols="4"
-                      minWaveMeanPct="10"/>
+                      minCutMarkHeightPct="20" maxCutMarkHeightPct="55"
+                      minWaveMeanPct="40" maxWaveMeanPct="55"/>
 
     <!-- ...AND THE SOUND AGREES WITH IT, over the same three quarters. -->
     <render filename="tcb_comped.wav" format="wav" quality="10"
             durationSec="4.5"/>
+    <!-- The comped first quarter is the LOUD source second, not the quiet one
+         the active take would have put there. -->
     <assert-audio-energy filename="tcb_comped.wav"
                          startFrame="0" frameCount="48000"
-                         minRms="0.05" maxRms="0.085"/>
+                         minRms="0.36" maxRms="0.45"/>
     <assert-audio-energy filename="tcb_comped.wav"
                          startFrame="48000" frameCount="96000"
                          minRms="0.0" maxRms="0.005"/>
