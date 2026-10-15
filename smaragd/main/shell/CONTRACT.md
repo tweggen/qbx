@@ -1923,3 +1923,52 @@ dock, and what matters is the SCAN, which `assert-unused-recordings` holds
 directly. `files="1"` — moving a recording to the OS trash — is exercised by
 nothing and is hand-verified; the PR says so. `SMainWindow::fileNew`'s own
 seed call site is still unreachable from a .qxa (inv. 66).
+
+## The clean-up sweep's three entry points (plan 53 §6.3, QBX-195)
+
+P6 shipped `cleanup-takes` and nothing that invoked it: a user could open the
+Unused recordings dock, read the list, and had no command to act on it — and
+the dock's own tooltip named "Clean up takes", which did not exist. Three
+surfaces reach it now, and all three go through ONE worker
+(`SStdMixerView::cleanupTakesGesture`, see `main/timeline/CONTRACT.md`):
+
+| surface | scope |
+|---|---|
+| **Edit > Clean up takes...** (`SMainWindow::cleanupTakesFromMenu`) | the CLIP SELECTION, or the whole project when nothing is selected |
+| the arranger's **lane context menu** | the clicked track and the other selected tracks |
+| the Unused recordings dock's **button** | the same as the Edit menu's |
+
+**ONE ITEM IN EDIT, NOT TWO.** Its scope follows the selection, so there is no
+"sweep selection" / "sweep project" pair for the user to choose between — the
+confirmation says which it is about before anything happens. It is in **Edit**
+rather than in a Takes menu because there is no Takes menu and one command does
+not earn one.
+
+**THE DOCK IS STILL READ-ONLY, and the button is an application of that rule
+rather than an exception to it.** The button REMOVES NOTHING: it emits
+`SUnusedRecordingsView::cleanupRequested()` and the shell runs the same gesture
+the menu runs. What the dock's header forbids is a second destructive path with
+its own confirmation to get wrong; one signal into one gesture is the opposite
+of that. The button is there because the dock is where the user is looking when
+they want the sweep.
+
+**THE CONFIRMATION IS NOT OPTIONAL, AND A HEADLESS RUN DECLINES IT.**
+`SCleanupTakesDialog::ask` returns false under `--test-case` without opening
+anything (a modal nobody can dismiss is a hang, not a failure), and FALSE is
+the load-bearing half: a scripted menu click must not sweep a project as a side
+effect of being unable to ask. A case that wants the sweep supplies the answers
+itself through `cleanup-takes-gesture`, which goes round `ask()` rather than
+through it — `SMainWindow::cleanupTakesGesture`'s `scripted` flag is that one
+seam, and it exists so the interactive path and the gated path are otherwise
+the same code.
+
+**NOT GATED.** The menu ITEM and the dock BUTTON are not clicked by anything:
+no verb in the testkit triggers a QAction by name, and the dock has no widgets
+in a scripted run. What is gated is everything from the gesture inwards
+(`cleanup_takes_gesture.qxa`: scope resolution, the selection-to-`clips=`
+translation, the decline branch, `includeOriginals`, one undo step, an event
+take coming back) and the dialog's own surface
+(`cleanup_takes_dialog_test.cpp`: the numbers are the ones it was handed, both
+boxes default off, the zero case still offers them, Cancel is the default
+button). The two wires in between — `editMenu->addAction(...)` and
+`connect( view, &cleanupRequested, ... )` — are read, not measured.

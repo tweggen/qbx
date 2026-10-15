@@ -49,6 +49,9 @@
 #include "app/objects/cut/stakehelpers.h"
 #include "app/objects/cut/ssetclipfadeaction.h"
 #include "app/objects/cut/scompmapactions.h"
+#include "app/objects/cut/scleanuptakesaction.h"
+#include "app/model/srecordingfiles.h"
+#include "app/servicesui/scleanuptakesdialog.h"
 #include "app/objects/cut/swarpmarkeractions.h"
 #include "app/model/sexternfile.h"
 #include "app/objects/cut/scutrndrinline.h"   // loop-marker handle geometry
@@ -919,6 +922,201 @@ void SStdMixerView::ctSplitSample()
     qContent_->update();
 }
 
+// --- CLEAN UP TAKES (plan 53 §6.3, QBX-195) ---------------------------------
+//
+// See the header for the three surfaces, the scopes and why the selection is
+// translated here rather than at the verb.
+
+void SStdMixerView::ctCleanupTakes()
+{
+    cleanupTakesGesture( CleanupScope::SelectionOrProject, nullptr );
+}
+
+void SStdMixerView::ctCleanupTakesTracks()
+{
+    cleanupTakesGesture( CleanupScope::Tracks, nullptr );
+}
+
+namespace {
+
+/// The shell's window, for the one-line hint. By the top-level widget list
+/// rather than QApplication::activeWindow(), which is null while a menu owns
+/// the input and in every headless run -- the same route the testkit takes.
+SMainWindow *sCleanupMainWindow()
+{
+    for( QWidget *w : QApplication::topLevelWidgets() )
+        if( SMainWindow *win = qobject_cast<SMainWindow *>( w ) ) return win;
+    return nullptr;
+}
+
+/// Every take COLUMN placed on `lane`, as a path from the arrangement root.
+/// Not recursive: a folder's children are their own lanes and the caller has
+/// already decided which lanes it means.
+void sCleanupColumnsOfLane( SObject *mixer, STrack *lane,
+                            QList<QList<int>> &out )
+{
+    if( !mixer || !lane ) return;
+    const QList<int> lanePath = strackpath::pathOf( mixer, lane );
+    int i = 0;
+    for( SLink *lk : lane->childLinks() ) {
+        const int idx = i++;
+        if( !lk ) continue;
+        if( lk->getSObject().isLane() ) continue;
+        if( !stakes::columnOfLink( lk ) ) continue;
+        QList<int> p = lanePath;
+        p.append( idx );
+        out.append( p );
+    }
+}
+
+}  // namespace
+
+int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
+                                        const CleanupTakesChoices *scripted )
+{
+    SApplication &app = SApplication::app();
+    SProject *project = app.getCurrentProject();
+    if( !project ) return 0;
+    SObject *mixer = splacements::rootContainer( project );
+    if( !mixer ) return 0;
+
+    // ---- WHICH COLUMNS, and what to call that in the dialog --------------
+    //
+    // An EMPTY list means "the whole project", which is `cleanup-takes`'s own
+    // default scope -- so the project-wide sweep is the absence of a clips=
+    // list rather than a third code path here.
+    QList<QList<int>> columns;
+    QString scopeText;
+    if( scope == CleanupScope::Tracks ) {
+        STrack *clicked = qContent_ ? qContent_->getLastClickTrack() : nullptr;
+        const QList<STrack *> targets = selectionTargets( clicked );
+        if( targets.isEmpty() ) {
+            TW_LOGI( "ui.timeline",
+                     "cleanup-takes: no track to sweep (nothing clicked)" );
+            return 0;
+        }
+        for( STrack *t : targets ) sCleanupColumnsOfLane( mixer, t, columns );
+        scopeText = ( targets.size() > 1 )
+            ? tr( "%n tracks", "", targets.size() )
+            : tr( "this track" );
+        if( columns.isEmpty() ) {
+            // NOT THE SAME THING as a tidy project, and the user is told so:
+            // the tracks they aimed at hold no take columns at all, which no
+            // amount of sweeping would change.
+            TW_LOGI( "ui.timeline",
+                     "cleanup-takes: nothing to remove (no take columns on "
+                     "the %d target track(s))", (int) targets.size() );
+            return 0;
+        }
+    } else {
+        // THE CLIP SELECTION, filtered to the placements that actually ARE
+        // take columns -- a selection of plain clips is not an error and must
+        // not be turned into a project-wide sweep by accident, which is why
+        // the emptiness of `paths` and the emptiness of `columns` are
+        // different answers below.
+        const QList<QList<int>> paths = app.getCurrentSelectionPaths();
+        for( const QList<int> &p : paths ) {
+            SLink *lk = splacements::placementAt( mixer, p );
+            if( !lk || lk->getSObject().isLane() ) continue;
+            if( !stakes::columnOfLink( lk ) ) continue;
+            columns.append( p );
+        }
+        if( paths.isEmpty() ) {
+            scopeText = tr( "the whole project" );   // and columns stays empty
+        } else if( columns.isEmpty() ) {
+            TW_LOGI( "ui.timeline",
+                     "cleanup-takes: nothing to remove (none of the %d "
+                     "selected clip(s) is a take column)", (int) paths.size() );
+            return 0;
+        } else {
+            scopeText = tr( "%n selected clip(s)", "", columns.size() );
+        }
+    }
+
+    QStringList clipStrings;
+    for( const QList<int> &p : columns )
+        clipStrings << strackpath::pathToString( p );
+    const QString clips = clipStrings.join( QLatin1Char( ';' ) );
+
+    // ---- WHAT IT WOULD DO, from the sweep's own walk ---------------------
+    //
+    // `includeOriginals` is FALSE for the preview on purpose: the dialog opens
+    // with that box unchecked, so the numbers it shows have to be the numbers
+    // for the state it is showing. Checking the box changes what the sweep
+    // does, and the sweep recomputes its plan when it runs -- the preview is
+    // the question, not the contract.
+    const scleanuptakes::Plan preview =
+        scleanuptakes::plan( project, QString(),
+                             QStringLiteral( "project" ), clips, false );
+
+    SCleanupTakesDialog::Summary summary;
+    summary.removedTakes   = preview.removedTakes;
+    summary.keptOriginals  = preview.keptOriginals;
+    summary.columnsTouched = preview.columnsTouched;
+    summary.removedNames   = preview.removedNames;
+    summary.scopeText      = scopeText;
+    // The FILE count is a different question from the take count and comes
+    // from the one scan the dock reads (`srecfiles::scanUnused`), so the
+    // dialog's "N recording files on disk" line and the dock's list cannot
+    // disagree about how many there are.
+    summary.orphanFiles    = (int) srecfiles::scanUnused( project ).size();
+
+    // IS THERE ANYTHING TO ASK ABOUT? Not "is there anything to remove": the
+    // dialog's two boxes REACH things the default plan does not, and bailing
+    // on `removedTakes == 0` alone makes them unreachable.
+    //
+    // MEASURED, on the first run of cleanup_takes_gesture.qxa: a column whose
+    // only sweepable take was the user's OWN clip reported "nothing to clean
+    // up" and closed -- so the one checkbox that could have removed it never
+    // appeared, and a user looking at a take they wanted gone would have been
+    // told there was nothing there. The same applies to orphan FILES, which no
+    // take count can see at all.
+    if( preview.removedTakes == 0 && preview.keptOriginals == 0
+        && summary.orphanFiles == 0 ) {
+        // NOW it is a tidy project, and that is a no-op that says so (ticket
+        // AC6) -- not an error, and not a dialog with nothing in it.
+        TW_LOGI( "ui.timeline",
+                 "cleanup-takes: nothing to remove in %s",
+                 qPrintable( scopeText ) );
+        if( SMainWindow *mw = sCleanupMainWindow() )
+            mw->postHint(
+                tr( "Nothing to clean up: every take in %1 is either playing "
+                    "or comped." ).arg( scopeText ) );
+        return 0;
+    }
+
+    SCleanupTakesDialog::Answers answers;
+    if( scripted ) {
+        answers.includeOriginals = scripted->includeOriginals;
+        answers.files            = scripted->files;
+    } else if( !SCleanupTakesDialog::ask( this, summary, &answers ) ) {
+        TW_LOGI( "ui.timeline",
+                 "cleanup-takes: cancelled; %d take(s) left alone",
+                 preview.removedTakes );
+        return 0;
+    }
+
+    SCleanupTakesAction *act = new SCleanupTakesAction(
+        QStringLiteral( "project" ), clips, answers.includeOriginals,
+        answers.files );
+    stimeline::submitActive( act );
+    // AFTER the submit: the counts on the action are what its apply() actually
+    // did, which with `includeOriginals` checked is more than the preview
+    // showed. Reporting the preview's number here would make the status line
+    // disagree with the undo step the user just got.
+    const int removed = act->removedTakes();
+    TW_LOGI( "ui.timeline",
+             "cleanup-takes: removed %d take(s) from %s, kept %d original "
+             "clip(s)%s", removed, qPrintable( scopeText ),
+             act->keptOriginals(),
+             answers.files ? ", orphan files binned" : "" );
+    if( SMainWindow *mw = sCleanupMainWindow() )
+        mw->postHint( tr( "Removed %n take(s).", "", removed )
+                      + QStringLiteral( " " ) + tr( "Undo puts them back." ) );
+    if( qContent_ ) qContent_->update();
+    return removed;
+}
+
 // --- proposal 41 M2: pack / unpack from the arranger ------------------------
 //
 // PACK ACTS ON THE SELECTION, not on the right-clicked clip. Packing is a
@@ -1215,6 +1413,29 @@ void SMVActualView::ctGlobalShow()
             smv_.isTrackTakesExpanded( lastClickTrack_ )
                 ? "Hide take lanes" : "Show take lanes",
             this, SLOT( ctToggleTakeLanes() ) );
+        // CLEAN UP TAKES (plan 53 §6.3, QBX-195), beside the take-lane toggle
+        // because it is the other thing you do to a track's takes. It carries
+        // the same `(N tracks)` suffix as the items above, for the same reason
+        // they do: the sweep REMOVES things, and an item that silently hits
+        // four lanes when the pointer is on one is the whole risk of a
+        // multi-selection.
+        //
+        // DISABLED WITH THE REASON IN ITS OWN TEXT when the target tracks hold
+        // no take column at all, which is the precedent "Create &asset from
+        // range" set two blocks down: a greyed item with no explanation is a
+        // worse answer than a greyed item that says why.
+        {
+            int nColumns = 0;
+            for( STrack *t : smv_.selectionTargets( lastClickTrack_ ) )
+                for( SLink *lk : t->childLinks() )
+                    if( lk && !lk->getSObject().isLane()
+                        && stakes::columnOfLink( lk ) ) ++nColumns;
+            QString label = QStringLiteral( "Clean up takes" ) + sfx;
+            if( nColumns == 0 ) label += QStringLiteral( " (no take columns)" );
+            QAction *aClean = qGlobalPopup_->addAction(
+                label, &smv_, SLOT( ctCleanupTakesTracks() ) );
+            aClean->setEnabled( nColumns > 0 );
+        }
         // Per-track lane height, as a factor of the base (zoomed) height, so
         // one track can be tall for detailed editing while its neighbours stay
         // small. Vertical zoom keeps scaling all of them together.

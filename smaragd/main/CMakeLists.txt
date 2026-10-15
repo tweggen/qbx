@@ -450,6 +450,7 @@ set(APP_UI_FILES
     pluginui/src/spluginparamereditor.cpp
     # --- app/servicesui
     servicesui/include/app/servicesui/scleanupdialog.h
+    servicesui/include/app/servicesui/scleanuptakesdialog.h
     servicesui/include/app/servicesui/slogmodel.h
     servicesui/include/app/servicesui/slogview.h
     servicesui/include/app/servicesui/soptions.h
@@ -459,6 +460,7 @@ set(APP_UI_FILES
     servicesui/include/app/servicesui/srenderprogress.h
     servicesui/include/app/servicesui/stransportoptionactions.h
     servicesui/src/scleanupdialog.cpp
+    servicesui/src/scleanuptakesdialog.cpp
     servicesui/src/slogmodel.cpp
     servicesui/src/slogview.cpp
     servicesui/src/soptions.cpp
@@ -1219,6 +1221,19 @@ target_link_libraries(render_dialog_test
 )
 add_test(NAME render_dialog_test COMMAND render_dialog_test)
 set_tests_properties(render_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The clean-up confirmation (plan 53 §6.3, QBX-195). A unit test and not a
+# .qxa because the dialog is MODAL: a --test-case run never opens one (it would
+# hang), so a scripted run can reach the GESTURE but never the widget. Same
+# split render_dialog_test makes.
+add_executable(cleanup_takes_dialog_test testkit/src/cleanup_takes_dialog_test.cpp)
+target_link_libraries(cleanup_takes_dialog_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME cleanup_takes_dialog_test COMMAND cleanup_takes_dialog_test)
+set_tests_properties(cleanup_takes_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # SLaneFragment (proposal 41 M1): a path container with no track identity.

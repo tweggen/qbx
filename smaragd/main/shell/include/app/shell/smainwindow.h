@@ -241,6 +241,29 @@ public:
     // locator, or (selection empty) the last-clicked clip.
     bool splitSelectionGesture();
 
+    /**
+     * TEST ENTRY POINT and the MENU's own route: the clean-up sweep's gesture
+     * (plan 53 §6.3, QBX-195).
+     *
+     * `tracksScope` picks the lane context menu's scope (every take column on
+     * the clicked and selected tracks) over the Edit menu's (the clip
+     * selection, or the whole project when nothing is selected).
+     *
+     * `scripted` is what makes this gateable at all. A `--test-case` run can
+     * never dismiss a modal, so the interactive path answers "cancel" there
+     * (SCleanupTakesDialog::ask) -- which is correct, and would make the sweep
+     * unreachable from a script. With `scripted = true` the two answers are
+     * supplied instead of asked for, and everything else -- the scope
+     * resolution, the selection-to-`clips=` translation, the plan, the submit
+     * -- is the same code the menu runs. A case that wants to gate the CANCEL
+     * branch drives the interactive path instead.
+     *
+     * Returns the number of takes removed; 0 for nothing to do, for cancelled
+     * and for no arranger, which the log tells apart.
+     */
+    int cleanupTakesGesture( bool tracksScope, bool scripted,
+                             bool includeOriginals, bool files );
+
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
     // check the geometry maths, but nothing else proves the widget draws. Returns
@@ -728,6 +751,14 @@ protected slots:
     void showOptionsDialog();
     // Opened from the resources dock's context menu (SExternFileList).
     void showCleanupDialog();
+    /**
+     * The Edit menu's "Clean up takes..." and the Unused recordings dock's
+     * button, both of them (plan 53 §6.3, QBX-195) -- ONE route, so there is
+     * one confirmation to get right rather than two. The dock asks for this
+     * rather than removing anything itself: see SUnusedRecordingsView's own
+     * header, which is where that rule is written down.
+     */
+    void cleanupTakesFromMenu();
 
     // AC-a3: Edit -> Select All (Ctrl/Cmd-A). The DEFAULT answer for the
     // keyboard shortcut — selects every clip on every lane of the ACTIVE

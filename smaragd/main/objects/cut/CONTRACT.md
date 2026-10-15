@@ -1518,6 +1518,23 @@ FIRST.** `removeTake` shifts every take above the one it drops, and renumbers
 the comp map with it, so deciding and removing in one pass would read indices
 the previous removal had already changed.
 
+**AND THE PLAN IS ITS OWN FUNCTION** (`scleanuptakes::plan`, QBX-195), because
+the CONFIRMATION has to state what the sweep will do before it does it. The
+dialog and `apply()` ask the same walk, so the numbers a user agreed to and the
+removals that follow cannot disagree; a dialog with its own count would be a
+second reading of D5 (a)'s name test. The dialog cannot ask it directly —
+`app/servicesui` may not depend on this slice — so the ARRANGER asks and hands
+the numbers over, which is also why `Plan` carries `removedNames`: the one
+consumer that needs them is a label. The plan lists doomed indices ASCENDING
+(what a list wants); `apply()` reverses them, which is the one place the order
+matters.
+
+**THE ACTIVE TAKE IS NEVER SWEPT, AND `includeOriginals` DOES NOT OVERRIDE
+THAT.** The `t == active` test runs before the name test, so a column whose
+original clip is also the take that sounds loses nothing however the box is
+set. Worth stating because the obvious reading of the checkbox is the other
+one.
+
 **WHICH MADE `remove-take`'s NULL INVERSE A BLOCKER, not a wart.** A sweep over
 an event take could not be undone at all, and the one thing a destructive sweep
 must be is undoable — so the pin pattern (QBX-184) landed first, as its own
@@ -1544,6 +1561,15 @@ back an unnamed take, and undoing a removal turned a recording into an
 `scope="selection"` is not available, and §6.3 specifies it. This slice cannot
 see a selection (`objects/cut` has no edge to `shell` or `selection`), so the
 verb takes `clips=` and the caller translates — the split `split-selection`
-already makes against `split-clip`. The shell menu command that resolves a
-selection into `clips=` is not built; nothing but a script reaches the verb
-today.
+already makes against `split-clip`. **The caller exists since QBX-195**
+(`SStdMixerView::cleanupTakesGesture`, behind the Edit menu, the lane context
+menu and the Unused recordings dock's button), so this is no longer "nothing
+but a script reaches the verb"; what remains is that the verb's own `scope=`
+vocabulary still does not match §6.3's, and will not, for the layering reason
+above.
+
+`files="1"` is still exercised by no case, which is deliberate (moving files
+about inside a `-j4` suite is not something a test may do) and still means the
+trash move itself is hand-verified. The COUNT is gated, and since QBX-195 it is
+also what the confirmation shows, through the same `srecfiles::scanUnused` the
+dock reads.

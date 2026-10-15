@@ -1987,6 +1987,15 @@ SMainWindow::SMainWindow()
                          QKeySequence( Qt::CTRL | Qt::SHIFT | Qt::Key_A ),
                          this, SLOT( deselectAllInActiveArranger() ) );
     editMenu->addSeparator();
+    // CLEAN UP TAKES (plan 53 §6.3, QBX-195). In Edit rather than in a Takes
+    // menu of its own: there is no Takes menu, and one command does not earn
+    // one -- this sits with the other things that act on what is selected.
+    // Its SCOPE follows the selection (selected clips, or the whole project
+    // when nothing is selected), which is why there is one item here and not
+    // two; the dialog says which it is about before anything happens.
+    editMenu->addAction( "Clean up &takes...", this,
+                         SLOT( cleanupTakesFromMenu() ) );
+    editMenu->addSeparator();
     editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
                          this, SLOT( showOptionsDialog() ) );
     menuBar()->addMenu( editMenu );
@@ -2133,6 +2142,12 @@ SMainWindow::SMainWindow()
                       SIGNAL( recordingLanesSkipped( int, const QString & ) ),
                       unusedRecordingsView_,
                       SLOT( onRecordingLanesSkipped( int, const QString & ) ) );
+    // ...and its "Clean up takes..." button runs the SAME gesture the Edit
+    // menu's item runs (QBX-195). The dock stays read-only: it asks, the shell
+    // acts, and there is one confirmation and one undo step rather than two.
+    QObject::connect( unusedRecordingsView_,
+                      &SUnusedRecordingsView::cleanupRequested,
+                      this, &SMainWindow::cleanupTakesFromMenu );
 
     // The event editor dock (proposal 37 P4) — the fifth dock, BOTTOM, tabified
     // with the Log so the two share the strip under the arranger. Created here
@@ -3602,6 +3617,26 @@ bool SMainWindow::sendDeselectAllShortcut()
     }
     deselectAllInActiveArranger();
     return true;
+}
+
+void SMainWindow::cleanupTakesFromMenu()
+{
+    cleanupTakesGesture( false, false, false, false );
+}
+
+int SMainWindow::cleanupTakesGesture( bool tracksScope, bool scripted,
+                                      bool includeOriginals, bool files )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return 0;
+    const SStdMixerView::CleanupScope scope =
+        tracksScope ? SStdMixerView::CleanupScope::Tracks
+                    : SStdMixerView::CleanupScope::SelectionOrProject;
+    if( !scripted ) return v->cleanupTakesGesture( scope, nullptr );
+    SStdMixerView::CleanupTakesChoices choices;
+    choices.includeOriginals = includeOriginals;
+    choices.files            = files;
+    return v->cleanupTakesGesture( scope, &choices );
 }
 
 bool SMainWindow::splitSelectionGesture()
