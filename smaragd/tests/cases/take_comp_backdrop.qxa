@@ -111,6 +111,15 @@
   mark on its very first run while reporting a confident three of four. See
   `SMainWindow::describeTakeLane`.
 
+  WHICH MEANS THIS FIXTURE NO LONGER GATES THAT FIX, and the sabotage pass
+  says so: clamping the mark scan back inside the material span now PASSES
+  here, because take 1's slip put material in the clip's very first column and
+  all four marks sit inside the span. It was measured to bite before the slip
+  (three marks instead of four), it is recorded in the describe at the site,
+  and no fixture in the suite re-asserts it. Gating it would need a case whose
+  clip BEGINS in silence, which is a property of the describe rather than of
+  this feature — written down here rather than quietly left out.
+
   The marks are two short TICKS at the clip's top and bottom rather than one
   full-height line, for a reason worth not undoing: an opaque full-height mark
   would leave its own column with no body pixels in it, so the classifier
