@@ -36,11 +36,14 @@
   read "select-take is still A0a's — this take everywhere, map cleared".
   Under §4.3 `select-take` became EXTENT-AWARE, so clicking take 1 no longer
   clears the map — it writes `0:0;96000:1`, leaving take 0 audible where take 1
-  has nothing. That is the whole point of A0b, and it means the click can no
-  longer be used to REACH the state this half is about. `set-comp-map` with no
-  segments is now what empties the map, which states the premise directly
-  rather than relying on a side effect of another verb; the RULE being gated
-  below has not changed by one word.
+  has nothing. That is the whole point of A0b, and it means the PLAIN click can
+  no longer be used to REACH the state this half is about.
+
+  SINCE QBX-186 the premise is `select-take whole="1"`, which is that state's
+  own spelling: this take over the whole column, map cleared. It replaced a
+  `select-take` plus a segment-less `set-comp-map`, the two-verb workaround
+  this case carried from A0b until the gesture was given a name again. The RULE
+  being gated below has not changed by one word under either spelling.
 
   An empty map means "the active take everywhere":
     column [0, 2 s)  -> take 1 has NO MATERIAL -> SILENCE
@@ -97,12 +100,10 @@
                          minRms="0.15" maxRms="0.21"/>
 
     <!-- HALF TWO: the map is emptied and the PARTIAL take is the active one,
-         which is precisely what makes the uncovered span silent.
-         `select-take` used to leave this state behind; since A0b (§4.3) it is
-         extent-aware and writes `0:0;96000:1` instead, so the premise is
-         stated here directly. See the header. -->
-    <select-take clip="0,0" take="1"/>
-    <set-comp-map clip="0,0"/>
+         which is precisely what makes the uncovered span silent. `whole="1"`
+         (QBX-186) is exactly this state's gesture, and asking for it by name
+         is what this case wanted all along. See the header. -->
+    <select-take clip="0,0" take="1" whole="1"/>
     <assert-take-column clip="0,0" comp="" activeTake="1"
                         takeAtPos="0" expectTake="-1"/>
 

@@ -721,6 +721,56 @@ load-bearing:
   `SSelectTakeAction::setPreviousCompMap()` now also marks the action as an
   inverse, and that mark — not the take's extent — is the discriminator.
 
+**Correction (p), from the build (QBX-186): THIS SECTION TOOK A GESTURE AWAY
+AND THE PLAN NEVER NOTICED.** Everything above is right about the click and
+wrong by omission about the user. "For a take whose extent is the whole column
+this reduces to exactly today's clear" is true and is what hid the loss: while
+recording produced full-extent takes, a click still isolated a take, so nothing
+looked missing. Under mode A (§3.1, P2) takes are PARTIAL BY CONSTRUCTION, and
+from P2 onward nothing isolated a take at all — not a click, not a verb. §10
+risk 3a is the same finding stated as a risk; it has been **answered**.
+
+The spelling is **`select-take whole="1"`**, and the UI is a take-lane
+**context-menu item**, "Play *take* alone", disabled with the reason in its own
+text when the take already covers the whole column (where the plain click does
+exactly this). The flag was chosen over a second verb because the isolate path
+*is* this section's full-extent branch: the diff is which branch runs, so one
+action, one inverse and one registry entry keep saying one thing. It travels
+across an edit-group broadcast, or a group would end with one isolated column
+and the rest extent-comped.
+
+Two things the build found that this section's own text implies but does not
+say:
+
+- **The four A0a gates are the measure of the hole, and they are the proof of
+  the fix.** `take_extents_audible`, `take_extents_model`,
+  `take_extents_remove_undo` and `take_extents_split` each carried a
+  `select-take` plus a segment-less `set-comp-map` — the two-verb workaround.
+  All four are written with `whole="1"` now and pass unchanged otherwise.
+- **`normalized()` zeroes `front().xfade`**, deliberately ("no boundary to fade
+  across"), so a map whose ONLY segment carries a crossfade loses it before
+  anything can read it back. Measured while building the gate: a lone
+  `at=96000 xfade=480` reads back as `96000:1`. The gate therefore states a
+  two-segment map. Whether a first segment at a non-zero position really has
+  no boundary to fade across — `activeTake_` sounds before it — is a question
+  for QBX-196's area and not this one.
+
+**Correction (q), measured: ONE UNDO OF A BROADCAST CLICK DESTROYED THE COMP
+MAP ON EVERY MEMBER.** Correction (g) above says the inverse mark "not the
+take's extent" is the discriminator, and that was unenforced on the broadcast
+path: a broadcast forward fans out into one child per member, each child's
+inverse was built BROADCASTING, and a re-broadcasting inverse rebuilds its own
+children through the constructor — which cannot carry `prevMap_`/`restoreMap_`.
+Every re-broadcast child therefore ran the forward computation instead of
+restoring. Measured on a two-member edit group with `96000:1` on both columns:
+one undo left `comp=[]` on both, the map gone with no way back.
+
+Pre-existing since proposal 43 N1 and invisible because no case had ever undone
+a broadcast `select-take` — `takes_group_broadcast` gates the forward only.
+Fixed in QBX-186 (the inverse is built non-broadcasting, which is also right:
+the composite already holds one inverse per member) and gated by
+`take_isolate`'s phase D. Filed as **QBX-199** for the record.
+
 ### 4.4 The painter and QBX-157 — **SHIPPED**: A0b (QBX-178) drew it, P7 (QBX-157) gated it and added the marks
 
 - Compact: the column draws the COMP RESULT — per segment, the selected
@@ -2145,6 +2195,14 @@ pointed to here.
    "this take for the whole column" command distinct from `select-take`.
    Filed as **QBX-186** so P2 cannot land without an answer.
 
+   **ANSWERED AND SHIPPED (QBX-186).** P2 did land without an answer — the risk
+   was real and went live, so between `2b237fb2` and this fix no gesture
+   isolated a take. The decision was the third option, an explicit command, as
+   a FLAG on the existing verb rather than a second verb: `select-take
+   whole="1"`, with a take-lane context-menu item over it. See §4.3 correction
+   (p); the modifier-click was rejected because the take lane's free modifier
+   is Ctrl, which means duplicate-drag on the clip body a few pixels away.
+
 4. **Kw (a wrapped column `normalizeColumns` refuses to fold) is refused in
    every mode.** The alternative — treating the wrapper as an opaque take —
    nests a column in a column, which proposal 42 M3 forbids. A refused lane's
@@ -2246,6 +2304,7 @@ existing tickets. Order within a group is landing order.
 | P5 (**QBX-183**) | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; the selection fade surface — **SHIPPED**. The whole policy is one new module, `app/model/sautofade.h`, because the feature has two consumers in slices that may not see each other (`objects/track` at clip edges, `objects/cut` at comp boundaries) and a third READER in the panel. At a boundary it is a LENGTH handed to the crossfade that was already there, in `clampedXfade_nolock` — so a 3 ms auto-fade renders byte-identically to an explicit `xfade=144`. Three corrections in §8's P5 row, one of which is a plain error in this plan's own text | A0a, B8 | M |
 | P6 (**QBX-184**, UI in **QBX-195**) | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse — **SHIPPED**. Its UI — the Edit-menu and lane-menu commands, the dock button and the confirmation dialog — shipped separately as **QBX-195**, with three corrections of its own in §8's P6 row ((e) the dialog may not count for itself, (f) "nothing to remove" is not "nothing to ask", (g) the active take is never swept). The real inverse landed FIRST, as its own change, because one non-undoable child makes a whole composite non-undoable and a sweep that could not be undone is not shippable. Four corrections in §8's P6 row, two of them defects outside this row's subject: `add-take` carried no NAME, so undoing a removal turned a recording into an "original clip"; and four committed assertions used a `minClips` attribute `assert-recorded-clip` does not have | P2, A0b, B10 | M |
 | QBX-157 | **SHIPPED as P7.** Cut marks (comp boundaries, take-extent edges, column edges) plus the PIXEL gate on the comp-result paint A0b shipped ungated. The laned-track BACKDROP needed nothing built: the composite lane has painted the comp result since A0b, on the parent row, expanded or not — §4.4 correction (i) | A0b, B4 | M |
+| QBX-186 | **SHIPPED.** "Hear one take alone" gets a spelling again: `select-take whole="1"` plus a take-lane context-menu item. §4.3 removed the gesture (risk 3a) and P2 made every take partial, so it had gone live as a hole. Also FIXED a pre-existing data loss the gate found: one undo of a BROADCAST click destroyed the comp map on every member of an edit group (§4.3 correction (q), QBX-199) | A0b, P2 | S |
 | QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |
 
 ## 13. Review 1 dispositions

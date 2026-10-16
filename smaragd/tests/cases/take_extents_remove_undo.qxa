@@ -77,14 +77,12 @@
          has no material outside its extent and there is no fall-back
          (§3.1 step 5). A full-extent restore would play 0.2906 / 0.4055 /
          silence / silence here — loud where this expects silence. -->
-    <select-take clip="0,0" take="1"/>
-    <!-- `set-comp-map` WITH NO SEGMENTS is what empties the map since A0b
-         (QBX-178, plan 53 §4.3). `select-take` used to clear it as a side
-         effect, which is how this case reached the state below; now the click
-         is EXTENT-AWARE and keeps the other takes audible where the selected
-         one has nothing, so the premise is stated directly. The RULE asserted
-         below has not changed. -->
-    <set-comp-map clip="0,0"/>
+    <!-- `whole="1"` (QBX-186) IS "this take over the whole column", which is
+         what a plain `select-take` meant before A0b made it extent-aware
+         (QBX-178, plan 53 §4.3). Between the two it took `select-take` plus a
+         segment-less `set-comp-map` to reach this state; one verb says it now.
+         The RULE asserted below has not changed. -->
+    <select-take clip="0,0" take="1" whole="1"/>
     <render filename="teru_partial.wav" format="wav" quality="10"
             durationSec="4.5"/>
     <assert-audio-energy filename="teru_partial.wav"

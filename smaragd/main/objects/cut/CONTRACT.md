@@ -1573,3 +1573,58 @@ about inside a `-j4` suite is not something a test may do) and still means the
 trash move itself is hand-verified. The COUNT is gated, and since QBX-195 it is
 also what the confirmation shows, through the same `srecfiles::scanUnused` the
 dock reads.
+
+## `select-take whole="1"` — hear one take alone (QBX-186)
+
+Plan 53 §4.3 made the take-lane click EXTENT-AWARE: it selects the take
+wherever it has material and keeps the previous answer elsewhere. That is
+right — clearing the map on a PARTIAL take makes every span the take does not
+cover play SILENCE, so a click would delete the other takes' audio without
+touching one of them — and it took away the only way to say "this take over the
+whole column", which is the gesture a comping user reaches for first.
+
+`whole="1"` is that, and it is a FLAG on the same verb rather than a second
+one, because the operation IS §4.3's full-extent branch: the only difference is
+which branch runs.
+
+**It clears the map.** Not as an optimisation: a one-segment map `{0 -> take}`
+answers exactly what an empty map plus `activeTake_` answers, but it
+SERIALIZES, so a build that wrote one would start putting a `<comp>` element
+into project files that never had one. The clear is the canonical spelling of
+the same map, and only the saved bytes can tell the two apart — which is why
+`take_isolate` asserts on the file and not only on the model.
+
+**On a take that already covers the column it is a no-op** equal to the plain
+click. Both paths reach the same clear, so both renders are byte-identical;
+`take_isolate`'s phase C pins that, as a regression guard rather than a gate
+(it passes in a build that ignores the flag entirely). The flag must not invent
+a one-segment map on the one path that has always cleared.
+
+### The inverse does not broadcast, and that is a fix
+
+An inverse is a plain restoring `select-take`, marked by
+`setPreviousCompMap()`. It is now also built **non-broadcasting**, and that
+closed a data loss rather than tidying a style: a broadcast forward pass fans
+out into one child per member, each child returning its own inverse with its
+own previous map, so the composite inverse already covers the group. An inverse
+that broadcast as well re-expanded and rebuilt its children *through the
+constructor*, which cannot carry `prevMap_`/`restoreMap_` — so every
+re-broadcast child ran the FORWARD extent-aware computation instead of
+restoring. Measured on a two-member edit group with `96000:1` on both columns:
+one undo left `comp=[]` on both, the map gone with no way back.
+
+Pre-existing since proposal 43 N1, and invisible because no case had ever
+undone a BROADCAST `select-take` — `takes_group_broadcast` gates the forward
+only. This is the standing lesson about an inverse that re-enters the same
+fan-out it came from: the fan-out is the place the restoring state cannot
+survive.
+
+### Known debt
+
+`twCompMap::normalized()` zeroes `front().xfade` on purpose ("no boundary to
+fade across"), so a map whose ONLY segment carries a crossfade loses it before
+anything can read it back — measured, a lone `at=96000 xfade=480` reads back
+as `96000:1`. Whether a first segment at a non-zero position really has no
+boundary (`activeTake_` sounds before it) is open, and belongs with QBX-196's
+crossfade work rather than here. Cases that need a stored crossfade must state
+a map with a segment in front of it.
