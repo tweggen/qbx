@@ -2177,10 +2177,26 @@ void STrack::refreshClipGainCurves()
         // window and would make a wrapped column's own clip gain and volume
         // inaudible in favour of the take's (`set-clip-volume` on a wrapped
         // column edits the WRAPPER, so the mix has to read the wrapper).
+        // A TAKE COLUMN THAT RENDERS ITS COMP MAP APPLIES ITS TAKES' OWN
+        // GAIN ITSELF, PER REGION (QBX-185), so this entry must carry NEUTRAL
+        // values or the active take's trim lands twice: once over its own
+        // regions by `twCompColumn` and once over the whole clip by the
+        // entry. Asked through `SObject::appliesOwnWindowGain()` because this
+        // slice may not depend on `objects/cut` -- the same seam
+        // `clipFade()` is.
+        //
+        // It is the PLACEMENT's object that is asked, before the
+        // `parametersOf` hop below: a WRAPPED column answers false (the
+        // wrapper's own trim belongs to this entry and composes with each
+        // take's), and a DEGENERATE one answers false too (it builds no
+        // column, so its active take's trim must keep arriving here exactly
+        // as it always has -- that is what keeps old projects byte-identical).
+        const bool ownGain = obj->appliesOwnWindowGain();
         if( SClipWindow *w = SClipWindow::parametersOf( *obj ) )
             obj = &w->asObject();
         cpTrackMix_->setClipGainCurve(
-            lk, obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
+            lk, ownGain ? nullptr
+                        : obj->automationCurve( QStringLiteral( "cut:Gain" ) ) );
         // THE PER-CLIP STATIC VOLUME (per-clip volume/pan proposal).
         // obj->getVolume() is in dB — the same unit twGainStage's own static
         // scalar uses — so converting to linear here is what makes it compose
@@ -2189,7 +2205,7 @@ void STrack::refreshClipGainCurves()
         // mix/CONTRACT.md inv. 21). Every SObject answers getVolume() at 0 dB
         // by default, so this is a no-op for every clip that never set one.
         cpTrackMix_->setClipGainScalar(
-            lk, std::pow( 10.0, obj->getVolume() / 20.0 ) );
+            lk, ownGain ? 1.0 : std::pow( 10.0, obj->getVolume() / 20.0 ) );
         // THE CLIP FADE (proposal 43 N5), through the same funnel and read
         // from the same window: it is a third factor in the mix's per-frame
         // product, beside the gain curve and the static volume.
@@ -2217,8 +2233,9 @@ void STrack::refreshClipGainCurves()
         // event clip IS one of this lane's `childLinks()` with a start time,
         // which is why it already travels three lines above for the gain
         // curve, the volume and the pan.
-        twClipFade eff = obj->clipFade();
-        if( autoFrames > 0 && obj->contentKind() == SContentKind::Audio ) {
+        twClipFade eff = ownGain ? twClipFade{} : obj->clipFade();
+        if( !ownGain && autoFrames > 0
+            && obj->contentKind() == SContentKind::Audio ) {
             const sautofade::Seams sm = seams.value( lk );
             eff = sautofade::effectiveFade( eff, placedLen, autoFrames,
                                             sm.in, sm.out );
@@ -2228,7 +2245,7 @@ void STrack::refreshClipGainCurves()
         // same window: a wrapped column pans by the WRAPPER's value and a
         // direct one by the active take's -- exactly the object set-clip-pan
         // edits. The mix applies it only at width 2 (D1).
-        cpTrackMix_->setClipPan( lk, obj->getPan() );
+        cpTrackMix_->setClipPan( lk, ownGain ? 0.0 : obj->getPan() );
     }
 }
 

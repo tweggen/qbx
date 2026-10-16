@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A TAKE'S GAIN IS READ IN THE TAKE'S OWN DOMAIN (QBX-185).
+
+  WHY THIS NEEDS ITS OWN CASE. `take_gain_per_region` gates that each take's
+  volume, fade, pan and envelope are heard over that take's own regions, and
+  it does so with BOTH takes at full extent — where a take's own domain and
+  the column's are the same thing, because `tStart` is 0 for both. So nothing
+  there can tell a build that converts the position into the take's domain from
+  one that forgets to: the conversion is an identity in that fixture. Measured,
+  not assumed: dropping the conversion leaves `take_gain_per_region` green.
+
+  Here take 1 is PARTIAL — extent [96000, 192000), so its own frame 0 is the
+  column's 96000 — and it carries a FADE, which is the one factor that depends
+  on WHERE in the take you are.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav (per-source-second RMS
+  0.0667 / 0.1764 / 0.2906 / 0.4055):
+
+    take 0 — FULL extent [0, 192000), source from 0, ACTIVE
+    take 1 — PARTIAL [96000, 192000), source from 0
+
+  Take 1 reads the source from its START while sitting in the column's second
+  half, so over its 2 s it carries source seconds 0 and 1: 0.0667 then 0.1764.
+
+  Map `96000 -> 1`, and take 1 gets a LINEAR fade-in of 48000 frames over its
+  own 96000-frame window. In the take's own domain the ramp runs 0 to 1 across
+  its first second and is DONE for its second:
+
+    column [2 s, 3 s)  = take frames [0, 48000)      -> source second 0, ramped
+    column [3 s, 4 s)  = take frames [48000, 96000)  -> source second 1, full
+
+  The ramped window is the measurement: **0.0516268**, against 0.0666501
+  unramped.
+
+  AND NOT THE 0.0385 THE OBVIOUS ARITHMETIC PREDICTS, which is worth recording
+  because the first draft of this case asserted it and failed. The estimate
+  "0.0667 times the RMS of a 0-to-1 linear ramp, sqrt(1/3) = 0.5774" assumes
+  the source is STATIONARY across the window. test_sawtooth is not: its
+  amplitude ramps continuously (that is what makes its per-second RMS climb
+  0.0667 / 0.1764 / 0.2906 / 0.4055), so within source second 0 the signal
+  GROWS, and a fade-in weights the later, louder part more heavily. The result
+  is higher than the stationary estimate. The fade-OUT below is the mirror
+  image and lands LOWER than its estimate for the same reason: 0.0843199
+  against a predicted 0.1019.
+
+  So both numbers here are MEASURED. On a ramping source an RMS-times-ramp
+  estimate is the right order of magnitude and the wrong value, and a bound
+  set from it is a bound that fails on correct code.
+
+  A BUILD THAT FORGETS THE CONVERSION evaluates the fade at the COLUMN
+  position instead. At column 96000 that is already past a 48000-frame
+  fade-in, so the gain reads 1.0 for the whole region and the first window
+  reads 0.0666501 — the unramped value. That is the single number this case
+  exists for, and the bound below excludes it deliberately.
+-->
+<SActionScript version="1" name="take_gain_take_domain">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: the column's SECOND HALF, reading the source from 0, and not
+         active. `at`/`length` are what make its own domain differ from the
+         column's, which is the whole point of this case. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+
+    <set-comp-map clip="0,0">
+      <seg at="96000" take="1"/>
+    </set-comp-map>
+    <assert-take-column clip="0,0" comp="96000:1" activeTake="0"/>
+
+    <!-- THE BASELINE: take 1 at full gain over its own two source seconds. -->
+    <render filename="tgtd_flat.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgtd_flat.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgtd_flat.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- THE FADE, in the take's own domain. The ramp covers the take's first
+         second, which is the column's THIRD. -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="48000" fadeOut="0"
+                   shape="linear"/>
+    <render filename="tgtd_faded.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- THE MEASUREMENT. Correct: 0.0516268. A build reading the fade at the
+         COLUMN position: 0.0666501, the unramped value, because column frame
+         96000 is already past a 48000-frame fade-in. The bound holds the
+         first and excludes the second. -->
+    <assert-audio-energy filename="tgtd_faded.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.047" maxRms="0.057"/>
+    <!-- ...and the take's SECOND second is past the ramp, so it is untouched.
+         This is the other half of "in the take's domain": a build that scaled
+         the whole region would fail here. -->
+    <assert-audio-energy filename="tgtd_faded.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- take 0's half never had a fade and must not acquire one. -->
+    <assert-audio-energy filename="tgtd_faded.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgtd_faded.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- A FADE-OUT IS ANCHORED TO THE END OF THE TAKE'S OWN WINDOW, which is
+         what `fadeLen` carries and why it is the take's own length rather than
+         its extent in the column's frames. 48000 frames out of a 96000-frame
+         window ramps the take's SECOND second down to zero: the column's
+         fourth second, whose 0.176362 becomes 0.0843199 (measured; see the
+         header for why it is below the stationary estimate of 0.1019). -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="0" fadeOut="48000"
+                   shape="linear"/>
+    <render filename="tgtd_out.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgtd_out.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgtd_out.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.078" maxRms="0.090"/>
+
+    <!-- Clear it, and the baseline returns byte for byte. -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="0" fadeOut="0"/>
+    <render filename="tgtd_restored.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tgtd_restored.wav" expected="tgtd_flat.wav"/>
+
+    <!-- AND THE VOLUME, which is position-INDEPENDENT and therefore says
+         nothing about the domain — kept because it is the cheap half of the
+         claim and because it pins that a PARTIAL take's trim reaches only its
+         own regions, which is the shape mode A (P2) produces for every
+         recording over existing material. -->
+    <set-clip-volume clip="0,0" take="1" volumeDb="-20"/>
+    <render filename="tgtd_quiet.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgtd_quiet.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgtd_quiet.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.0055" maxRms="0.0080"/>
+    <assert-audio-energy filename="tgtd_quiet.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.015" maxRms="0.021"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
