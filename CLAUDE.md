@@ -32,8 +32,14 @@ thinktank shows *why*.
 
 Start at `docs/ARCHITECTURE.md`. Every module has a `CONTRACT.md` beside its
 sources; cross-module protocols are in `docs/contracts/`; every action verb (the
-`.qxa` scripting API) is in `docs/ACTIONS.md`; the plans are in `plan/`
-(`plan/STATE.md` is the implementation record).
+`.qxa` scripting API) is in `docs/ACTIONS.md`; the plans are in
+`plan/proposed/`, each carrying its own corrections from the build.
+
+For **what has been implemented and when**, read YouTrack project QBX and the
+thinktank notebook — not `plan/STATE.md`, which records the period up to
+2026-08-22 and explains at the top what it is now (QBX-198). Appending a dated
+correction inside one of its entries, when a later change disproves it, is
+still right.
 
 ## Build
 

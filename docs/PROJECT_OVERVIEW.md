@@ -7,11 +7,13 @@ model, the arrangement UI, the mixer, plugin hosting and the scripting runtime
 ASIO), Linux (ALSA) and macOS (CoreAudio).
 
 > **This page is an orientation, not a record.** For the module map read
-> [`docs/ARCHITECTURE.md`](ARCHITECTURE.md); for what has been implemented and
-> when, [`plan/STATE.md`](../plan/STATE.md); for designs,
-> `plan/proposed/`. Where this page and any of those disagree, they win. Facts
-> that rot — line counts, dependency versions, what is "next" — are
-> deliberately not kept here.
+> [`docs/ARCHITECTURE.md`](ARCHITECTURE.md); for designs, `plan/proposed/`,
+> each plan carrying its own corrections from the build. For what has been
+> implemented and when, read **YouTrack project QBX** and the thinktank
+> notebook `qbx2` — [`plan/STATE.md`](../plan/STATE.md) is an archive of the
+> period up to 2026-08-22 and says so at the top (QBX-198). Where this page
+> and any of those disagree, they win. Facts that rot — line counts,
+> dependency versions, what is "next" — are deliberately not kept here.
 
 ## What is where
 
@@ -20,7 +22,7 @@ ASIO), Linux (ALSA) and macOS (CoreAudio).
 | `smaragd/tw303a/` | the engine: one `tw_<module>` static library per directory, a build-enforced DAG |
 | `smaragd/main/` | the app: 17 modules in four layered OBJECT libraries, `app_model < app_core < app_objects < app_ui` |
 | `smaragd/tests/` | the `.qxa` case suite, fixtures and goldens |
-| `plan/` | proposals (`proposed/`), the implementation record (`STATE.md`) |
+| `plan/` | proposals (`proposed/`), and `STATE.md` — the implementation record up to 2026-08-22, still the place for dated corrections to those entries |
 | `docs/contracts/` | the cross-module protocols — read before touching an audio path |
 | `docs/archive/` | superseded design notes, each with a banner |
 
@@ -107,13 +109,18 @@ credential is never re-displayed.
 ## Known limitations
 
 These are the ones that shape decisions rather than the ones that shape a
-backlog; `plan/STATE.md` and the proposals carry the rest.
+backlog; the YouTrack backlog and the proposals carry the rest.
 
-1. **No CI.** There is no GitHub Actions workflow. The local gates listed in
-   [`CLAUDE.md`](../CLAUDE.md) are the entire safety net.
-2. **Linux is under-tested.** The ALSA backend has not been exercised since the
-   module refactor, and every timing figure quoted in `CLAUDE.md` and
-   `plan/STATE.md` was measured on the Windows box.
+1. **CI measures Linux only.** `.github/workflows/ci.yml` has run
+   `ci/gates.sh` — the same script a developer runs — since 2026-10-03, with
+   two standing exclusions recorded in
+   [`docs/LINUX_GATE.md`](LINUX_GATE.md). macOS and Windows are measured by
+   hand against [`docs/MACOS_GATE.md`](MACOS_GATE.md) and
+   [`docs/ASIO_WINDOWS_GATE.md`](ASIO_WINDOWS_GATE.md), each of which names
+   its standing failures with a ticket beside them.
+2. **Linux is under-tested beyond the gate.** The ALSA backend has not been
+   exercised since the module refactor, and every timing figure quoted in
+   `CLAUDE.md` and `plan/STATE.md` was measured on the Windows box.
 3. **macOS Keychain has never been compiled.** The backend is written; the
    development box is Windows/MinGW. Expect build errors before behaviour.
 4. **WASAPI is shared mode only** — no exclusive, bit-perfect path. A device
