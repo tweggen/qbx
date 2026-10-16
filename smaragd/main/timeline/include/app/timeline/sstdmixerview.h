@@ -928,6 +928,31 @@ public:
     int cleanupTakesGesture( CleanupScope scope,
                              const CleanupTakesChoices *scripted );
 
+    /**
+     * "HEAR ONE TAKE ALONE" (QBX-186) — the ONE answer, and the gesture over
+     * it.
+     *
+     * `takeIsolateOffered` is why both exist as a pair: the take-lane context
+     * menu asks it to decide its label and its enabled state, and
+     * `isolateTakeGesture` asks the SAME function to decide whether to refuse.
+     * A second copy of the test in the menu is how the two drift, and the menu
+     * copy is the one no case can reach.
+     *
+     * It answers FALSE when the take already covers the whole column, because
+     * there the plain extent-aware click does exactly what `whole="1"` would
+     * (plan 53 §4.3 reduces to the same clear) and offering a second spelling
+     * of one operation is worse than not offering it. It also answers false
+     * for a clip that is not a take column and for a take that is not there.
+     *
+     * `isolateTakeGesture` submits `select-take whole="1"` and returns whether
+     * it did. It is the whole of what the menu item's handler does, which is
+     * what makes the gesture reachable from a script — the QAction's own label
+     * and enabled flag are not, and nothing in the suite builds the arranger's
+     * lane popup off screen.
+     */
+    bool takeIsolateOffered( const QList<int> &clipPath, int takeRow ) const;
+    bool isolateTakeGesture( const QList<int> &clipPath, int takeRow );
+
 public slots:
     void ctAddTrack();
     // Add a new track whose parent is the same container as the last visible

@@ -144,6 +144,50 @@ private:
     int     expectRemoved_    = -1;
 };
 
+// isolate-take-gesture (plan 53 §4.3, QBX-186) — "HEAR ONE TAKE ALONE" driven
+// through the ARRANGER rather than through `select-take whole="1"` directly.
+//
+// Without it the gesture half of QBX-186 is ungated: a sabotage that made the
+// take-lane menu item submit a PLAIN `select-take` passed the whole suite,
+// which is the feature being wholly broken for every user with the suite
+// green. This verb runs the same `SStdMixerView::isolateTakeGesture` the menu
+// item's handler runs, so the resolution of the column, the refusal, and the
+// flag reaching the action are all on a path a case can stand on.
+//
+//   clip           the column, as an index-path ("0,0")
+//   take           which take to isolate
+//   expectRefused  "0" (default) the gesture must go through; "1" it must
+//                  REFUSE. EXACT, not a floor: the refusal is the whole
+//                  content of the menu item's disabled state, and a gate that
+//                  accepted either answer would gate neither.
+//
+// What remains out of reach is the QAction itself — its label and its enabled
+// flag. Nothing in the suite builds the arranger's lane popup off screen (the
+// same gap that leaves "Create &asset from range" and QBX-195's "Clean up
+// takes" item ungated), but the DECISION behind the enabled flag is
+// `takeIsolateOffered`, which is what `expectRefused` reads.
+//
+// Not undoable itself: the gesture submits its own `select-take`, and undoing
+// THAT is what restores the comp map.
+class SIsolateTakeGestureAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "isolate-take-gesture" ); }
+    QStringList knownAttributes() const override
+    {
+        return { QStringLiteral( "clip" ), QStringLiteral( "take" ),
+                 QStringLiteral( "expectRefused" ) };
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString clip_;
+    int     take_          = -1;
+    bool    expectRefused_ = false;
+};
+
 // wheel-scroll (AC-g1) — one REAL QWheelEvent to the arranger canvas, exactly
 // as a physical notch would be delivered, so the follow-playhead HOLD
 // (SMVActualView::armFollowHold) is exercised through its actual call site

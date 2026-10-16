@@ -196,6 +196,46 @@
     <undo count="1"/>
     <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
     <assert-take-column clip="1,0" comp="0:0;96000:1:480" activeTake="0"/>
+    <!-- PHASE E. THE GESTURE, not the verb. `isolate-take-gesture` runs the
+         same `SStdMixerView::isolateTakeGesture` the take-lane menu item's
+         handler runs, so the column resolution, the refusal and the flag
+         reaching the action are on a path this case can stand on. Without it
+         a build whose menu item submitted a PLAIN `select-take` passed the
+         whole suite, which is the feature wholly broken for every user with
+         the suite green.
+
+         The two columns are still grouped from phase D, so the gesture also
+         fans out here, which is the state a user is actually in. -->
+    <isolate-take-gesture clip="0,0" take="1"/>
+    <!-- DIRECTLY after the action that logs it: an assert-log window opens at
+         the preceding NON-assert-log action, so one placed below the two
+         column assertions would open after the line was already emitted. -->
+    <assert-log contains="isolate-take: take 1" minCount="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="1"/>
+    <assert-take-column clip="1,0" comp="" activeTake="1"/>
+
+    <!-- ...and one undo, because the gesture is undoable through the action it
+         submits and nothing else. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:0;96000:1:480" activeTake="0"/>
+
+    <!-- THE REFUSAL, which is the whole content of the menu item's disabled
+         state. Take 0 covers the column, so there the plain click already does
+         what `whole="1"` would (phase C measured that equality) and offering a
+         second spelling of one operation is worse than not offering it.
+         EXACT, not a floor: a gate that accepted either answer would gate
+         neither. -->
+    <isolate-take-gesture clip="0,0" take="0" expectRefused="1"/>
+    <assert-log contains="is not a take this column can isolate" minCount="1"/>
+    <!-- ...and the refusal CHANGED NOTHING. A refusal that still wrote the
+         clear would be the worse half of the bug it prevents. -->
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+
+    <!-- A take that is not there is refused the same way, through the same
+         answer, so the menu cannot offer a row for it either. -->
+    <isolate-take-gesture clip="0,0" take="7" expectRefused="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
   </actions>
 
   <assertions>

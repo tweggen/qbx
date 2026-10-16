@@ -264,6 +264,20 @@ public:
     int cleanupTakesGesture( bool tracksScope, bool scripted,
                              bool includeOriginals, bool files );
 
+    /**
+     * TEST ENTRY POINT: "hear one take alone" (QBX-186).
+     *
+     * The whole of what the take-lane context menu item's handler does, so a
+     * case can drive the GESTURE and not only the verb beneath it. Returns
+     * whether the isolate was submitted; false means the arranger refused it,
+     * which it does when the take already covers the whole column or is not
+     * there. What stays unreachable is the QAction itself — its label and its
+     * enabled flag — because nothing in the suite builds the arranger's lane
+     * popup off screen; the DECISION behind the enabled flag is this call's
+     * return value and is gated.
+     */
+    bool isolateTakeGesture( const QString &clipRef, int takeRow );
+
     // TEST ENTRY POINT: paint a level meter carrying a known level into a PNG.
     // The ONLY coverage of SLevelMeter::paintEvent — the describe() assertions
     // check the geometry maths, but nothing else proves the widget draws. Returns

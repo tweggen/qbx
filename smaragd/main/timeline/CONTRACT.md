@@ -1821,10 +1821,23 @@ the index-path at trigger time, like "New track" above it: a menu can outlive
 what it was aimed at, and a path resolved at build time would address whatever
 now sits at that index.
 
-**NOT GATED: the QAction itself** — its label, and that it is disabled on a
-full-extent take. No testkit verb builds the arranger's lane popup off screen,
-which is the same gap that leaves "Create &asset from range" and QBX-195's
-"Clean up takes" item ungated. What IS gated is the BEHAVIOUR the dimming
-communicates: `take_isolate`'s phase C asserts that on a full-extent take
-`whole="1"` and the plain click render byte-identically, so the item is dimmed
-over an operation known to be a no-op.
+**THE LABEL, THE ENABLED STATE AND THE REFUSAL ARE ONE ANSWER.** All three
+read `SStdMixerView::takeIsolateOffered`, so they cannot drift — and of the
+three, the menu's two are the ones no case can reach, which is exactly why the
+third must be the same function rather than a copy of its test.
+
+`isolateTakeGesture` is the whole of the item's handler, so `take_isolate`
+phase E drives the GESTURE through `isolate-take-gesture` and not only the verb
+beneath it. That matters more than it looks: before the seam existed, a
+sabotage making the item submit a PLAIN `select-take` passed the entire suite —
+the feature wholly broken for every user with the suite green.
+
+**STILL NOT GATED: the QAction itself** — that its text carries the reason and
+that `setEnabled` is actually called with the answer. Nothing builds the
+arranger's lane popup off screen, the same gap that leaves
+`"Create &asset from range"` and QBX-195's "Clean up takes" item ungated. Two
+things narrow it: the DECISION behind the enabled flag is gated (phase E's
+`expectRefused`), and the BEHAVIOUR the dimming communicates is gated (phase C
+asserts that on a full-extent take `whole="1"` and the plain click render
+byte-identically, so the item is dimmed over an operation known to be a
+no-op).
