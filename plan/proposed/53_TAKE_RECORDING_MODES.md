@@ -515,6 +515,23 @@ code fact that forces it.
 > A0a's; it belongs with per-region gain (P5). The gate is built on
 > `slip-clip`, which gained `take=` for it.
 >
+> **FIXED, but NOT by P5 (QBX-185).** The prediction "it belongs with
+> per-region gain (P5)" turned out to be wrong about the owner: P5 shipped the
+> auto-fade and touched nothing about gain composition, and the hole stayed
+> open through P6 and P7. It was closed on its own ticket, which is the right
+> shape in hindsight — the fix is not a fade policy but a change to WHERE the
+> four gain factors are applied. Each take's volume, pan, fade and `cut:Gain`
+> envelope now travel per take into `twCompColumn`, which applies them per
+> region in the take's own domain, and the clip entry goes NEUTRAL for a
+> column that resolves through the column (`SObject::appliesOwnWindowGain`).
+> The measurement above is now the gate: −20 dB on a comped inactive take
+> reads 0.0290568 / 0.0405489 against the baseline's 0.290568 / 0.405489.
+>
+> What this correction got exactly right, and is worth keeping for: that a
+> dirty-range walk reaching a take proves nothing about whether an edit to it
+> is AUDIBLE. The walk was correct the whole time; the value was read one
+> level above the thing that renders it.
+>
 > **(c) NO `bumpRenderChainEpochRange` OVERRIDE ON THE COLUMN, measured.** It
 > looks obviously required — the column owns a `twCompColumn` whose per-take
 > `twView`s hold page caches, and the base default does nothing — and it is
@@ -2304,6 +2321,7 @@ existing tickets. Order within a group is landing order.
 | P5 (**QBX-183**) | playback auto-fade at clip edges and comp boundaries, 3 ms seeded (D3a (a)), seamless edges exempt (D3b (a)); `set-clip-fade auto=`; the selection fade surface — **SHIPPED**. The whole policy is one new module, `app/model/sautofade.h`, because the feature has two consumers in slices that may not see each other (`objects/track` at clip edges, `objects/cut` at comp boundaries) and a third READER in the panel. At a boundary it is a LENGTH handed to the crossfade that was already there, in `clampedXfade_nolock` — so a 3 ms auto-fade renders byte-identically to an explicit `xfade=144`. Three corrections in §8's P5 row, one of which is a plain error in this plan's own text | A0a, B8 | M |
 | P6 (**QBX-184**, UI in **QBX-195**) | auto-expand on landing (≤ 2 tracks), locator-after-record pref, Unused recordings dock, `cleanup-takes` (D5 (a)) with the `remove-take` real inverse — **SHIPPED**. Its UI — the Edit-menu and lane-menu commands, the dock button and the confirmation dialog — shipped separately as **QBX-195**, with three corrections of its own in §8's P6 row ((e) the dialog may not count for itself, (f) "nothing to remove" is not "nothing to ask", (g) the active take is never swept). The real inverse landed FIRST, as its own change, because one non-undoable child makes a whole composite non-undoable and a sweep that could not be undone is not shippable. Four corrections in §8's P6 row, two of them defects outside this row's subject: `add-take` carried no NAME, so undoing a removal turned a recording into an "original clip"; and four committed assertions used a `minClips` attribute `assert-recorded-clip` does not have | P2, A0b, B10 | M |
 | QBX-157 | **SHIPPED as P7.** Cut marks (comp boundaries, take-extent edges, column edges) plus the PIXEL gate on the comp-result paint A0b shipped ungated. The laned-track BACKDROP needed nothing built: the composite lane has painted the comp result since A0b, on the parent row, expanded or not — §4.4 correction (i) | A0b, B4 | M |
+| QBX-185 | **SHIPPED.** Per-take volume, pan and fade are audible on a comped column: the four gain factors travel per TAKE into `twCompColumn`, and the clip entry goes neutral for a column that resolves through it. They had reached the model and not the mix, because the per-clip funnel composes ONE entry per placement from the ACTIVE take while the column renders each region from whichever take the map selects — so §4.1's "a comped or partial column makes an inactive take audible over its own span" was true of the MATERIAL and false of its gain. Found while building A0a, and named there as the reason A0a's invalidation gate had to be built on `slip-clip take=` instead (§4.1 correction (b)) | A0a, P5 | M |
 | QBX-186 | **SHIPPED.** "Hear one take alone" gets a spelling again: `select-take whole="1"` plus a take-lane context-menu item. §4.3 removed the gesture (risk 3a) and P2 made every take partial, so it had gone live as a hole. Also FIXED a pre-existing data loss the gate found: one undo of a BROADCAST click destroyed the comp map on every member of an edit group (§4.3 correction (q), QBX-199) | A0b, P2 | S |
 | QBX-155 | wrapped column re-link crash (already filed) | — | **LANDED** (#241, #244), so this no longer blocks anything: `remove-sample` pins both shapes. `replace` still refuses a Kw lane, by G11 policy rather than by this limitation — see §3.3 |
 

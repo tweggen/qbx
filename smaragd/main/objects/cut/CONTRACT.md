@@ -1628,3 +1628,27 @@ as `96000:1`. Whether a first segment at a non-zero position really has no
 boundary (`activeTake_` sounds before it) is open, and belongs with QBX-196's
 crossfade work rather than here. Cases that need a stored crossfade must state
 a map with a segment in front of it.
+## Each take's own gain reaches the mix through the column (QBX-185)
+
+`ensureCompColumn()` pushes each take's volume, pan, fade and `cut:Gain`
+envelope into `twCompColumn`, beside the extents and the auto-fade and on every
+ask for the same reason those are: a `set-clip-volume take=` edit is picked up
+by the next resolve rather than needing the column torn down.
+
+It reads **the take's own window** — `takeAt( i )`, not
+`SClipWindow::parametersOf` and not the active take. One take, one set of
+parameters, which is the whole point: before this, these values reached the mix
+only through the per-clip funnel, which composes one entry per placement from
+the ACTIVE take, so an inactive take's own volume, pan and fade were carried,
+serialized, editable and never heard.
+
+`STakeStack::appliesOwnWindowGain()` answers `resolvesThroughComp()` — and
+necessarily the same predicate, because that is exactly when a `twCompColumn`
+exists and the column is the thing that applies them. A degenerate column
+answers false and its active take's trim keeps reaching the mix through the clip
+entry, which is what keeps it rendering byte for byte.
+
+**An event take gets no fade**, the same guard and the same reason as the
+auto-fade's in `refreshClipGainCurves`: a fade is audio-only (inv. 4) and an
+event take's edges are note-offs rather than steps in a waveform. Its volume,
+pan and envelope still travel.

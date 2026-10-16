@@ -344,3 +344,66 @@ over the first half of the window and a crossfade reads **0.18332**. Silence
 against 0.18332 is not a tolerance question. The second half separates too
 (0.44931 against 0.40766), and the case asserts that nothing OUTSIDE the
 crossfade moved.
+
+## A take column applies its takes' own gain, per region (QBX-185)
+
+`twTrackMix::ClipEntry` carries four gain factors for a clip — a static linear
+scalar, a gain envelope, a fade and a pan — and applies them per frame in the
+clip's own domain, as a product of linear factors (inv. 21's "trim sums in
+dB"). `twCompColumn::TakeGain` carries the **same four**, per take, and applies
+them the **same way** in the take's own domain.
+
+**Why they cannot both do it.** The clip entry is one entry per PLACEMENT, and
+`STrack::refreshClipGainCurves` reads its values from
+`SClipWindow::parametersOf` — the placement's own window, or the ACTIVE take
+when it has none. A comp column renders each region from whichever take the map
+selects, so the entry's single set of values could only ever be one take's,
+applied to every region. That is the defect QBX-185 fixed: an inactive take's
+own volume, pan and fade were carried, serialized, editable and never heard.
+
+So for a column that resolves through `twCompColumn` the entry carries
+**neutral** values and the column carries the truth. The model side of that
+switch is `SObject::appliesOwnWindowGain()`, and it is FALSE for two cases that
+matter:
+
+- a **degenerate** column (no map, every take full) builds no column at all, so
+  its active take's trim must keep arriving at the entry — this is what keeps
+  every pre-existing project byte-identical;
+- a **wrapped** column's wrapper, whose own trim belongs to the entry and
+  composes with each take's.
+
+### Two things that are not free choices
+
+**The gain is applied BEFORE the crossfade weights it.** A comp crossfade is
+equal-power between the two signals *as they will be heard*, so a take 20 dB
+down has to be down before the fade weights it. Weighting first and trimming
+after would scale the already-summed pair and leave the join's power dependent
+on which take happened to be louder.
+
+**The gain is cast to `sample_t` before the multiply**, matching
+`twTrackMix::freezePage_nolock` bit for bit. Multiplying the sample by the gain
+in full double is slightly more precise and therefore wrong here, because this
+path TOOK OVER from that one: the double form moved
+`merge_columns_undo_identity` by 17 bytes of 864044, one LSB each, and that case
+asserts byte-identity between three separate clips and the column they merge
+into (A1's criterion that merging does not change the render). When one stage
+inherits another's arithmetic, inheriting its rounding is part of the contract.
+
+### NOT GATED, and why no case can gate it
+
+`fadeLen` is pushed as the take's own window length. For a BOUNDED take that is
+also its extent length (invariant 1'), and `STakeStack::ensureCompColumn` sets
+an extent for **every** take — so the two candidate values are equal in every
+state the model can produce, and the choice is **unobservable** rather than
+merely untested. Substituting the extent length leaves the whole suite green;
+measured, not assumed.
+
+The window length is still the right answer, because it is the right answer for
+the shape where they differ: `setInputExtent`'s `len < 0` means UNBOUNDED, and
+a fade-out is anchored to the end of the window it belongs to, not to however
+far the map happens to send the take. That shape is reachable only by an engine
+caller that sets no extent, which nothing in the app is.
+
+So this is recorded rather than gated. A case written to bite it would have to
+fabricate a column the model cannot build, which tests the test and not the
+product.

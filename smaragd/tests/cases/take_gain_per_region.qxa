@@ -245,6 +245,74 @@
     <assert-file-identical actual="tgpr_restored3.wav"
                            expected="tgpr_flat.wav"/>
 
+    <!-- CLAIM 6: EACH TAKE'S TRIM APPLIES BEFORE THE CROSSFADE WEIGHTS IT,
+         and this phase exists because the ORDER is a decision the code states
+         in a comment and nothing else could check. A comp crossfade is
+         equal-power between the two signals AS THEY WILL BE HEARD, so a take
+         20 dB down must be down before the fade weights it; applying one
+         gain to the already-summed pair instead leaves the join's power
+         dependent on which take happened to be louder.
+
+         WHY IT NEEDS AN EXPLICIT CROSSFADE. The project's auto-fade is 3 ms
+         (D3a), i.e. 144 frames of a 48000-frame window, so the two orders
+         differ over 0.3 % of any window the other claims measure — far below
+         any RMS bound that is not brittle. Measured: with the auto-fade alone
+         this claim cannot be gated at all. A 1 s crossfade makes the
+         difference a whole window's worth.
+
+         `set-comp-xfade` is clamped at RENDER time to half the distance to
+         each neighbouring boundary and to both takes' extents; here the only
+         boundary is at 96000 with 2 s of material each side, so 48000 frames
+         survives whole and spans [72000, 120000).
+
+         THE SETUP: take 0 at 0 dB, take 1 at -20 dB. Over the crossfade the
+         correct render is `a*1.0*gOut + b*0.1*gIn` — take 1 enters already
+         attenuated. A build that trimmed the SUM by one take's gain would
+         carry take 1 in at FULL level across the second half of the fade. -->
+    <set-clip-volume clip="0,0" take="0" volumeDb="0"/>
+    <set-clip-volume clip="0,0" take="1" volumeDb="-20"/>
+    <!-- A LEADING SEGMENT AT 0, so the boundary at 96000 is not the map's
+         FIRST: `twCompMap::normalized()` zeroes `front().xfade` on purpose
+         ("no boundary to fade across"), so a one-segment map cannot hold a
+         crossfade at all. Measured, after this phase's first draft silently
+         rendered a hard cut: `set-comp-xfade at="96000" xfade="48000"` on the
+         map `96000:1` reads back as `96000:1`. The segment at 0 names the
+         take that already sounds there, so it changes no answer. -->
+    <set-comp-map clip="0,0">
+      <seg at="0" take="0"/>
+      <seg at="96000" take="1" xfade="48000"/>
+    </set-comp-map>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:48000" activeTake="0"/>
+    <render filename="tgpr_xfade.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- THE LAST QUARTER OF THE FADE, [108000, 120000), is where the two
+         orders diverge most and it is the only window worth asserting
+         tightly. There take 0's `gOut` has nearly reached 0 and take 1's
+         `gIn` nearly 1, so the correct render is almost entirely take 1 AT
+         -20 dB, while a build that trimmed the summed pair would carry take 1
+         in at FULL level — about ten times the energy.
+
+         The crossfade's earlier windows are NOT the place to assert: they are
+         dominated by take 0's fade-out tail at 0 dB, which both orders
+         produce identically. Measured: [96000, 120000) reads 0.125048 and
+         [72000, 96000) 0.188456, both of them mostly take 0.
+
+         MEASURED HERE: 0.083596, of which take 0's tail is still the larger
+         part. Trimming the sum instead adds take 1 at full level, about
+         0.9 * 0.3 * 0.95 on top, for roughly 0.27 — so the bound below is set
+         tight enough to exclude that and no tighter. -->
+    <assert-audio-energy filename="tgpr_xfade.wav"
+                         startFrame="108000" frameCount="12000"
+                         minRms="0.070" maxRms="0.100"/>
+
+    <!-- Back to a hard cut and 0 dB, so what follows starts clean. -->
+    <set-comp-xfade clip="0,0" at="96000" xfade="0"/>
+    <set-clip-volume clip="0,0" take="1" volumeDb="0"/>
+    <render filename="tgpr_restored4.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tgpr_restored4.wav"
+                           expected="tgpr_flat.wav"/>
+
     <!-- CLAIM 4: THE DEGENERATE CASE DOES NOT MOVE. With the map cleared and
          every take full, `getRootComponent` hands out the ACTIVE take's own
          component and never builds a column at all (the resolution rule, §4.1)
