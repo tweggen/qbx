@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  HEAR ONE TAKE ALONE — `select-take whole="1"` (QBX-186, plan 53 §4.3).
+
+  WHAT THIS IS FOR. Before take extents, `select-take` meant "this take for
+  the WHOLE column" and CLEARED the comp map, and that side effect was the only
+  way to isolate a take. §4.3 (A0b, QBX-178) made the plain click EXTENT-AWARE,
+  and rightly so: clearing the map on a PARTIAL take makes every span the take
+  does not cover play SILENCE, so selecting a take would delete the other
+  takes' audio without touching one of them. What §4.3 did not do was put
+  anything in the vacated place.
+
+  On a FULL-EXTENT take the plain click still clears, so nothing was visibly
+  missing while recording produced full-extent takes. Under mode A (§3.1, P2,
+  QBX-180) takes are PARTIAL BY CONSTRUCTION — that is the whole point of the
+  union — so from P2 onward no gesture isolated a take at all. The measure of
+  the hole: FOUR A0a gates were built on the old side effect and all four had
+  to be repaired with a segment-less `set-comp-map`, a scripting verb and not
+  a gesture. `take_extents_audible`, `take_extents_model`,
+  `take_extents_remove_undo` and `take_extents_split` are written with
+  `whole="1"` now, which is the other half of this ticket.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav:
+    take 0 — FULL extent [0, 192000), source from 0
+    take 1 — PARTIAL [96000, 192000), source from 0 as well
+
+  Take 1 reads the source from its START while sitting in the column's SECOND
+  half, so the two takes disagree everywhere both have material. Per-source
+  second RMS of the fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055. In the column's
+  second half, therefore:
+    take 0 carries source seconds 2 and 3  -> 0.2906, 0.4055
+    take 1 carries source seconds 0 and 1  -> 0.0667, 0.1764
+
+  WHY THE FIRST HALF IS THE GATE. Isolating take 1 leaves [0, 2 s) SILENT,
+  because a take has no material outside its extent and an empty map has no
+  fall-back (§3.1 step 5). A build that ignores `whole` runs §4.3's extent-aware
+  path instead and writes `0:0 ; 96000:1:480`, which leaves take 0 audible
+  there: 0.0667 then 0.1764 where this case requires silence. That is the one
+  measurement no correct and no broken build can share.
+
+  PHASE ORDER IS LOAD-BEARING. Phase D adds a SECOND track, and `render`
+  renders the whole project — so every render in this case happens before it.
+-->
+<SActionScript version="1" name="take_isolate">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: the column's second half, reading the source from 0.
+         activate="0" keeps take 0 active. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+
+    <!-- PHASE A. A real comp to destroy and restore. The xfade is not
+         decoration: it is the part of "verbatim" that a recomputed map would
+         lose, and `assert-take-column`'s comp= spells a non-zero one as the
+         segment's third field.
+
+         THE SEGMENT AT 0 IS WHAT MAKES THE XFADE STORABLE. `normalized()`
+         zeroes `front().xfade` on purpose ("no boundary to fade across"), so
+         a map whose ONLY segment is the one carrying the fade loses it before
+         anything can assert it. Measured: a lone `at=96000 xfade=480` reads
+         back as `96000:1`. -->
+    <set-comp-map clip="0,0">
+      <seg at="0" take="0"/>
+      <seg at="96000" take="1" xfade="480"/>
+    </set-comp-map>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+
+    <render filename="tiso_comped.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+
+    <!-- THE ISOLATE. Take 1 is PARTIAL, so this is the case the plain click
+         cannot express. The map is CLEARED, not replaced by one segment. -->
+    <select-take clip="0,0" take="1" whole="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="1"
+                        takeAtPos="0" expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="95999" expectTake="-1"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+    <assert-take-column clip="0,0" takeAtPos="191999" expectTake="1"/>
+
+    <render filename="tiso_alone.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- SILENT where take 1 has nothing. A build that ignored `whole` reads
+         0.0667 and then 0.1764 in these two windows. -->
+    <assert-audio-energy filename="tiso_alone.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+    <assert-audio-energy filename="tiso_alone.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.0" maxRms="0.005"/>
+    <!-- ...and take 1's own two source seconds where it does have material,
+         which is what says the take is being heard rather than nothing at
+         all. An all-silent render would pass the two windows above. -->
+    <assert-audio-energy filename="tiso_alone.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.05" maxRms="0.085"/>
+    <assert-audio-energy filename="tiso_alone.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+
+    <!-- ONE UNDO RESTORES THE MAP VERBATIM, xfade included. This is the
+         `restoreMap_` hazard §4.3 records: the inverse names the previously
+         active take, which may itself be partial, so it must be told apart
+         from a forward pass rather than recompute §4.3's map. Here the
+         previously active take is take 0, which is FULL extent, so an inverse
+         that recomputed would CLEAR the map instead of restoring it and one
+         undo of the gesture would destroy the comp. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+    <render filename="tiso_undone.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tiso_undone.wav" expected="tiso_comped.wav"/>
+
+    <!-- PHASE C. On a FULL-EXTENT take, `whole="1"` and the plain click are
+         the SAME operation, which is why the menu item dims itself there.
+         This is a regression guard and not a gate on `whole`: both renders
+         agree in a build that ignores the flag entirely. It is here because
+         the opposite would be a defect — `whole` must not invent a one-segment
+         map on the one path that has always cleared. -->
+    <select-take clip="0,0" take="0" whole="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <render filename="tiso_full_whole.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <select-take clip="0,0" take="0"/>
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <render filename="tiso_full_plain.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tiso_full_plain.wav"
+                           expected="tiso_full_whole.wav"/>
+
+    <!-- PHASE B. THE CLEAR MUST NOT SERIALIZE. A one-segment map
+         `{0 -> take}` answers exactly what an empty map plus activeTake
+         answers, so a build that wrote one would pass every audio assertion
+         above — and would start writing a `comp` element into project files
+         that never had one, against the rule that a new feature writes nothing
+         when unused (§4.3 correction (g)). Only the saved bytes can tell the
+         two apart. -->
+    <select-take clip="0,0" take="1" whole="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="1"/>
+    <save-project path="../../build/take_isolate.qxp"/>
+    <!-- The POSITIVE half first, so the absence below is known to be an
+         absence in a file that exists and holds the column. Note the DOUBLE
+         quotes: `activeTake` is the one attribute STakeStack writes that way,
+         while every other attribute in the file is single-quoted. -->
+    <assert-file-contains path="../../build/take_isolate.qxp"
+                          text="activeTake=&quot;1&quot;"/>
+    <assert-file-contains path="../../build/take_isolate.qxp"
+                          text="&lt;comp&gt;" absent="true"/>
+    <assert-file-contains path="../../build/take_isolate.qxp"
+                          text="&lt;seg " absent="true"/>
+
+    <!-- PHASE D. THE BROADCAST CARRIES `whole`. One gesture on a column in an
+         edit group means "hear this take alone" on every member, or the group
+         ends with one isolated column and the rest extent-comped. Track 1 gets
+         the same two-take shape and the same map, so the only thing that can
+         make the two columns disagree is the flag failing to travel.
+
+         LAST, because adding a second track changes every render. -->
+
+    <!-- Back to take 0 on the column phase B left isolated, so both members
+         enter this phase in the SAME state. Otherwise "the member agrees with
+         the clicked column" is not a comparison. -->
+    <select-take clip="0,0" take="0"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="1,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <set-edit-group trackPath="0" group="1"/>
+    <set-edit-group trackPath="1" group="1"/>
+    <set-comp-map clip="0,0">
+      <seg at="0" take="0"/>
+      <seg at="96000" take="1" xfade="480"/>
+    </set-comp-map>
+    <set-comp-map clip="1,0">
+      <seg at="0" take="0"/>
+      <seg at="96000" take="1" xfade="480"/>
+    </set-comp-map>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:0;96000:1:480" activeTake="0"/>
+
+    <select-take clip="0,0" take="1" whole="1"/>
+    <assert-take-column clip="0,0" comp="" activeTake="1"/>
+    <!-- The member. A build whose broadcast dropped `whole` leaves this one
+         at `0:0;96000:1:480` — §4.3's extent-aware answer — and the column
+         the user did not click is the one that reveals it. -->
+    <assert-take-column clip="1,0" comp="" activeTake="1"/>
+
+    <!-- ...and one undo puts BOTH maps back, because the broadcast is one
+         composite. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+    <assert-take-column clip="1,0" comp="0:0;96000:1:480" activeTake="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

@@ -1413,6 +1413,64 @@ void SMVActualView::ctGlobalShow()
             smv_.isTrackTakesExpanded( lastClickTrack_ )
                 ? "Hide take lanes" : "Show take lanes",
             this, SLOT( ctToggleTakeLanes() ) );
+        // HEAR ONE TAKE ALONE (QBX-186), on the take SUB-LANE the menu was
+        // opened over -- so it is offered only where there is a take to name,
+        // and it names it.
+        //
+        // This is the gesture plan 53 §4.3 removed and did not replace. A
+        // plain take-lane click comps the take WHEREVER IT HAS MATERIAL and
+        // keeps the previous answer elsewhere, which is right; what vanished
+        // with it was "this take everywhere", and under mode A (P2) -- where
+        // takes are partial by construction -- nothing could isolate a take at
+        // all. `whole="1"` is that, and it CLEARS the comp map rather than
+        // writing a one-segment one, for the serialization reason the action's
+        // header records.
+        //
+        // DISABLED WITH THE REASON IN ITS OWN TEXT when the take already
+        // covers the whole column, because then the plain click does exactly
+        // this and the item would be a second spelling of it. Same precedent
+        // as "Clean up takes" below and "Create &asset from range": a greyed
+        // item that says why beats a greyed item.
+        if( lastClickSLink_ && smv_.getModel() ) {
+            const STrackRow *tr = smv_.rowAt( lastClickTrackIdx_ );
+            STakeStack *st = tr && tr->takeRow >= 0
+                           ? stakes::columnOfLink( lastClickSLink_ ) : nullptr;
+            SClipWindow *tk = st ? st->takeAt( tr->takeRow ) : nullptr;
+            if( tk ) {
+                const int row = tr->takeRow;
+                // The take's NAME when P4 gave it one, else the index every
+                // other surface uses (`describeTakeLane`, the `take=`
+                // attribute) -- never a third numbering of the same thing.
+                const QString who = tk->asObject().getSName().isEmpty()
+                    ? QStringLiteral( "take %1" ).arg( row )
+                    : QStringLiteral( "\"%1\"" ).arg(
+                          tk->asObject().getSName() );
+                const bool full = st->takeIsFullExtent( row );
+                QString label = QStringLiteral( "Play %1 alone" ).arg( who );
+                if( full )
+                    label += QStringLiteral( "  (covers the whole column)" );
+                QAction *aSolo = qGlobalPopup_->addAction( label );
+                aSolo->setEnabled( !full );
+                // By QPointer, like "New track" above: the lane or the
+                // placement could be gone by the time the action fires, and
+                // the path has to be resolved against the model as it is THEN.
+                const QPointer<STrack> trk( lastClickTrack_ );
+                const QPointer<SLink>  lnk( lastClickSLink_ );
+                QObject::connect(
+                    aSolo, &QAction::triggered, this,
+                    [this, trk, lnk, row]() {
+                        if( !trk || !lnk || !smv_.getModel() ) return;
+                        QList<int> path =
+                            strackpath::pathOf( smv_.getModel(), trk.data() );
+                        const int idx = trk->indexOfChild( lnk.data() );
+                        if( idx < 0 ) return;
+                        path.append( idx );
+                        stimeline::submitActive( new SSelectTakeAction(
+                            path, row, /*broadcast*/ true, /*newest*/ false,
+                            /*whole*/ true ) );
+                    } );
+            }
+        }
         // CLEAN UP TAKES (plan 53 §6.3, QBX-195), beside the take-lane toggle
         // because it is the other thing you do to a track's takes. It carries
         // the same `(N tracks)` suffix as the items above, for the same reason

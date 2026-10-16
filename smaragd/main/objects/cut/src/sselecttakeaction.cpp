@@ -17,9 +17,9 @@ using namespace strackpath;
 
 SSelectTakeAction::SSelectTakeAction( const QList<int> &clipPath,
                                       int takeIndex, bool broadcast,
-                                      bool newest )
-    : clipPath_( clipPath ), takeIndex_( takeIndex ), broadcast_( broadcast ),
-      newest_( newest )
+                                      bool newest, bool whole )
+    : clipPath_( clipPath ), takeIndex_( takeIndex ), newest_( newest ),
+      whole_( whole ), broadcast_( broadcast )
 {
 }
 
@@ -69,8 +69,12 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
                 // the RULE, not an index -- and the member needs no take of
                 // that number for the rule to have an answer.
                 if( !newest_ && takeIndex_ >= st->nTakes() ) continue;
-                composite.append(
-                    new SSelectTakeAction( p, takeIndex_, false, newest_ ) );
+                // `whole` TRAVELS TO THE MEMBERS. The gesture is "hear this
+                // take alone"; broadcast over an edit group it has to mean
+                // that on every member, or the group would end up with one
+                // isolated column and the rest extent-comped.
+                composite.append( new SSelectTakeAction(
+                    p, takeIndex_, false, newest_, whole_ ) );
             }
             if( composite.count() > 0 )
                 return composite.apply( project );
@@ -129,7 +133,7 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
         // AN INVERSE. It restores the map it was handed, verbatim, whatever
         // the take it names covers -- see setPreviousCompMap.
         newMap = prevMap_;
-    } else if( takeIndex_ >= 0 && !fullExtent ) {
+    } else if( !whole_ && takeIndex_ >= 0 && !fullExtent ) {
         const offset_t exStart = stack->takeExtentStart( takeIndex_ );
         const offset_t exEnd   = stack->takeExtentEnd( takeIndex_ );
         const length_t colDur  = stack->getDurationBlocking();
@@ -170,14 +174,41 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
         (void) hadAtStart;
         newMap = twCompMap( std::move( segs ) ).normalized();
     }
-    // else: TODAY'S CLEAR. A full-extent take sounds everywhere, so the empty
-    // map says exactly what a one-segment map would and writes nothing.
+    // else: THE CLEAR. Two ways in. A FULL-EXTENT take sounds everywhere
+    // anyway, so the empty map says exactly what a one-segment map would and
+    // writes nothing. `whole="1"` (QBX-186) asks for the same clear on a take
+    // that does NOT cover the column -- "hear this one take alone", the
+    // gesture §4.3 removed without replacing; see the header. Outside the
+    // take's extent that is SILENCE, deliberately, which is what hearing one
+    // take alone means on a partial take.
 
     stack->setActiveTake( takeIndex_ );
     stack->setCompMap( newMap );
     stakes::publishColumnChange( link, stack );
 
-    SSelectTakeAction *inverse = new SSelectTakeAction( clipPath_, oldActive );
+    // THE INVERSE DOES NOT BROADCAST, and that is a fix, not a style choice
+    // (QBX-186). A broadcast forward pass has already fanned out above into
+    // one child PER MEMBER, each of which returns its own inverse carrying its
+    // own previous map -- so the composite inverse covers the whole group
+    // already. An inverse that broadcast as well would re-expand and rebuild
+    // its children through the constructor above, which cannot carry
+    // `prevMap_`/`restoreMap_`: every re-broadcast child ran the FORWARD
+    // extent-aware computation instead of restoring, so ONE UNDO of a
+    // take-lane click DESTROYED the comp map on every member of an edit
+    // group. Measured on a two-member group with `96000:1` on both columns:
+    // undo left `comp=[]` on both, the map gone with no way back. That is
+    // precisely what `setPreviousCompMap`'s "one undo of a click must not
+    // destroy a comp" exists to prevent, and it was unenforced on this path.
+    //
+    // Pre-existing since proposal 43 N1 and invisible until now, because no
+    // case undid a BROADCAST select-take; `takes_group_broadcast` gates the
+    // forward only. Gated now by `take_isolate`'s phase D.
+    //
+    // It is also right for a single column: the forward took the single path
+    // only when the expansion found at most one target, so there is nothing
+    // else for the inverse to reach.
+    SSelectTakeAction *inverse =
+        new SSelectTakeAction( clipPath_, oldActive, /*broadcast*/ false );
     inverse->setPreviousCompMap( oldMap );
     return {true, inverse};
 }
@@ -191,6 +222,10 @@ void SSelectTakeAction::writeXml( QDomElement &elem ) const
     if( newest_ ) elem.setAttribute( "take", QStringLiteral( "newest" ) );
     else          elem.setAttribute( "take", takeIndex_ );
     elem.setAttribute( "broadcast", broadcast_ ? 1 : 0 );
+    // Written ONLY when set. Every `select-take` the undo stack has ever
+    // serialized means the extent-aware form, and an attribute that appears
+    // on all of them would say otherwise.
+    if( whole_ ) elem.setAttribute( "whole", 1 );
 }
 
 bool SSelectTakeAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -206,6 +241,7 @@ bool SSelectTakeAction::readXml( const QDomElement &elem, int /*version*/ )
                             Qt::CaseInsensitive ) == 0;
     takeIndex_ = newest_ ? -1 : take.toInt();
     broadcast_ = elem.attribute( "broadcast", "1" ).toInt() != 0;
+    whole_     = elem.attribute( "whole", "0" ).toInt() != 0;
     return true;
 }
 

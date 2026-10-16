@@ -48,6 +48,14 @@ const Fixture kFixtures[] = {
       "<move-comp-boundary clip='0,0' at='48000' to='36000'/>" },
     { "set-comp-xfade",
       "<set-comp-xfade clip='0,0' at='48000' xfade='2400'/>" },
+    // `whole` (QBX-186) is written only when SET, so the DEFAULT instance this
+    // file audits without a fixture compares equal on an attribute neither
+    // side writes — the vacuous shape point 2 of the header is about. The
+    // fixture sets it, and so gates that `writeXml` emits it and `readXml`
+    // reads it back: a flag lost in serialization would mean the undo stack
+    // replayed an isolate as an extent-aware click.
+    { "select-take",
+      "<select-take clip='0,1' take='2' broadcast='0' whole='1'/>" },
     // --- verbs whose readXml validates required attributes -------------------
     { "assert-audio-energy",
       "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"

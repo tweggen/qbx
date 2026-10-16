@@ -1798,3 +1798,33 @@ four lanes when the pointer is on one is the whole risk of a multi-selection,
 and this one REMOVES things. It is disabled **with the reason in its own text**
 ("(no take columns)") when the targets hold none, which is the precedent
 `"Create &asset from range"` set.
+
+## "Play *take* alone" — the take-lane context menu item (QBX-186)
+
+Built in `SMVActualView::ctGlobalShow()` beside the take-lane toggle, and
+offered **only when the menu was opened over a take SUB-LANE** — so it exists
+only where there is a take to name, and it names it: the take's own name when
+P4 gave it one, otherwise `take <n>` with the same index `describeTakeLane` and
+the `take=` attribute use. Never a third numbering of the same thing.
+
+It submits `select-take whole="1"`, which clears the comp map; see
+`objects/cut/CONTRACT.md` for why that spelling and not a one-segment map.
+
+**DISABLED WITH THE REASON IN ITS OWN TEXT** — "(covers the whole column)" —
+when the take is full-extent, because there the plain click already does
+exactly this and the item would be a second spelling of it. Same precedent as
+"Clean up takes" and `"Create &asset from range"`: a greyed item that says why
+beats a greyed item.
+
+The handler captures the track and the placement **by `QPointer`** and resolves
+the index-path at trigger time, like "New track" above it: a menu can outlive
+what it was aimed at, and a path resolved at build time would address whatever
+now sits at that index.
+
+**NOT GATED: the QAction itself** — its label, and that it is disabled on a
+full-extent take. No testkit verb builds the arranger's lane popup off screen,
+which is the same gap that leaves "Create &asset from range" and QBX-195's
+"Clean up takes" item ungated. What IS gated is the BEHAVIOUR the dimming
+communicates: `take_isolate`'s phase C asserts that on a full-extent take
+`whole="1"` and the plain click render byte-identically, so the item is dimmed
+over an operation known to be a no-op.

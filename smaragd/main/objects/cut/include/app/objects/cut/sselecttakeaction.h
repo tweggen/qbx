@@ -17,11 +17,16 @@
 // broadcast lands on the pass just recorded on every member even where the
 // members hold different numbers of takes. The inverse is always a plain
 // index — undo restores a take, not a rule.
+//
+// `whole="1"` (QBX-186) is "HEAR THIS TAKE ALONE": the take sounds over the
+// WHOLE column, whatever it covers. See the member for why that gesture had
+// to be given a spelling of its own.
 class SSelectTakeAction : public SAction {
 public:
     SSelectTakeAction() = default;
     SSelectTakeAction( const QList<int> &clipPath, int takeIndex,
-                       bool broadcast = true, bool newest = false );
+                       bool broadcast = true, bool newest = false,
+                       bool whole = false );
 
     QString name() const override { return QStringLiteral("select-take"); }
     SApplyResult apply( SProject *project ) override;
@@ -72,6 +77,36 @@ private:
      * recording order.
      */
     bool       newest_ = false;
+    /**
+     * `whole="1"`: THIS TAKE OVER THE WHOLE COLUMN (QBX-186) — "hear this one
+     * take alone".
+     *
+     * WHY IT NEEDS A FLAG AT ALL. Before extents this is what a plain
+     * `select-take` did, and clearing the map was the only way to get it.
+     * §4.3 made the plain form extent-aware for a good reason (clearing the
+     * map on a PARTIAL take makes every span it does not cover play SILENCE,
+     * so selecting a take would delete the other takes' audio without
+     * touching one of them) — and put nothing in the vacated place. For a
+     * FULL-EXTENT take the plain form still clears, so the loss was invisible
+     * while recording produced full-extent takes. Under mode A (§3.1, P2,
+     * QBX-180) takes are PARTIAL BY CONSTRUCTION, which is the whole point of
+     * the union, so from P2 onward no gesture isolated a take at all. The
+     * measure of the hole: four A0a gates were built on the old side effect
+     * and all four had to be repaired with `set-comp-map` — a scripting verb,
+     * not a gesture. They are written with this flag now.
+     *
+     * IT CLEARS THE MAP, and that is not an optimisation. A one-segment map
+     * `{0 -> take}` answers exactly what an empty map plus `activeTake_`
+     * answers, but it SERIALIZES: a `<comp>` element would start appearing in
+     * project files that never had one, against the rule that a new feature
+     * writes nothing when unused (§4.3 correction (g)). The clear is the
+     * canonical spelling of the same map.
+     *
+     * The INVERSE is a plain restoring `select-take`, never a `whole` one:
+     * `setPreviousCompMap` puts the previous map back verbatim, which is the
+     * only thing that can undo a clear.
+     */
+    bool       whole_ = false;
     // Edit groups: comp the SAME take index on every member's corresponding
     // stack (drum-kit comping); members without that take are skipped.
     bool       broadcast_ = true;
