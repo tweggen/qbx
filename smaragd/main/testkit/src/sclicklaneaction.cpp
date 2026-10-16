@@ -212,6 +212,52 @@ static const bool s_reg_cleanup_takes_gesture =
           [] { return new SCleanupTakesGestureAction; } ),
       true );
 
+// --- isolate-take-gesture (plan 53 §4.3, QBX-186) ------------------------
+
+SApplyResult SIsolateTakeGestureAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "isolate-take-gesture: no main window";
+        return { false, nullptr };
+    }
+    const bool went = win->isolateTakeGesture( clip_, take_ );
+    if( went == expectRefused_ ) {
+        qWarning() << "isolate-take-gesture FAILED: clip" << clip_ << "take"
+                   << take_ << ( went ? "was isolated" : "was REFUSED" )
+                   << "- expected" << ( expectRefused_ ? "a refusal"
+                                                       : "an isolate" );
+        return { false, nullptr };
+    }
+    qDebug() << "isolate-take-gesture: clip" << clip_ << "take" << take_
+             << ( went ? "isolated" : "refused, as expected" );
+    // The gesture submits its own `select-take`, whose undo restores the comp
+    // map; there is nothing for this verb to invert.
+    return { true, nullptr };
+}
+
+void SIsolateTakeGestureAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "take", take_ );
+    if( expectRefused_ ) elem.setAttribute( "expectRefused", "1" );
+}
+
+bool SIsolateTakeGestureAction::readXml( const QDomElement &elem, int )
+{
+    clip_ = elem.attribute( "clip" );
+    take_ = elem.attribute( "take", "-1" ).toInt();
+    expectRefused_ =
+        elem.attribute( "expectRefused", "0" ) != QLatin1String( "0" );
+    return true;
+}
+
+static const bool s_reg_isolate_take_gesture =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "isolate-take-gesture" ),
+          [] { return new SIsolateTakeGestureAction; } ),
+      true );
+
 // --- wheel-scroll (AC-g1) ------------------------------------------------
 
 SApplyResult SWheelScrollAction::apply( SProject * /*project*/ )

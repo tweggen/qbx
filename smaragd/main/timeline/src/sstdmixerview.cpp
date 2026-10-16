@@ -971,6 +971,45 @@ void sCleanupColumnsOfLane( SObject *mixer, STrack *lane,
 
 }  // namespace
 
+// --- "hear one take alone" (QBX-186) ---------------------------------------
+
+bool SStdMixerView::takeIsolateOffered( const QList<int> &clipPath,
+                                        int takeRow ) const
+{
+    if( clipPath.isEmpty() || takeRow < 0 ) return false;
+    SProject *project = SApplication::app().getCurrentProject();
+    SObject *mixer = project ? splacements::rootContainer( project ) : nullptr;
+    SLink *link = mixer ? splacements::placementAt( mixer, clipPath ) : nullptr;
+    STakeStack *stack = link ? stakes::columnOfLink( link ) : nullptr;
+    if( !stack || takeRow >= stack->nTakes() ) return false;
+    if( !stack->takeAt( takeRow ) ) return false;
+    // THE ONE REASON TO WITHHOLD IT. A take that already covers the column
+    // sounds everywhere under the PLAIN click too -- plan 53 §4.3 reduces to
+    // the same clear there -- so `whole="1"` would be a second spelling of one
+    // operation. `take_isolate`'s phase C measures that equality, so this
+    // refusal is withholding something known to be a no-op and not a guess.
+    return !stack->takeIsFullExtent( takeRow );
+}
+
+bool SStdMixerView::isolateTakeGesture( const QList<int> &clipPath,
+                                        int takeRow )
+{
+    if( !takeIsolateOffered( clipPath, takeRow ) ) {
+        TW_LOGW( "ui.timeline",
+                 "isolate-take: take %d of %s is not a take this column can "
+                 "isolate (it covers the whole column, or it is not there)",
+                 takeRow,
+                 qPrintable( strackpath::pathToString( clipPath ) ) );
+        return false;
+    }
+    stimeline::submitActive(
+        new SSelectTakeAction( clipPath, takeRow, /*broadcast*/ true,
+                               /*newest*/ false, /*whole*/ true ) );
+    TW_LOGI( "ui.timeline", "isolate-take: take %d of %s now sounds alone",
+             takeRow, qPrintable( strackpath::pathToString( clipPath ) ) );
+    return true;
+}
+
 int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
                                         const CleanupTakesChoices *scripted )
 {
@@ -1445,15 +1484,23 @@ void SMVActualView::ctGlobalShow()
                     ? QStringLiteral( "take %1" ).arg( row )
                     : QStringLiteral( "\"%1\"" ).arg(
                           tk->asObject().getSName() );
-                const bool full = st->takeIsFullExtent( row );
+                // THE SAME ANSWER THE GESTURE REFUSES ON. The label, the
+                // enabled state and the refusal all come from
+                // `takeIsolateOffered` so they cannot drift — and of the
+                // three, the menu's two are the ones no case can reach.
+                QList<int> here =
+                    strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
+                here.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+                const bool offered = smv_.takeIsolateOffered( here, row );
                 QString label = QStringLiteral( "Play %1 alone" ).arg( who );
-                if( full )
+                if( !offered )
                     label += QStringLiteral( "  (covers the whole column)" );
                 QAction *aSolo = qGlobalPopup_->addAction( label );
-                aSolo->setEnabled( !full );
+                aSolo->setEnabled( offered );
                 // By QPointer, like "New track" above: the lane or the
                 // placement could be gone by the time the action fires, and
-                // the path has to be resolved against the model as it is THEN.
+                // the path has to be resolved against the model as it is THEN
+                // rather than as it was when the menu was built.
                 const QPointer<STrack> trk( lastClickTrack_ );
                 const QPointer<SLink>  lnk( lastClickSLink_ );
                 QObject::connect(
@@ -1465,9 +1512,7 @@ void SMVActualView::ctGlobalShow()
                         const int idx = trk->indexOfChild( lnk.data() );
                         if( idx < 0 ) return;
                         path.append( idx );
-                        stimeline::submitActive( new SSelectTakeAction(
-                            path, row, /*broadcast*/ true, /*newest*/ false,
-                            /*whole*/ true ) );
+                        smv_.isolateTakeGesture( path, row );
                     } );
             }
         }

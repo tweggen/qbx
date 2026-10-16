@@ -3624,6 +3624,17 @@ void SMainWindow::cleanupTakesFromMenu()
     cleanupTakesGesture( false, false, false, false );
 }
 
+bool SMainWindow::isolateTakeGesture( const QString &clipRef, int takeRow )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) {
+        TW_LOGW( "ui.shell", "isolate-take: no arranger" );
+        return false;
+    }
+    return v->isolateTakeGesture( strackpath::stringToPath( clipRef ),
+                                  takeRow );
+}
+
 int SMainWindow::cleanupTakesGesture( bool tracksScope, bool scripted,
                                       bool includeOriginals, bool files )
 {
