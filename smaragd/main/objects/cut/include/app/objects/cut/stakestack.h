@@ -287,6 +287,20 @@ public:
     { return nTakes() > 0 && ( !compMap_.empty() || hasPartial_ ); }
 
     /**
+     * EACH TAKE'S OWN GAIN IS APPLIED HERE, PER REGION (QBX-185) — so the
+     * per-clip mix funnel must not apply one on top. See
+     * `SObject::appliesOwnWindowGain`.
+     *
+     * Exactly `resolvesThroughComp()`, and necessarily the same predicate: it
+     * is the condition under which a `twCompColumn` exists, and the column is
+     * the thing that applies them. A degenerate column answers FALSE and its
+     * active take's trim keeps reaching the mix through the clip entry, which
+     * is what keeps it rendering byte for byte.
+     */
+    bool appliesOwnWindowGain() const override
+    { return resolvesThroughComp(); }
+
+    /**
      * The column's length as its TAKES imply it: max_i( tStart_i + len_i ).
      * What a file with no `duration=` attribute loads as, and the value that
      * makes `duration=` informative-or-absent on save.

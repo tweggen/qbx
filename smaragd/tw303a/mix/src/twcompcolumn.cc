@@ -45,6 +45,10 @@ void twCompColumn::setTakes( std::vector<ResolveFn> takes )
         // them right after this call (STakeStack::ensureCompColumn).
         e.exStart = 0;
         e.exLen   = -1;
+        // ...and NEUTRAL gain by the same logic (QBX-185): a freshly built
+        // entry carries no per-take trim, fade, pan or curve, so a caller
+        // that sets none gets the straight copy. The model sets them right
+        // after this call, with the extents.
         takes_.push_back( std::move( e ) );
     }
 }
@@ -53,6 +57,40 @@ void twCompColumn::setAutoXfade( int64_t frames )
 {
     std::lock_guard<std::mutex> lock( mutex() );
     autoXfade_ = frames > 0 ? frames : 0;
+}
+
+void twCompColumn::setInputGain( int takeIndex, const TakeGain &gain )
+{
+    std::lock_guard<std::mutex> lock( mutex() );
+    if( takeIndex < 0 || (size_t) takeIndex >= takes_.size() ) return;
+    takes_[ (size_t) takeIndex ].gain = gain;
+}
+
+double twCompColumn::takeGainAt_nolock( int t, offset_t pos, idx_t ch ) const
+{
+    if( t < 0 || (size_t) t >= takes_.size() ) return 1.0;
+    const TakeGain &g = takes_[ (size_t) t ].gain;
+    if( g.neutral() ) return 1.0;
+    // IN THE TAKE'S OWN DOMAIN, which begins at its tStart in ours (plan 53
+    // §4.1, invariant 1'). This conversion is the entire content of QBX-185:
+    // every other per-take quantity in this class was already read here and
+    // the gain was read one level above the column, per clip.
+    const offset_t f = pos - takes_[ (size_t) t ].exStart;
+    double v = g.scalar;
+    // The SAME two functions twTrackMix::freezePage_nolock applies to a clip
+    // entry, in the same order and as the same product of linear factors. Not
+    // a second interpretation of a fade or of a curve: there is one.
+    if( g.curve ) v *= g.curve->valueAt( f );
+    if( !g.fade.none() ) v *= g.fade.gainAt( f, (offset_t) g.fadeLen );
+    // PAN AT A WIDTH OF EXACTLY 2 (proposal 49 D1), the one PER-CHANNEL
+    // factor, and indexed by the OUTPUT channel -- never by the take's source
+    // channel, which a mono take clamps to 0 for every output and which would
+    // give both outputs the LEFT gain (twTrackMix trap T8).
+    if( g.pan != 0.0 && channels_ == 2 ) {
+        const twPanGains pg = twPanLaw( g.pan );
+        v *= ( ch == 0 ) ? pg.l : pg.r;
+    }
+    return v;
 }
 
 void twCompColumn::setCompMap( const twCompMap &map, int activeTake )
@@ -285,6 +323,18 @@ std::shared_ptr<twOutputPage> twCompColumn::freezePage(
         auto pb = ( run.takeB >= 0 ) ? freezeTake( run.takeB ) : nullptr;
 
         const offset_t dst = pos - startPos;
+        // EACH CONTRIBUTING TAKE'S OWN GAIN (QBX-185), tested ONCE per run
+        // rather than per frame or per channel. A neutral take keeps the
+        // straight copy below, exactly as before -- which is what makes a
+        // column nobody has set a per-take parameter on render byte for byte
+        // as it did, the same discipline `ClipEntry`'s own `hasGain` follows.
+        const bool gainA = run.takeA >= 0
+                        && (size_t) run.takeA < takes_.size()
+                        && !takes_[ (size_t) run.takeA ].gain.neutral();
+        const bool gainB = run.takeB >= 0
+                        && (size_t) run.takeB < takes_.size()
+                        && !takes_[ (size_t) run.takeB ].gain.neutral();
+
         for( idx_t c = 0; c < (idx_t) page->channels(); ++c ) {
             sample_t *dp = page->channelPtr( c ) + dst;
             // The source channel is CLAMPED, never assumed: a take's page
@@ -300,8 +350,27 @@ std::shared_ptr<twOutputPage> twCompColumn::freezePage(
                                         (length_t) pb->validFrames, run.len ) : 0;
 
             if( run.takeB < 0 || run.xLen <= 0 ) {
-                for( length_t i = 0; i < run.len; ++i )
-                    dp[ i ] = ( i < na ) ? sa[ i ] : (sample_t) 0;
+                if( !gainA ) {
+                    for( length_t i = 0; i < run.len; ++i )
+                        dp[ i ] = ( i < na ) ? sa[ i ] : (sample_t) 0;
+                } else {
+                    for( length_t i = 0; i < run.len; ++i ) {
+                        if( i >= na ) { dp[ i ] = (sample_t) 0; continue; }
+                        // THE GAIN IS CAST TO `sample_t` BEFORE THE MULTIPLY,
+                        // which is not a detail: it is bit-for-bit the
+                        // arithmetic `twTrackMix::freezePage_nolock` does
+                        // (`src[i] * (sample_t)( scalar * envelope * fade *
+                        // pan )`), and this path TOOK OVER from that one.
+                        // Multiplying in double instead is very slightly more
+                        // precise and therefore WRONG here: it moved
+                        // `merge_columns_undo_identity` by 17 bytes of 864044,
+                        // one LSB each, and that case asserts byte-identity
+                        // between three separate clips and the column they
+                        // merge into (A1's "the render does not change").
+                        dp[ i ] = sa[ i ] * (sample_t) takeGainAt_nolock(
+                            run.takeA, pos + (offset_t) i, c );
+                    }
+                }
                 continue;
             }
             // THE CROSSFADE. EQUAL POWER, always: two of these sum to constant
@@ -315,8 +384,25 @@ std::shared_ptr<twOutputPage> twCompColumn::freezePage(
                     (double) ( pos + (offset_t) i - run.xStart ) / (double) run.xLen;
                 const double gIn  = twClipFade::shaped( t, twFadeShape::EqualPower );
                 const double gOut = twClipFade::shaped( 1.0 - t, twFadeShape::EqualPower );
-                const double a = ( i < na ) ? (double) sa[ i ] : 0.0;
-                const double b = ( i < nb ) ? (double) sb[ i ] : 0.0;
+                // EACH TAKE'S OWN GAIN FIRST, THEN THE CROSSFADE (QBX-185).
+                // The order is the audible one and not a convention: the
+                // crossfade is equal-power between the two SIGNALS as they
+                // will be heard, so a take that is 20 dB down has to be down
+                // before the fade weights it. Fading first and trimming after
+                // would scale the already-summed pair and leave the join's
+                // power dependent on which take happened to be louder.
+                double a = ( i < na ) ? (double) sa[ i ] : 0.0;
+                double b = ( i < nb ) ? (double) sb[ i ] : 0.0;
+                // Through `sample_t` for the same reason the single-take
+                // branch above does it: one arithmetic, so a take's trim
+                // rounds the same whether or not it happens to fall inside a
+                // crossfade.
+                if( gainA )
+                    a *= (double) (sample_t) takeGainAt_nolock(
+                        run.takeA, pos + (offset_t) i, c );
+                if( gainB )
+                    b *= (double) (sample_t) takeGainAt_nolock(
+                        run.takeB, pos + (offset_t) i, c );
                 dp[ i ] = (sample_t) ( a * gOut + b * gIn );
             }
         }

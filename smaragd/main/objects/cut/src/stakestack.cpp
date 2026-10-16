@@ -568,6 +568,47 @@ std::shared_ptr<twCompColumn> STakeStack::ensureCompColumn()
     // and a project written before plan 53 — whose property reads 0 — renders
     // through here byte for byte as it did.
     cpComp_->setAutoXfade( (int64_t) sautofade::framesOf( getProjectSafe() ) );
+    // EACH TAKE'S OWN GAIN (QBX-185), after setTakes for the same reason the
+    // extents are and on every ask for the same reason the auto-fade is: a
+    // `set-clip-volume take=` edit is picked up by the next resolve rather
+    // than needing the column torn down.
+    //
+    // WHY IT HAS TO BE HERE AT ALL. These four values used to reach the mix
+    // only through `STrack::refreshClipGainCurves`, which composes ONE entry
+    // per placement and reads it from `SClipWindow::parametersOf` — the ACTIVE
+    // take. The column renders each region from whichever take the map
+    // selects, so an inactive take's own volume, pan, fade and envelope were
+    // carried, serialized, editable and never heard. The funnel now pushes
+    // NEUTRAL for a column that resolves through here
+    // (`appliesOwnWindowGain`), and the per-region truth is these calls.
+    for( int i = 0; i < nTakes(); ++i ) {
+        twCompColumn::TakeGain g;
+        // THE TAKE'S OWN WINDOW, not `parametersOf` and not the active take:
+        // one take, one set of parameters, which is the whole point.
+        if( SClipWindow *w = takeAt( i ) ) {
+            SObject &o = w->asObject();
+            // dB to linear, so it composes with the envelope as a PRODUCT,
+            // i.e. the two sum in dB — the identical conversion and the
+            // identical reason as `setClipGainScalar`'s call site
+            // (mix/CONTRACT.md inv. 21).
+            g.scalar = std::pow( 10.0, o.getVolume() / 20.0 );
+            g.pan    = o.getPan();
+            g.curve  = o.automationCurve( QStringLiteral( "cut:Gain" ) );
+            // A FADE IS AUDIO-ONLY (cut/CONTRACT inv. 4), and an event take's
+            // edges are note-offs rather than steps in a waveform — the same
+            // guard, and the same reason, as the auto-fade's in
+            // `refreshClipGainCurves`.
+            if( o.contentKind() == SContentKind::Audio ) {
+                g.fade = o.clipFade();
+                // THE TAKE'S OWN LENGTH, because a fade-out is anchored to
+                // the end of the window it belongs to. Not the extent length
+                // in the column's frames: the two coincide for a bounded take
+                // (invariant 1') and differ for an unbounded one.
+                g.fadeLen = o.getDurationBlocking();
+            }
+        }
+        cpComp_->setInputGain( i, g );
+    }
     cpComp_->setCompMap( compMap_, activeTake_ );
     return cpComp_;
 }

@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PER-TAKE VOLUME AND FADE ARE AUDIBLE ON A COMPED COLUMN (QBX-185).
+
+  THE DEFECT THIS GATES. A take's volume, pan, fade and gain envelope are
+  properties of the take's own WINDOW: `set-clip-volume take=N` writes them and
+  the model reads them back. They reached the mix through
+  `STrack::refreshClipGainCurves`, which composes the gain for a CLIP ENTRY —
+  one entry per placement — and read it from `SClipWindow::parametersOf`, i.e.
+  from the ACTIVE take. `twCompColumn` renders each region from whichever take
+  the map selects, but the gain had already been decided one level above it,
+  per clip and not per region. So on a comped column:
+
+    * an inactive take's own volume, pan and fade were carried, serialized and
+      editable, and never heard;
+    * comping two takes recorded at different levels gave ONE level to the
+      whole clip;
+    * the clip's fade belonged to whichever take happened to be active.
+
+  Pre-existing since proposal 43 N2 made a map audible, and the COMMON case
+  since mode A (P2, QBX-180), where every recording over existing material
+  produces a comped column.
+
+  THE SHAPE. One 4 s column over test_sawtooth.wav, both takes FULL extent and
+  both reading the source from 0, so each take's own domain IS the column's and
+  a region plays the source second it sits over. Per-source-second RMS of the
+  fixture: 0.0667 / 0.1764 / 0.2906 / 0.4055.
+
+  Map `96000 -> 1`, active take 0:
+    column [0, 2 s) -> take 0 -> 0.0667, 0.1764
+    column [2 s, 4 s) -> take 1 -> 0.2906, 0.4055
+
+  WHY BOTH TAKES READ THE SAME SOURCE AT THE SAME POSITION. It makes the two
+  takes acoustically INDISTINGUISHABLE, which is the point: every assertion
+  below is then about the GAIN and nothing else. A fixture whose takes differed
+  in level would let a wrong take sounding pass for a right take mis-gained.
+
+  WHICH CLAIMS BITE THE UNMODIFIED BUILD, measured rather than assumed. Claim 1
+  (two windows) and claim 3's long-fade pair are the ones that FAIL on `main`.
+  Claims 2, 3's short fade and 4 all PASS there, and they are kept anyway
+  because they gate the OTHER half of the fix — that it is applied per region
+  and only once. Claim 2 in particular passes on `main` by coincidence: with
+  both takes at the same trim, "the active take's trim over the whole clip" and
+  "each take's trim over its own regions" agree, so it is a double-application
+  guard rather than a defect detector. Said out loud here because a case whose
+  every assertion passes before the fix is a case that gates nothing, and
+  knowing WHICH ones do the work is the difference.
+-->
+<SActionScript version="1" name="take_gain_per_region">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- take 1: FULL extent, source from 0, and NOT active. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;0-192000" duration="192000"/>
+
+    <set-comp-map clip="0,0">
+      <seg at="96000" take="1"/>
+    </set-comp-map>
+    <assert-take-column clip="0,0" comp="96000:1" activeTake="0"
+                        takeAtPos="0" expectTake="0"/>
+    <assert-take-column clip="0,0" takeAtPos="96000" expectTake="1"/>
+
+    <!-- THE BASELINE, at 0 dB everywhere. Four source seconds, in order. -->
+    <render filename="tgpr_flat.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgpr_flat.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgpr_flat.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="tgpr_flat.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="tgpr_flat.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.36" maxRms="0.45"/>
+
+    <!-- CLAIM 1: THE INACTIVE TAKE'S OWN VOLUME IS HEARD, over its own
+         regions and NOWHERE ELSE. -20 dB is a factor of 0.1, so take 1's two
+         seconds drop to 0.0291 / 0.0406 while take 0's stay put.
+
+         ON `main` ALL FOUR WINDOWS ARE UNCHANGED: the entry's gain came from
+         the ACTIVE take (take 0), so an edit to take 1 reached the model and
+         not the mix. The third and fourth windows are the failing lines. -->
+    <set-clip-volume clip="0,0" take="1" volumeDb="-20"/>
+    <render filename="tgpr_t1_quiet.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- take 0's half is UNTOUCHED, which is the other half of "per region":
+         a fix that applied take 1's trim to the whole clip would fail here. -->
+    <assert-audio-energy filename="tgpr_t1_quiet.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgpr_t1_quiet.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="tgpr_t1_quiet.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.024" maxRms="0.034"/>
+    <assert-audio-energy filename="tgpr_t1_quiet.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.034" maxRms="0.047"/>
+
+    <!-- CLAIM 2: THE ACTIVE TAKE'S VOLUME IS ALSO PER REGION, and this is the
+         claim that catches a double application. Take 0 at -20 dB too, so now
+         EVERY window is a tenth of the baseline. If the clip entry still
+         carried the active take's trim AND the column applied it, take 0's
+         half would be a HUNDREDTH (0.00667 / 0.01764) and the first two
+         windows would fail low. -->
+    <set-clip-volume clip="0,0" take="0" volumeDb="-20"/>
+    <render filename="tgpr_both_quiet.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgpr_both_quiet.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0055" maxRms="0.0080"/>
+    <assert-audio-energy filename="tgpr_both_quiet.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.015" maxRms="0.021"/>
+    <assert-audio-energy filename="tgpr_both_quiet.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.024" maxRms="0.034"/>
+    <assert-audio-energy filename="tgpr_both_quiet.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.034" maxRms="0.047"/>
+
+    <!-- ...and back to 0 dB restores the baseline EXACTLY. A per-region gain
+         that left anything behind would show here, and byte-identity is the
+         strongest form of "nothing else moved". -->
+    <set-clip-volume clip="0,0" take="0" volumeDb="0"/>
+    <set-clip-volume clip="0,0" take="1" volumeDb="0"/>
+    <render filename="tgpr_restored.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tgpr_restored.wav" expected="tgpr_flat.wav"/>
+
+    <!-- CLAIM 3: `set-clip-fade take=` IS AUDIBLE on the inactive take, and in
+         THE TAKE'S OWN domain. Take 1's fade-in is 96000 frames (2 s) over its
+         own 4 s window, so it ramps from the take's frame 0 — which is the
+         COLUMN's frame 0, where take 1 is not even sounding. By the time take
+         1's region begins at 96000 the ramp is at its midpoint, and it reaches
+         full gain at the take's own 96000... i.e. exactly where the region
+         starts. So the region's two seconds are shaped by the TAIL of the
+         fade, not by a fade restarted at the region's edge.
+
+         This is the assertion that says WHOSE domain the fade is read in, and
+         it is the one a plausible wrong implementation gets wrong: a fade
+         applied per REGION would start the ramp at 96000 and make the third
+         window much quieter than the fourth by a different ratio. -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="96000" fadeOut="0"
+                    shape="linear"/>
+    <render filename="tgpr_t1_fade.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- take 0's half untouched again. -->
+    <assert-audio-energy filename="tgpr_t1_fade.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgpr_t1_fade.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- The fade is DONE by the time take 1 sounds (it completes at the take's
+         own frame 96000), so take 1's regions are at full gain and these two
+         windows match the baseline. That is what "the take's own domain" buys:
+         a region-relative fade would be ramping here instead. -->
+    <assert-audio-energy filename="tgpr_t1_fade.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+    <assert-audio-energy filename="tgpr_t1_fade.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.36" maxRms="0.45"/>
+
+    <!-- ...and a fade that DOES overlap the region is audible. Take 1's
+         LINEAR fade-in over its whole 4 s window is still ramping through its
+         own second 2 s, which is where its regions are: the ramp runs 0.5 to
+         0.75 across the third window and 0.75 to 1.0 across the fourth, so
+         both are scaled DOWN while take 0's half stays put.
+
+         MEASURED, not predicted: 0.187509 and 0.360758, against the baseline's
+         0.290568 and 0.405489. The bounds below exclude the baseline values
+         deliberately — a range wide enough to hold both would gate nothing,
+         which is what the first draft of these two lines did. -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="192000" fadeOut="0"
+                    shape="linear"/>
+    <render filename="tgpr_t1_fade_long.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgpr_t1_fade_long.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.055" maxRms="0.080"/>
+    <assert-audio-energy filename="tgpr_t1_fade_long.wav"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="tgpr_t1_fade_long.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.175" maxRms="0.205"/>
+    <assert-audio-energy filename="tgpr_t1_fade_long.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.345" maxRms="0.378"/>
+
+    <!-- Clear it, and the baseline comes back byte for byte. -->
+    <set-clip-fade clip="0,0" take="1" fadeIn="0" fadeOut="0"/>
+    <render filename="tgpr_restored2.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tgpr_restored2.wav"
+                           expected="tgpr_flat.wav"/>
+
+    <!-- CLAIM 5: THE TAKE'S OWN PAN IS HEARD, PER REGION AND PER CHANNEL.
+         The pan law (proposal 49 D1) is centre-unity BALANCE: at p = -1 the
+         left gain is 1 and the right is EXACTLY 0.0, not cos(pi/2). So take
+         1's regions keep channel 0 untouched and lose channel 1 entirely,
+         while take 0's half keeps both — which no per-clip pan can express,
+         because a clip has one pan.
+
+         This is also the only assertion here that is PER CHANNEL, and it is
+         what says the factor is indexed by the OUTPUT channel rather than by
+         the take's source channel: test_sawtooth's two channels are identical,
+         so a build indexing by the source channel would give both outputs the
+         LEFT gain and channel 1 would read 0.290568 instead of silence. -->
+    <set-clip-pan clip="0,0" take="1" pan="-1"/>
+    <render filename="tgpr_t1_left.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- take 0's half: both channels untouched. -->
+    <assert-audio-energy filename="tgpr_t1_left.wav" channel="0"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <assert-audio-energy filename="tgpr_t1_left.wav" channel="1"
+                         startFrame="48000" frameCount="48000"
+                         minRms="0.15" maxRms="0.21"/>
+    <!-- take 1's half: channel 0 full, channel 1 silent. -->
+    <assert-audio-energy filename="tgpr_t1_left.wav" channel="0"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.36" maxRms="0.45"/>
+    <assert-audio-energy filename="tgpr_t1_left.wav" channel="1"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.0" maxRms="0.0005"/>
+
+    <!-- ...and centre restores the baseline byte for byte. -->
+    <set-clip-pan clip="0,0" take="1" pan="0"/>
+    <render filename="tgpr_restored3.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-file-identical actual="tgpr_restored3.wav"
+                           expected="tgpr_flat.wav"/>
+
+    <!-- CLAIM 4: THE DEGENERATE CASE DOES NOT MOVE. With the map cleared and
+         every take full, `getRootComponent` hands out the ACTIVE take's own
+         component and never builds a column at all (the resolution rule, §4.1)
+         — so the active take's trim must still reach the mix through the CLIP
+         ENTRY exactly as it always has. This is the half of the fix that is
+         about what did NOT change, and the AC that forbids re-freezing a
+         golden. -->
+    <set-comp-map clip="0,0"/>
+    <assert-take-column clip="0,0" comp="" activeTake="0"/>
+    <render filename="tgpr_degen_flat.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <assert-audio-energy filename="tgpr_degen_flat.wav"
+                         startFrame="96000" frameCount="48000"
+                         minRms="0.26" maxRms="0.33"/>
+
+    <set-clip-volume clip="0,0" take="0" volumeDb="-20"/>
+    <render filename="tgpr_degen_quiet.wav" format="wav" quality="10"
+            durationSec="4.5"/>
+    <!-- The ACTIVE take's trim over the WHOLE clip, which is what an
+         un-comped column means. A tenth in every window. -->
+    <assert-audio-energy filename="tgpr_degen_quiet.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0055" maxRms="0.0080"/>
+    <assert-audio-energy filename="tgpr_degen_quiet.wav"
+                         startFrame="144000" frameCount="48000"
+                         minRms="0.034" maxRms="0.047"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

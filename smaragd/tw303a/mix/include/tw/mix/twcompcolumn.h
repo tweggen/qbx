@@ -3,6 +3,9 @@
 
 #include "tw/graph/twcomponent.h"
 #include "tw/events/twcompmap.h"
+#include "tw/events/twautomationcurve.h"
+#include "tw/events/twfade.h"
+#include "tw/mix/twpanlaw.h"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -45,6 +48,56 @@ class twCompColumn : public twComponent
 public:
     /** One take: how to resolve its component at a position (proposal 19 Inv-1). */
     using ResolveFn = std::function<twResolvedClip(offset_t)>;
+
+    /**
+     * ONE TAKE'S OWN GAIN (QBX-185) — the four factors `twTrackMix::ClipEntry`
+     * carries for a clip, carried here PER TAKE instead.
+     *
+     * WHY THEY CANNOT STAY ONE LEVEL UP. A take's volume, pan, fade and gain
+     * envelope are properties of the take's own WINDOW, and the mix composed
+     * them for a CLIP ENTRY — one entry per placement, read from
+     * `SClipWindow::parametersOf`, i.e. from the ACTIVE take. This column
+     * renders each region from whichever take the map selects, so the gain had
+     * already been decided above it, per clip and not per region: an inactive
+     * take's own volume and fade were carried, serialized, editable and NEVER
+     * HEARD, and comping two takes recorded at different levels gave one level
+     * to the whole clip.
+     *
+     * THE SAME FOUR FACTORS, THE SAME PRODUCT, THE SAME FUNCTIONS. Per frame:
+     * `scalar * curve->valueAt(f) * fade.gainAt(f, fadeLen) * pan`, with `f`
+     * in the TAKE's own domain. It is deliberately the identical expression
+     * `twTrackMix::freezePage_nolock` applies to a clip, evaluated through the
+     * identical `twAutomationCurve::valueAt` and `twClipFade::gainAt` — two
+     * places that could disagree about what a fade means is one more than
+     * there should be.
+     *
+     * `fadeLen` is the TAKE's own length, not its extent in this column's
+     * frames: a fade-out is anchored to the end of the window it belongs to.
+     * The two coincide for a bounded take (invariant 1', where a take's extent
+     * length IS its window length) and differ for an unbounded one.
+     *
+     * PAN APPLIES AT A WIDTH OF EXACTLY 2 and nowhere else, which is the rule
+     * `ClipEntry::pan` already follows (proposal 49 D1): at any other width the
+     * take mixes as if centred.
+     *
+     * `neutral()` is the whole fast path. A take whose gain is neutral is
+     * mixed by the straight copy this column has always done, so a column
+     * nobody has set a per-take parameter on renders byte for byte as before —
+     * and since the DEGENERATE case (no map, every take full) never builds a
+     * column at all, so does every project written before this change.
+     */
+    struct TakeGain {
+        double     scalar  = 1.0;   // linear; the take's dB trim, converted
+        double     pan     = 0.0;   // [-1, 1]; 0 = centre
+        twClipFade fade;            // none() by default
+        length_t   fadeLen = 0;     // the TAKE's own length, for gainAt
+        std::shared_ptr<const twAutomationCurve> curve;   // null = untouched
+
+        bool neutral() const
+        {
+            return scalar == 1.0 && pan == 0.0 && fade.none() && !curve;
+        }
+    };
 
     twCompColumn( tw303aEnvironment &env, idx_t channels );
     ~twCompColumn() override;
@@ -109,6 +162,16 @@ public:
      * byte as before.
      */
     void setAutoXfade( int64_t frames );
+
+    /**
+     * ONE TAKE'S OWN GAIN (QBX-185). See `TakeGain`.
+     *
+     * Set AFTER `setTakes`, which rebuilds the entry list and resets every
+     * entry to neutral — the same ordering `setInputExtent` needs and for the
+     * same reason. A take index outside the current list is ignored rather
+     * than stored: the list is authoritative.
+     */
+    void setInputGain( int takeIndex, const TakeGain &gain );
 
     idx_t getOutputChannels() const override { return channels_; }
 
@@ -196,7 +259,18 @@ private:
         std::shared_ptr<twOutputPage> previousPage;   // per-take state chain
         offset_t                      exStart = 0;    // extent start, column frames
         length_t                      exLen   = -1;   // < 0 = unbounded
+        TakeGain                      gain;           // QBX-185; neutral by default
     };
+
+    /**
+     * Take `t`'s own gain at COLUMN position `pos`, for output channel `ch`.
+     *
+     * The position is converted to the take's own domain here, in one place,
+     * because that is the whole content of the bug this fixes: every other
+     * per-take quantity in this class is already read in the take's domain and
+     * the gain was not read there at all.
+     */
+    double takeGainAt_nolock( int t, offset_t pos, idx_t ch ) const;
 
     tw303aEnvironment       &env_;
     idx_t                    channels_;

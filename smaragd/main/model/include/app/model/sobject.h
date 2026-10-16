@@ -655,6 +655,35 @@ public:
     /// the same reason.
     virtual const twClipFade &clipFade() const;
 
+    /// TRUE when this object applies its WINDOWS' OWN gain internally, so the
+    /// per-clip mix funnel must NOT apply one on top (QBX-185).
+    ///
+    /// A BASE-CLASS SEAM for the same reason `clipFade()` is one: the funnel
+    /// is `STrack::refreshClipGainCurves` (and `SLaneFragment`'s mirror of
+    /// it), `objects/track` may not depend on `objects/cut`, and the question
+    /// is about a take column.
+    ///
+    /// A take column that renders its comp map applies each take's own
+    /// volume, pan, fade and gain envelope PER REGION, in `twCompColumn` —
+    /// because the funnel cannot: it composes one entry per PLACEMENT, read
+    /// from `SClipWindow::parametersOf`, i.e. from the ACTIVE take, while the
+    /// column renders each region from whichever take the map selects. So for
+    /// such a column the funnel pushes NEUTRAL values, or the active take's
+    /// trim would be applied twice — once over its own regions by the column
+    /// and once over the whole clip by the entry.
+    ///
+    /// It is FALSE for the degenerate column (no map, every take full), which
+    /// never builds a `twCompColumn` at all and whose active take's trim must
+    /// keep reaching the mix exactly as it always has. That is what keeps
+    /// every project written before this change rendering byte for byte.
+    ///
+    /// It is also FALSE for a WRAPPED column's wrapper: `parametersOf` returns
+    /// the wrapper's own window there, so the entry carries the WRAPPER's trim
+    /// and the column carries each take's — two different values that compose
+    /// as they should, which is what `set-clip-volume` on a wrapped column
+    /// has always meant (it edits the wrapper).
+    virtual bool appliesOwnWindowGain() const { return false; }
+
     /// Called AFTER a lane mutation, with the affected range in THIS object's
     /// own time domain. Owners override to push the new snapshot into their
     /// engine components and to stale exactly that range
