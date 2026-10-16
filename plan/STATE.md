@@ -1,8 +1,48 @@
 # Plan Execution State
 
 Running log of which proposals in `plan/proposed/` have been executed, and the
-state they left the repository in. Append a new section each time a proposal is
-worked.
+state they left the repository in.
+
+## What this file is, since 2026-08-22 (QBX-198)
+
+**The sections below stop at 2026-08-22**, and that is not an omission to be
+backfilled. Around 2026-09 the per-change record moved off this file, and the
+header's old instruction — "append a new section each time a proposal is
+worked" — stopped being followed. 299 commits landed between that last section
+and 2026-10-16. Plans 42, 43, 51, 52 and 53 are all executed and have no
+section here.
+
+So read this file as **two things at once**:
+
+- **An archive of how the repository got to 2026-08-22.** Every section is
+  still accurate about what it describes, and several hold failure narratives
+  nothing else records. Numbers in them — test counts, timings, platform
+  claims — were true when written and have not been re-measured since.
+- **A live corrections surface.** Appending a *dated correction* inside an
+  existing section when a later change disproves it never stopped: see
+  *Correction (2026-10-10, QBX-145)* in the render-to-file section, where a
+  quality parameter the original entry described as validated turned out to
+  reach no writer. Keep doing that. An entry that is now wrong gets a dated
+  correction beneath it, not a deletion — the reason the wrong thing looked
+  right is usually the useful part.
+
+**For work after 2026-08-22, the record is in three places:**
+
+| Where | What it holds |
+|---|---|
+| **YouTrack project QBX** (https://nassau.youtrack.cloud) | One ticket per change, each carrying the summary and the verification of what shipped — the closest thing to a section below. |
+| **The thinktank notebook `qbx2`** | The *why*, the gotchas and the standing conventions. `cru_briefing`, `cru_briefing issue_id=QBX-nnn`, `thinktank_hybrid_search`. See `CLAUDE.md`. |
+| **Each plan's own corrections sections** | What the build disproved about the design. Plan 53 carries roughly thirty numbered corrections across §4.1, §4.3, §4.4, §8 and §12 — a better record than a section here would have been, because it sits beside the text it contradicts. |
+
+`git log` is the fourth: commit messages are the project's record of what was
+gated, which is why qbx lands PRs with "Rebase and merge" rather than squashing.
+
+**One open question, deliberately not answered here.** `plan/done/` holds
+fifteen old plans and nothing has moved into it since; plans 42, 43, 51, 52 and
+53 are executed and still sit in `plan/proposed/`, so the directory name no
+longer tells a reader whether a plan is live. QBX-198 records that either
+answer is fine — move them, or retire `plan/done/` in favour of each plan's own
+**SHIPPED** markers — and that the present state is not.
 
 ---
 
@@ -15561,3 +15601,101 @@ own.
 first load's files as well. The GUI never sees it (`openProjectFile` builds a
 fresh `SProject` per open). It is why the two collect cases are separate case
 files rather than two phases of one.
+
+---
+
+## 2026-10-16 — Proposal 53 COMPLETE: take recording modes (QBX-156)
+
+> **Written after the gap, and the only section on this side of it.** The
+> sections above stop at 2026-08-22; see *What this file is* at the top. This
+> one exists because proposal 53 is the first plan to be finished end to end
+> entirely under the ticket-per-change régime, and closing a plan with no
+> mark anywhere in `plan/` would leave `plan/proposed/53_…` looking live. It
+> does **not** mean the sections resumed, and it is not a model for recording
+> the next ticket — that belongs in YouTrack and in the plan's own
+> corrections.
+
+### Status
+
+**✅ COMPLETE.** Every row of §12's table shipped. `plan/proposed/53_TAKE_RECORDING_MODES.md`
+carries the design, and its roughly thirty numbered corrections carry what the
+build disproved about it — read those, not this section, for the substance.
+
+- **Span:** `a001cace` (2026-10-11 09:41) … `209e9386` (2026-10-16 09:52).
+- **43 commits** in the window, **34** keyed to a plan-53 ticket.
+- **25 tickets** carry commits on main, QBX-156 — which carried the plan
+  document itself — among them. One PR each, each merged by the author.
+
+### The rows and who did them
+
+| row | ticket | what it was |
+|---|---|---|
+| B1–B10 | QBX-155, 158–166 | the ten prerequisites: link attributes across wrap/collapse, the comp map through `split-clip`/`duplicate-clip`/`unsplit`, the `add-take` kind guard, one-recording-one-column, one undo per record press, `remove-take`'s comp-map renumbering, and two stale documentation claims |
+| M0 | QBX-167 | the record-mode property — project / folder / track, `set-track-record-mode`, the INI seed, `mode=` plumbing, the transport selector |
+| P1a | QBX-171 | the planner framework (`srecplan`), `overdub`, `place-recording` as the thin verb |
+| P1b | QBX-172 | `takes-split` and `replace` over `split-clip`/`remove-sample` |
+| A0a | QBX-177 | take extents, model only, to `FORMAT_VERSION 3` |
+| A0b | QBX-178 | take extents on the edit surface and in both painters |
+| A1 | QBX-179 | `merge-columns` / `unmerge-columns` and the link-move protocol |
+| P2 | QBX-180 | mode A (`takes`) replaces `LegacyTakes` — the default recording behaviour flips |
+| P3 | QBX-181 | MIDI parity, on QBX-188's shared planner module |
+| P4 | QBX-182 | un-armed group members, group extent, `select-take take="newest"`, take names |
+| P5 | QBX-183 | playback auto-fade at clip edges and comp boundaries, 3 ms seeded, seamless edges exempt |
+| P6 | QBX-184 | auto-expand on landing, locator-after-record, the Unused recordings dock, `cleanup-takes` |
+| P6 UI | QBX-195 | the Edit-menu and lane-menu commands, the dock button, the confirmation dialog |
+| P7 | QBX-157 | cut marks, and the pixel gate on the comp-result paint A0b had shipped ungated |
+
+### Two things worth carrying forward
+
+**The plan was wrong in ways only building it could show, about thirty times,
+and every one of them is still in the file.** Not as a changelog — each
+correction sits under the section it contradicts, which is the only place a
+reader of that section will look. Three were plain errors in the plan's own
+arithmetic or prose; several were defects the row had to fix before it could be
+written at all (an event column with no musical anchor, a MIDI recorder with no
+punch, `add-take` carrying no name); and three record that a prescribed gate
+**could not be built as specified** and say what was built instead.
+
+**A paint that ships ungated stays ungated until something allocates the
+pixels.** A0b drew the comp result on the compact column; reverting that draw
+passed the whole suite, 449/449, because every metric on the envelope
+assertions rides the *collect* terminal and not the *draw*. §4.4 allocated the
+pixel gate to QBX-157, five rows later, and that is the only reason it exists.
+The general shape — gate a paint with a pixel gate, never through
+`collectEnvelope` — is a standing convention in the notebook.
+
+### Measured at `209e9386`
+
+**489 of 494 registered ctest targets run and pass** (the other 5 are
+CMake-Disabled: three macOS-only `au_*`, two Windows-only DPAPI media cases),
+424.53 s at `-j4` on Linux, and **433 `.qxa` cases** in `smaragd/tests/cases/`.
+Five static checkers clean. CI green on main (`gh run 38869949908`).
+
+Platform coverage is unchanged by this plan and still asymmetric: CI measures
+Linux, with two standing exclusions in `docs/LINUX_GATE.md`; macOS and Windows
+have their own standing-failure records in `docs/MACOS_GATE.md` and
+`docs/ASIO_WINDOWS_GATE.md`.
+
+### Filed out of it and NOT done
+
+Eleven tickets, which is the honest measure of what finishing this plan did not
+settle. The two the plan itself calls out as unfinished business rather than
+follow-up:
+
+- **QBX-186** (Major) — **no "hear one take alone" gesture survives
+  extent-aware `select-take`, and under mode A every take is partial.** §4.3
+  removed the side effect that used to isolate a take and put nothing in its
+  place. Four A0a gates had been built on it and all four had to be repaired
+  with `set-comp-map`, a scripting verb and not a gesture. The ticket asked for
+  a decision *before* P2 landed; P2 landed, so from `2b237fb2` onward this is a
+  live hole in shipped behaviour, not a risk.
+- **QBX-185** — per-take volume and fade are **inaudible** on a comped column.
+  The gain is composed per clip entry, one level above `twCompColumn`, so the
+  inactive takes' own volume, pan and fade are carried, serialized, editable
+  and never heard.
+
+The rest: QBX-189, QBX-190, QBX-191, QBX-192, QBX-193, QBX-194, QBX-196,
+QBX-197. QBX-196 and QBX-197 came out of the last two rows — a cut mark cannot
+draw a crossfade band because the effective fade length is private to
+`twCompColumn`, and two commands now claim to remove unused recordings by two
+different name tests with the older one deleting permanently.
