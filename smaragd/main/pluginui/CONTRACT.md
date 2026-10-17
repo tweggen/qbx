@@ -636,3 +636,65 @@ then disagree with this one.
 The Track Detail dock does NOT take it, and `mixer_inserts` asserts both sides
 — the mixer's mount reports `compact=1` while the dock's send strip still
 shows its level and pre/post controls and its own layout stays clean.
+
+## The browser's Format filter is a VIEW filter, and it is remembered (QBX-78)
+
+`SPluginBrowserDialog` has three filters, and they compose: the Filter text
+box (matched against every column), the Kind combo (All / Instruments /
+Effects, proposal 37 §6.1) and now a **Format** combo.
+
+**What the Format combo is.** Its entries are "All" plus one per format
+**something in the list actually has**, sorted, labelled (`CLAP`, `VST3`,
+`Audio Unit`, `Built-in` for the in-house `tw`) and carrying the RAW format
+string as item data — the string the descriptor, the Format column, the
+`(format, uid)` selection and the stored preference all speak. A format is
+never offered over nothing: such an entry is a filter whose only possible
+result is an empty browser, and the entry a user would then have to find
+again to undo.
+
+**Rows are matched on `kFormatRole`, never on the Format column's text.** The
+two are equal today, which is exactly why this is written down rather than
+measured: the column is display text that a later change may relabel, and the
+role is what the registry handed over.
+
+**What it is NOT.** It hides rows. It does not fold a product's formats
+together — two Mangroves, one `.clap` and one `.vst3`, remain two rows — and
+it has no say in what a saved project's slot resolves to. Both of those need
+cross-format product IDENTITY, which nothing in the codebase has;
+`plan/proposed/54_PLUGIN_IDENTITY_MATCHING.md` §4 (tiers T3/T4) is the design
+for it and its §8 Q2 is the preference question. Deciding that QBX-78 was the
+view filter and not the resolver was the author's call, recorded there.
+
+### The remembered value has ONE writer
+
+The choice persists in `SOpt::PluginBrowserFormat` and is written **only** by
+`onFormatFilterChanged`, i.e. only when a user picks an entry. A rebuild never
+writes what it restored, which is what makes the cross-machine case safe: a
+config that says `au`, opened on Linux, shows **All** and leaves the key
+alone, so the Mac that does have AU still honours it. Restoring through the
+combo and persisting the combo's fallback would silently erase the preference
+on the first launch on the other machine.
+
+`wantedFormat_` is a separate member from the combo's current entry for the
+same reason: the combo can only hold a format the list has. The browser can be
+opened **while the startup scan is still running**, when the registry holds the
+two built-ins alone; the first populate then falls back to All, and the
+rebuild the finished scan triggers has to recover the choice. Keeping
+`wantedFormat_` is what lets it, and a user's explicit "All" sticks for that
+dialog's lifetime because picking it sets `wantedFormat_` empty.
+
+### What the gate reaches, and what it does not
+
+`qxa.plugin_browser_format_filter` builds the real dialog off screen through
+the `assert-plugin-browser` verb and asserts `describeBrowser()`. Nine
+sabotages were tried and all nine bite, including the two that are not about
+the filter at all: a rebuild that persists what it restored, and a rebuild
+that keeps the combo's value instead of the wanted one.
+
+**NOT GATED: that the list comes from the registry.** The verb supplies a
+literal plugin list, because the registry holds what is installed on the
+machine — the two `tw` built-ins alone on a CI runner — and a format filter
+cannot be told apart from a no-op unless at least two formats are present.
+That read is one unchanged line, and the case's phase 0 checks the combo over
+the real registry as far as any machine allows: it must offer at least one
+format, which the built-ins guarantee.
