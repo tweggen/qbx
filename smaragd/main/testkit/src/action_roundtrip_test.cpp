@@ -608,6 +608,19 @@ const Fixture kFixtures[] = {
       " startFrame='96000' timeoutMs='5000'/>" },
     { "wait-ms", "<wait-ms ms='3600'/>" },
 
+    // assert-plugin-browser (QBX-78). `plugins`, `filter`, `format`,
+    // `reopenPlugins` and `stored` are all written ONLY when set, so the
+    // default instance this file audits without a fixture compares equal on
+    // five attributes neither side writes — the vacuous shape point 2 of the
+    // header is about. `format` and `stored` are the two that must survive as
+    // a PRESENCE and not just as a value: both read `hasAttribute`, because
+    // "do not touch the combo" and "select All" are different instructions and
+    // an empty string cannot say which.
+    { "assert-plugin-browser",
+      "<assert-plugin-browser plugins='Mangrove:clap:Nassau:2/2:fx'"
+      " kind='effects' filter='mang' format='clap' expectSelect='1'"
+      " reopen='1' reopenPlugins='Looper:tw:Nassau:2/2:fx' stored='clap'"
+      " contains='format=clap' absent='vst3'/>" },
     // --- the media-browser verbs (proposal 38 gate 2) -----------------------
     // Two of the six REJECT a default element on purpose (a path verb with
     // neither a path nor an expand, and a drag naming neither a row nor a

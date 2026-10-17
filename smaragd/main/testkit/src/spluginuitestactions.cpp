@@ -16,12 +16,19 @@
 // though it would compile.
 #include "app/objects/track/spluginslot.h"
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/pluginui/spluginbrowserdialog.h"
 #include "app/pluginui/spluginnativeeditor.h"
+// SOpt is where every option KEY is spelled, once (testkit already holds that
+// edge for assert-media-options). Restoring the browser's remembered format
+// below must name the same key the dialog writes, not a second copy of it.
+#include "app/servicesui/soptions.h"
 #include "app/shell/smainwindow.h"
+#include "app/shell/ssettings.h"
 
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
+#include <QLineEdit>
 #include <QObject>
 #include <QStringList>
 #include <QWidget>
@@ -694,4 +701,163 @@ static const bool s_reg_plugineditorsetparam =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "plugin-editor-set-param" ),
           [] { return new SPluginEditorSetParamAction; } ),
+      true );
+
+// --------------------------------------------------------------------------
+// assert-plugin-browser (QBX-78)
+// --------------------------------------------------------------------------
+
+namespace {
+
+SPluginBrowserDialog::Kind browserKind( const QString &name )
+{
+    if( name == QLatin1String( "instruments" ) )
+        return SPluginBrowserDialog::Kind::Instruments;
+    if( name == QLatin1String( "effects" ) )
+        return SPluginBrowserDialog::Kind::Effects;
+    return SPluginBrowserDialog::Kind::All;
+}
+
+// SOpt::PluginBrowserFormat is the USER'S preference, and selecting a format in
+// the browser persists it by design. Restoring it is therefore part of the
+// verb, not of the case: ~Guard runs on every path out of apply(), including
+// the early returns a failed assertion takes. The key is restored to ABSENT
+// when it was absent, so a developer who never used the filter does not acquire
+// the key from having run the suite.
+class BrowserFormatGuard {
+public:
+    BrowserFormatGuard()
+        : had_( SSettings::instance().contains(
+              QString::fromLatin1( SOpt::PluginBrowserFormat ) ) ),
+          was_( SSettings::instance().pluginBrowserFormat() )
+    {
+    }
+    ~BrowserFormatGuard()
+    {
+        if( had_ ) SSettings::instance().setPluginBrowserFormat( was_ );
+        else       SSettings::instance().remove(
+                       QString::fromLatin1( SOpt::PluginBrowserFormat ) );
+    }
+
+private:
+    bool    had_;
+    QString was_;
+};
+
+}  // namespace
+
+SApplyResult SAssertPluginBrowserAction::apply( SProject * )
+{
+    if( contains_.isEmpty() && absent_.isEmpty() ) {
+        qWarning() << "assert-plugin-browser: needs a contains= or an absent=";
+        return { false, nullptr };
+    }
+
+    const BrowserFormatGuard guard;
+
+    // Parentless and NEVER shown: a shown dialog in a qxa run would appear on
+    // the developer's screen on Windows, and a modal one would hang the script.
+    // The constructor does the whole job under test -- populate, build the
+    // Format combo, restore the remembered value, filter.
+    auto build = [this]( const QString &spec ) {
+        auto dlg = std::make_unique<SPluginBrowserDialog>(
+            nullptr, browserKind( kind_ ) );
+        if( !spec.isEmpty() ) dlg->setPluginsForTest( spec );
+        if( !filter_.isEmpty() ) {
+            // The REAL Filter box, so textChanged() drives the production slot
+            // rather than this verb re-deciding what a filter means.
+            if( QLineEdit *edit = dlg->findChild<QLineEdit *>() )
+                edit->setText( filter_ );
+        }
+        return dlg;
+    };
+
+    auto dlg = build( plugins_ );
+
+    if( hasFormat_ ) {
+        const QString raw = ( format_ == QLatin1String( "all" ) ) ? QString()
+                                                                  : format_;
+        const bool ok = dlg->selectFormat( raw );
+        if( ok != ( expectSelect_ != 0 ) ) {
+            qWarning() << "assert-plugin-browser FAILED: selecting format"
+                       << format_ << ( ok ? "succeeded" : "did not succeed" )
+                       << "-- expected the opposite; the browser is"
+                       << dlg->describeBrowser();
+            return { false, nullptr };
+        }
+    }
+
+    if( reopen_ ) {
+        // The round trip: the first dialog persisted whatever was selected, and
+        // a SECOND browser must open on it without being told. Built after the
+        // first is destroyed, exactly as a user's next "+ Add Effect" does.
+        dlg.reset();
+        dlg = build( reopenPlugins_.isEmpty() ? plugins_ : reopenPlugins_ );
+    }
+
+    const QString desc = dlg->describeBrowser();
+
+    if( hasStored_ ) {
+        const QString want = ( stored_ == QLatin1String( "all" ) ) ? QString()
+                                                                   : stored_;
+        const QString got = SSettings::instance().pluginBrowserFormat();
+        if( got != want ) {
+            qWarning() << "assert-plugin-browser FAILED: the remembered format"
+                       << "is" << ( got.isEmpty() ? QStringLiteral( "(All)" )
+                                                  : got )
+                       << "-- expected" << stored_ << "; the browser is" << desc;
+            return { false, nullptr };
+        }
+    }
+
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning() << "assert-plugin-browser FAILED: does not contain"
+                   << contains_ << "; it is" << desc;
+        return { false, nullptr };
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning() << "assert-plugin-browser FAILED: unexpectedly contains"
+                   << absent_ << "; it is" << desc;
+        return { false, nullptr };
+    }
+
+    return { true, nullptr };   // an assertion has nothing to undo
+}
+
+void SAssertPluginBrowserAction::writeXml( QDomElement &elem ) const
+{
+    if( !plugins_.isEmpty() ) elem.setAttribute( "plugins", plugins_ );
+    elem.setAttribute( "kind", kind_ );
+    if( !filter_.isEmpty() ) elem.setAttribute( "filter", filter_ );
+    if( hasFormat_ ) elem.setAttribute( "format", format_ );
+    elem.setAttribute( "expectSelect", expectSelect_ );
+    elem.setAttribute( "reopen", reopen_ );
+    if( !reopenPlugins_.isEmpty() )
+        elem.setAttribute( "reopenPlugins", reopenPlugins_ );
+    if( hasStored_ ) elem.setAttribute( "stored", stored_ );
+    elem.setAttribute( "contains", contains_ );
+    elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertPluginBrowserAction::readXml( const QDomElement &elem, int )
+{
+    plugins_      = elem.attribute( "plugins" );
+    kind_         = elem.attribute( "kind", "all" );
+    filter_       = elem.attribute( "filter" );
+    hasFormat_    = elem.hasAttribute( "format" );
+    format_       = elem.attribute( "format" );
+    expectSelect_ = elem.attribute( "expectSelect", "1" ).toInt();
+    reopen_       = elem.attribute( "reopen", "0" ).toInt();
+    reopenPlugins_ = elem.attribute( "reopenPlugins" );
+    hasStored_    = elem.hasAttribute( "stored" );
+    stored_       = elem.attribute( "stored" );
+    contains_     = elem.attribute( "contains" );
+    absent_       = elem.attribute( "absent" );
+    return true;
+}
+
+static const bool s_reg_assertpluginbrowser =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-plugin-browser" ),
+          [] { return new SAssertPluginBrowserAction; } ),
       true );
