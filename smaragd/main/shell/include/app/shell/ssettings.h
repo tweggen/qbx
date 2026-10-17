@@ -175,6 +175,14 @@ public:
     bool        pluginScanOnStartup() const;
     void        setPluginScanOnStartup( bool on );
 
+    // The plugin browser's remembered Format filter (QBX-78): the RAW format
+    // string ("clap", "vst3", "au", "tw"), EMPTY for "All". The key name lives
+    // in SOpt like every other option's, and this accessor exists because
+    // `pluginui` may not include `app/servicesui` -- the same reason
+    // pluginSearchPaths() above is here rather than read at its call site.
+    QString     pluginBrowserFormat() const;
+    void        setPluginBrowserFormat( const QString &format );
+
     // Main window geometry (size and position, binary format).
     QByteArray windowGeometry() const;
     void       setWindowGeometry( const QByteArray &geometry );

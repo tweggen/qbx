@@ -63,6 +63,9 @@ QVariant SOpt::def( const QString &key )
         return dirs;
     }
     if( key == PluginScanOnStartup ) return true;
+    // Empty = All. A format cannot be the default: which formats exist is a
+    // property of the machine, and "au" would mean an empty browser on Linux.
+    if( key == PluginBrowserFormat ) return QString();
 
     // MIDI (proposal 37 P7b). Note-on chase is OFF by default for MIDI OUT -
     // see the key's comment; controller chase is not optional.

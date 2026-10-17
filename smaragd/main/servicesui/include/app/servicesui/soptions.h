@@ -106,6 +106,18 @@ inline constexpr const char *OptionsLastPage = "ui/optionsLastPage";
 // background at launch; the cache makes that cheap after the first run.
 inline constexpr const char *PluginSearchPaths   = "plugins/searchPaths";
 inline constexpr const char *PluginScanOnStartup = "plugins/scanOnStartup";
+// The plugin browser's Format filter (QBX-78), as the RAW format string the
+// descriptors carry ("clap", "vst3", "au", "tw"); the default is EMPTY, which
+// is "All". A PREFERENCE and not a view state, which is why it is here rather
+// than beside the window geometry: a user who has decided which format they
+// work in has decided it for every insert, not for one dialog. The browser
+// restores it only when this machine has a plugin in that format (or the scan
+// has not finished yet) and otherwise shows All WITHOUT rewriting the key, so
+// moving a config between machines does not quietly lose the choice.
+//
+// There is no options-page control: the combo in the browser IS the control,
+// and a second one would be a second authority over the same key.
+inline constexpr const char *PluginBrowserFormat = "plugins/browserFormat";
 
 // MIDI (proposal 37 D6 / P7b). All three are per-user and machine-local, which
 // is exactly why they are here and not in the project: a port NAME travels with

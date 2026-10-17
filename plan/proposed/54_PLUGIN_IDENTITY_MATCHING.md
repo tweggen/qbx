@@ -288,5 +288,17 @@ four Nassau products, that is proposal 50 M7's output.
   project is structurally worse off on Windows than the reverse. Should the app
   *prefer* CLAP/VST3 over AU when inserting a plugin that exists in several
   formats, to keep projects portable by construction?
+
+  **Still open, and narrowed (QBX-78, 2026-10-17).** The browser now has a
+  **Format** combo that filters the list and is remembered per user
+  (`SOpt::PluginBrowserFormat`), so a user *can* say which format they insert
+  from, by hand. That is a VIEW filter and deliberately nothing more: it does
+  not fold a product's formats into one row and it has no say in what a slot
+  resolves to, because both need the cross-format identity of §4's T3/T4,
+  which does not exist yet. So Q2 keeps its whole substance — whether the APP
+  should prefer a format on the user's behalf, and whether a preference
+  expressed while browsing should also steer resolution — and it now has one
+  piece of evidence on the "a stored preference must never be rewritten by the
+  machine that cannot honour it" side: see `main/pluginui/CONTRACT.md`.
 - **Q3** — I/O compatibility for T3/T4: is "candidate is wider" really
   acceptable, or should a width mismatch demote a match one tier?

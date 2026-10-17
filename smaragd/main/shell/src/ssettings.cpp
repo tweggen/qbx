@@ -304,6 +304,17 @@ void SSettings::setPluginScanOnStartup( bool on )
     setValue( SOpt::PluginScanOnStartup, on );
 }
 
+QString SSettings::pluginBrowserFormat() const
+{
+    return value( SOpt::PluginBrowserFormat,
+                  SOpt::def( SOpt::PluginBrowserFormat ) ).toString();
+}
+
+void SSettings::setPluginBrowserFormat( const QString &format )
+{
+    setValue( SOpt::PluginBrowserFormat, format );
+}
+
 QByteArray SSettings::windowGeometry() const
 {
     return value( "ui/windowGeometry" ).toByteArray();
