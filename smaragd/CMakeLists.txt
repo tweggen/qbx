@@ -297,6 +297,26 @@ if(TEST qxa.record_mode_ini_seed)
     set_tests_properties(qxa.record_mode_ini_seed PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# --- the plugin browser's Format filter (QBX-78) -----------------------------
+#
+# plugin_browser_format_filter OWNS `plugins/browserFormat`, for the same
+# reason as the three blocks around it: selecting a format in the REAL browser
+# persists the choice, and that reaches the shared per-user smaragd.ini.
+#
+# It differs from them in WHO restores it. That key is not a fixture key but a
+# preference a developer may have set for themselves, and settings-remove's own
+# header forbids a case removing a key it does not own -- so the restore is
+# inside `assert-plugin-browser`, which saves the value and puts it back on
+# every path out of apply(), including the early return a failed assertion
+# takes. The case therefore leaves the INI as it found it even when it FAILS,
+# which a restore written in the case could not promise.
+#
+# RUN_SERIAL for the shared INI and nothing else; nothing here waits on a
+# clock, and every assertion is over a dialog built in-process.
+if(TEST qxa.plugin_browser_format_filter)
+    set_tests_properties(qxa.plugin_browser_format_filter PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the media browser (proposal 38 gate 2) ----------------------------------
 #
 # These three drive the REAL SMediaBrowserPanel, and the panel PERSISTS its

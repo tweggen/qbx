@@ -284,4 +284,94 @@ private:
     int       hasFeed_       = -1;
 };
 
+// assert-plugin-browser — build the REAL plugin browser off screen and assert
+// on what it shows (QBX-78). Same house pattern as assert-plugin-strip above
+// and assert-media-options: the production widget, constructed and thrown away,
+// matched against its own describe() line.
+//
+// WHY THE LIST IS SUPPLIED. The browser reads twPluginRegistry, which holds
+// what is INSTALLED ON THIS MACHINE — two formats on the dev box, one on a CI
+// runner, and whatever a developer happens to have in ~/.vst3. A format filter
+// cannot be told apart from a no-op unless at least two formats are present, so
+// a case asserting over the real registry would be vacuous exactly where the
+// claim lives. `plugins=` hands the dialog a literal list instead, replacing
+// its one registry read and nothing else (SPluginBrowserDialog::
+// setPluginsForTest). Leave it out and the real registry is used, which is how
+// a case checks that the combo is built from the registry at all — the two `tw`
+// built-ins are present in every build.
+//
+// THE REMEMBERED FORMAT IS A REAL USER PREFERENCE (SOpt::PluginBrowserFormat),
+// not a fixture key, so this verb SAVES AND RESTORES it around its own work,
+// including on every early return. A case must not be able to leave a
+// developer's browser filtered to a format they never chose, and that is also
+// why the persistence claim is made HERE, inside one apply(), rather than with
+// settings-remove in the case (whose own header forbids removing a key the
+// case does not own).
+//   plugins      = ""      literal list, `name:format:vendor:nIn/nOut:kind`
+//                          per ';', kind being `fx` or `instrument`; empty =
+//                          the real registry
+//   kind         = "all"   which Kind the browser is opened on: `all`,
+//                          `instruments` or `effects` (the ctor argument the
+//                          FX strip's two buttons pass)
+//   filter       = ""      typed into the REAL Filter box, so the text filter
+//                          and the format filter compose the way they do for a
+//                          user
+//   format       = ""      ABSENT means "do not touch the combo", which is what
+//                          the persistence check needs; `all` selects All, any
+//                          other value selects that raw format
+//   expectSelect = "1"     whether selecting `format` must SUCCEED. "0" gates
+//                          the other branch: a format this machine has nothing
+//                          in is not offered, the browser stays on All, and the
+//                          stored preference is left alone
+//   reopen       = "0"     "1" destroys the dialog after applying `format` and
+//                          builds a SECOND one the same way, touching no combo.
+//                          `contains`/`absent` then describe THAT dialog — the
+//                          round trip through the settings file
+//   reopenPlugins = ""     the list the REOPENED dialog is built from; empty =
+//                          the same `plugins`. A different one is how the
+//                          "this machine has nothing in the stored format"
+//                          branch is reached inside a single verb, which it
+//                          has to be: each verb restores the user's real
+//                          preference when it returns, so no claim about the
+//                          stored value can span two of them
+//   stored       = ""      ABSENT = not checked; otherwise the value
+//                          SOpt::PluginBrowserFormat holds AFTER the dialogs
+//                          were built (`all` = empty). This is how the other
+//                          half of the preference is gated: a machine whose
+//                          list has nothing in the stored format shows All and
+//                          must leave the stored value ALONE, which no
+//                          describe() line can show
+//   contains     = ""      substring that must appear in
+//                          SPluginBrowserDialog::describeBrowser()
+//   absent       = ""      substring that must NOT appear there
+class SAssertPluginBrowserAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "assert-plugin-browser" );
+    }
+    QStringList knownAttributes() const override
+    {
+        return { "plugins", "kind", "filter", "format", "expectSelect",
+                 "reopen", "reopenPlugins", "stored", "contains", "absent" };
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString plugins_;
+    QString kind_   = QStringLiteral( "all" );
+    QString filter_;
+    QString format_;
+    bool    hasFormat_    = false;   // the attribute was PRESENT
+    int     expectSelect_ = 1;
+    int     reopen_       = 0;
+    QString reopenPlugins_;
+    QString stored_;
+    bool    hasStored_    = false;
+    QString contains_;
+    QString absent_;
+};
+
 #endif  // SPLUGINUITESTACTIONS_H

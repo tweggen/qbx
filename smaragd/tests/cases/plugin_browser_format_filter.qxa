@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE PLUGIN BROWSER'S FORMAT FILTER (QBX-78).
+
+  One product is legitimately installed in several formats — that is why the
+  browser is a tree with a Format column and why a selection resolves by
+  (format, uid) rather than by name (proposal 08 M2). A user who has decided
+  which format they work in had no way to say so: this case gates the combo
+  that lets them, and the fact that the choice is REMEMBERED.
+
+  WHY THE PLUGIN LIST IS SUPPLIED HERE. `assert-plugin-browser` normally reads
+  the real registry, which holds what is INSTALLED ON THE MACHINE: four plugins
+  in two formats on one dev box, the two linked-in `tw` built-ins alone on a CI
+  runner, and whatever a developer has in ~/.vst3 anywhere else. A format
+  filter cannot be distinguished from a no-op unless at least two formats are
+  present, so every claim below would be vacuous on the runner that matters.
+  `plugins=` hands the dialog a literal list instead, replacing its one
+  registry read and nothing else. Phase 0 is the one assertion made over the
+  REAL registry, and it is deliberately weak: the two built-ins are the only
+  plugins every build is guaranteed to have.
+
+  THE LIST. Five plugins over four formats, chosen so that no two claims below
+  can be satisfied by the same wrong answer:
+
+    Mangrove   clap  Nassau            2/2  effect      <- same product,
+    Mangrove   vst3  Nassau            2/2  effect      <- twice
+    Dexed      vst3  DigitalSuburban   0/2  INSTRUMENT
+    Castello   au    Luciano           2/2  effect
+    Looper     tw    Nassau            2/2  effect
+
+  `vst3` holds two rows of which exactly one is an instrument, so the Format
+  and Kind filters compose over a list where neither one alone gives the
+  answer; `clap` and `au` hold one row each; and the two Mangroves differ ONLY
+  in format, which is the duplicate the ticket is about.
+
+  WHAT PHASE 5 QUIETLY ALSO GATES. `plugins=` is applied to a dialog that has
+  already been built, so every dialog here populates TWICE: once over the real
+  registry, and once over the list. In phase 5 the stored format is `au`, which
+  the real registry does not have — so the first populate cannot restore it and
+  falls back to All, and the second one, where `au` exists, has to RECOVER it.
+  That is exactly the shape of the browser being opened while the startup scan
+  is still running (the registry holds the two built-ins alone, and the scan
+  finishes underneath the open dialog), which no case can produce directly:
+  a .qxa cannot make a background scan finish mid-dialog. Measured: a build
+  whose rebuild keeps the COMBO's value instead of the one the user asked for
+  passes every other phase here and fails this one with `format=` where
+  `format=au` was expected.
+-->
+<SActionScript version="1" name="plugin_browser_format_filter">
+
+  <!-- KEY OWNERSHIP. This case OWNS `plugins/browserFormat`, and it is
+       RUN_SERIAL for that reason alone (smaragd/CMakeLists.txt): selecting a
+       format in the real browser persists the choice into the developer's own
+       smaragd.ini. No other case may read or write that key.
+
+       The restore is NOT in this file. `plugins/browserFormat` is a preference
+       a developer may have set for themselves rather than a fixture key, and
+       settings-remove's header forbids a case removing a key it does not own —
+       so `assert-plugin-browser` saves the value and puts it back on every
+       path out of its own apply(), including the early return a failed
+       assertion takes. Measured both ways on this box: after a passing run
+       and after a run whose phase 5 was made to fail, smaragd.ini came back
+       byte-identical (md5 feec6e73…, and the key absent before and after). -->
+
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- PHASE 0 — the combo is built from the REGISTRY, not from a table of
+         formats this build knows how to host. Over the real registry the only
+         guarantee is the in-house format: the pass-through and the native 303
+         are linked in and present in every build and every worktree. If the
+         combo were populated from a fixed list, `tw` would be there whether or
+         not anything carried it, so this is paired with phase 1, where a list
+         WITHOUT `tw` must not offer it. -->
+    <assert-plugin-browser contains="formats=" absent="formats=|"/>
+
+    <!-- PHASE 1 — every format in the list is offered, sorted, and nothing
+         else is. `absent` is the half that bites a fixed table: this list has
+         no `lv2` and no `tw`. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx"
+        contains="formats=au,clap,vst3|format=|kind=all|filter=|rows=4|visible=4|visibleFormats=au,clap,vst3|status=4 plugin(s)"
+        absent="tw"/>
+
+    <!-- PHASE 2 — choosing a format hides the other formats and keeps its own
+         rows. Two of the five, and the status line says so: a filter that hid
+         everything and one that hid nothing would both fail here, and they
+         fail in opposite directions. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="vst3"
+        contains="format=vst3|kind=all|filter=|rows=5|visible=2|visibleFormats=vst3|status=2 of 5 plugin(s)"/>
+
+    <!-- PHASE 3 — the Format and Kind filters COMPOSE. `vst3` alone gives two
+         rows (phase 2) and `instruments` alone gives one row of a different
+         format, so only a build that applies both lands on Dexed. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="vst3" kind="instruments"
+        contains="format=vst3|kind=instruments|filter=|rows=5|visible=1|visibleFormats=vst3"/>
+
+    <!-- PHASE 4 — ...and so do the Format filter and the typed Filter box,
+         which is the pair that reaches the same product in two formats: the
+         text matches both Mangroves and the format picks one of them. The
+         text goes through the REAL QLineEdit, so this is the production
+         textChanged path and not a second reading of what a filter means. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="clap" filter="mangrove"
+        contains="format=clap|kind=all|filter=mangrove|rows=5|visible=1|visibleFormats=clap|status=1 of 5 plugin(s)"/>
+
+    <!-- PHASE 5 — THE CHOICE IS REMEMBERED. The first dialog is told `au`,
+         which persists it; a SECOND dialog is then built from the same list and
+         told nothing, and it must open on `au` by itself. `stored=` reads the
+         settings key the dialog writes, which no describe() line can show.
+
+         A note on hermeticity: SOpt::PluginBrowserFormat is a real user
+         preference and not a fixture key, so the verb saves and restores it
+         around its own work. That is why the round trip happens INSIDE one
+         verb rather than across two of them, and why this case can run without
+         leaving a developer's browser filtered to something they never chose. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="au" reopen="1" stored="au"
+        contains="format=au|kind=all|filter=|rows=5|visible=1|visibleFormats=au|status=1 of 5 plugin(s)"/>
+
+    <!-- PHASE 6 — A STORED FORMAT THIS MACHINE HAS NOTHING IN SHOWS ALL, AND
+         IS NOT OVERWRITTEN. The first dialog stores `au`; the reopened one is
+         built from a list with no AU in it — the Linux and Windows case for a
+         preference carried over from a Mac. It must open on All rather than on
+         an empty list, must not offer `au` at all, and must leave the stored
+         value alone so the machine that does have AU still honours it.
+
+         The last of those three is what `stored="au"` asserts, and it is the
+         one a reasonable implementation gets wrong: restoring the preference
+         through the combo would write back whatever the combo fell back to. -->
+    <assert-plugin-browser
+        plugins="Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="au" reopen="1"
+        reopenPlugins="Mangrove:clap:Nassau:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        stored="au"
+        contains="formats=clap,tw|format=|kind=all|filter=|rows=2|visible=2|visibleFormats=clap,tw|status=2 plugin(s)"
+        absent="au"/>
+
+    <!-- PHASE 7 — and the entry is not there to be chosen in the first place.
+         `expectSelect="0"` says selecting `vst3` must FAIL over a list that has
+         none: the combo offers what exists, so there is no way to ask for an
+         empty browser. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="vst3" expectSelect="0"
+        contains="formats=clap,tw|format=|kind=all|filter=|rows=2|visible=2|visibleFormats=clap,tw"/>
+
+    <!-- PHASE 8 — All comes back, over the list that carries every format, and
+         restores every row. The explicit `all` is also the gesture a user makes
+         to undo a filter, and it must persist as EMPTY rather than as the word. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
+        format="all" reopen="1" stored="all"
+        contains="format=|kind=all|filter=|rows=5|visible=5|visibleFormats=au,clap,tw,vst3|status=5 plugin(s)"/>
+  </actions>
+
+  <assertions>
+    <!-- Nothing here touches the project: the browser is a dialog over the
+         plugin registry. Kept for the same reason media_options_page keeps it,
+         as the floor assertion that the run reached the end. -->
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>
