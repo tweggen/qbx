@@ -621,6 +621,13 @@ const Fixture kFixtures[] = {
       " kind='effects' filter='mang' format='clap' expectSelect='1'"
       " reopen='1' reopenPlugins='Looper:tw:Nassau:2/2:fx' stored='clap'"
       " contains='format=clap' absent='vst3'/>" },
+    // plugin-row-command (QBX-201). `trackPath` is written only when set, so
+    // the fixture names it; the rest round-trip from their defaults, and the
+    // row gives every one a NON-default value so an unread attribute cannot
+    // hide behind the default it was compared against.
+    { "plugin-row-command",
+      "<plugin-row-command trackPath='0,1' trackIndex='2' slotIndex='1'"
+      " command='remove' gesture='double-click' compact='0' expect='0'/>" },
     // --- the media-browser verbs (proposal 38 gate 2) -----------------------
     // Two of the six REJECT a default element on purpose (a path verb with
     // neither a path nor an expand, and a drag naming neither a row nor a
@@ -1007,6 +1014,10 @@ const LaneRow kLaneRows[] = {
     { "plugin-native-editor",  Accept, "a master insert has an editor like any other" },
     { "plugin-generic-editor", Accept, "a master insert has an editor like any other" },
     { "plugin-editor-set-param", Accept, "a master insert has an editor like any other" },
+    // QBX-201. The row's menu is the insert chain's UI, and the master chain
+    // is editable (M3) -- the same answer remove-plugin and set-plugin-bypass
+    // already give, which is what this verb's items submit.
+    { "plugin-row-command",    Accept, "the master chain is editable (M3)" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
     { "remove-automation-lane", Accept, "the inverse of the above" },
     { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },
