@@ -5,9 +5,9 @@
 #include <QFont>
 
 /**
- * THE TWO NAMED UI FONTS (QBX-102). Every widget that is meant to share one of
- * these asks for it here, so the "same size as" requirement is one spelling
- * rather than a set of point sizes that happen to agree.
+ * THE NAMED UI FONTS (QBX-102, QBX-201). Every widget that is meant to share
+ * one of these asks for it here, so the "same size as" requirement is one
+ * spelling rather than a set of point sizes that happen to agree.
  *
  * SMALL FONT: the font the arranger TRACK HEAD draws a track's name in -- the
  * application font at 9 pt. It was a local `QFont smallFont` in
@@ -40,6 +40,18 @@
  * is why every gate over these fonts also asserts Qt::WA_SetFont: equality
  * alone passes with the setFont() call deleted.
  *
+ * DENSE FONT: ONE STEP SMALLER THAN THE TREE FONT, for a label inside a list
+ * that is already at the tree size (QBX-201: the plugin NAME on an insert row
+ * in a 60-96 px mixer column). It is DERIVED from treeFont() rather than
+ * given an absolute size, and that is the whole point: the request is
+ * "smaller than the row it sits in", which an absolute 8 pt would get WRONG
+ * on any platform whose dock-title font is smaller than 9 pt -- there it
+ * would be LARGER than the row. A derivation is smaller everywhere, which is
+ * what can be asserted (`nameSmaller=1` in
+ * `SPluginEffectStrip::describeSlot()`) without naming a platform's number.
+ * DENSE_MIN_POINT_SIZE is the floor, because a theme is free to hand us a
+ * font so small that one step less is unreadable or zero.
+ *
  * WHERE THIS LIVES. app/model is the lowest app layer and the only one
  * app/timeline, app/mixerui, app/pluginui and app/mediabrowser can all see --
  * the sdefaultreset.h / sclipcolors.h argument. It reaches nothing in the
@@ -61,6 +73,24 @@ inline QFont smallFont()
 inline QFont treeFont()
 {
     return QApplication::font( "QDockWidgetTitle" );
+}
+
+/// The floor under denseFont(): a step smaller than the tree font, but never
+/// smaller than this.
+inline constexpr int DENSE_MIN_POINT_SIZE = 7;
+
+inline QFont denseFont()
+{
+    QFont f = treeFont();
+    // A QFont carries EITHER a point size or a pixel size; the other reads
+    // -1. A theme that states its font in pixels (Qt stylesheets do) would
+    // leave pointSize() at -1, and setPointSize( -2 ) is a warning and a
+    // no-op, so the pixel branch is not defensive padding.
+    if( f.pointSize() > 0 )
+        f.setPointSize( qMax( DENSE_MIN_POINT_SIZE, f.pointSize() - 1 ) );
+    else if( f.pixelSize() > 0 )
+        f.setPixelSize( qMax( DENSE_MIN_POINT_SIZE, f.pixelSize() - 1 ) );
+    return f;
 }
 
 }  // namespace suifonts

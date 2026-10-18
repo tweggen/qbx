@@ -17,6 +17,7 @@
 #include "app/objects/track/sreorderpluginaction.h"
 #include "app/objects/track/ssetpluginbypassaction.h"
 #include "tw/core/twlog.h"
+#include <QCoreApplication>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QCheckBox>
@@ -26,8 +27,11 @@
 #include <QLabel>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QMenu>
 #include <QMimeData>
+#include <QContextMenuEvent>
 #include <QCursor>
+#include <QMouseEvent>
 #include <QTimer>
 
 namespace {
@@ -117,6 +121,52 @@ QHash<SPluginSlot *, QPointer<QDialog> > &genericEditorRegistry()
 {
     static QHash<SPluginSlot *, QPointer<QDialog> > r;
     return r;
+}
+
+// Is `a` strictly smaller than `b`? THE REQUIREMENT, not a point size: see
+// suifonts::denseFont() for why an absolute number cannot be asserted off one
+// platform. A QFont carries either a point size or a pixel size and reads -1
+// for the other, so the comparison is only meaningful between two fonts that
+// state the same one -- which they do here, because denseFont() derives
+// whichever treeFont() carries.
+bool sIsSmallerFont( const QFont &a, const QFont &b )
+{
+    if( a.pointSizeF() > 0 && b.pointSizeF() > 0 )
+        return a.pointSizeF() < b.pointSizeF();
+    if( a.pixelSize() > 0 && b.pixelSize() > 0 )
+        return a.pixelSize() < b.pixelSize();
+    return false;
+}
+
+// Which line of `box` holds `w`: its own index when the widget is a direct
+// item, the index of the sub-layout that holds it otherwise, or -1.
+int sLineOf( QBoxLayout *box, QWidget *w )
+{
+    if( !box || !w ) return -1;
+    for( int i = 0; i < box->count(); ++i ) {
+        QLayoutItem *it = box->itemAt( i );
+        if( !it ) continue;
+        if( it->widget() == w ) return i;
+        if( QLayout *sub = it->layout() ) {
+            for( int j = 0; j < sub->count(); ++j )
+                if( QLayoutItem *s = sub->itemAt( j ) )
+                    if( s->widget() == w ) return i;
+        }
+    }
+    return -1;
+}
+
+// Does `below` sit on a LATER line of a VERTICAL row layout than `above`?
+// Read from the layout rather than from geometry on purpose: a widget built
+// off screen is never mapped, so its children's rectangles are whatever the
+// last layout pass left -- a geometry answer can be true of a layout that
+// never ran, and this one cannot.
+bool sIsOnALaterLine( QBoxLayout *box, QWidget *above, QWidget *below )
+{
+    if( !box || box->direction() != QBoxLayout::TopToBottom ) return false;
+    const int a = sLineOf( box, above );
+    const int b = sLineOf( box, below );
+    return a >= 0 && b > a;
 }
 
 }  // namespace
@@ -295,8 +345,26 @@ void SPluginEffectStrip::rebuildUI()
         // drop anyway - better not to offer the grab.
         container->setCursor(isInstrumentRow ? Qt::ArrowCursor : Qt::OpenHandCursor);
         container->setAcceptDrops(true);
-        QHBoxLayout *rowLayout = new QHBoxLayout(container);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
+
+        // THE ROW STACKS IN COMPACT MODE (QBX-201), and keeps its single line
+        // in the Track Detail dock. `controls` is where everything but the
+        // name goes in both shapes; `outer` is the row's own layout and is
+        // the one `bypassBelowName` is read from.
+        QBoxLayout  *outer    = nullptr;
+        QHBoxLayout *controls = nullptr;
+        if (compact_) {
+            QVBoxLayout *stack = new QVBoxLayout(container);
+            stack->setContentsMargins(0, 0, 0, 0);
+            stack->setSpacing(1);
+            controls = new QHBoxLayout();
+            controls->setContentsMargins(0, 0, 0, 0);
+            outer = stack;
+        } else {
+            controls = new QHBoxLayout(container);
+            controls->setContentsMargins(0, 0, 0, 0);
+            outer = controls;
+        }
+        QHBoxLayout *rowLayout = controls;
 
         // Plugin name — the STORED one, so a missing plugin is identifiable.
         QString labelText = storedName(slot);
@@ -315,7 +383,27 @@ void SPluginEffectStrip::rebuildUI()
             nameLabel->setEnabled(false);
             nameLabel->setStyleSheet("QLabel { color: #888888; border: none; }");
         }
-        rowLayout->addWidget(nameLabel);
+        if (compact_) {
+            // ONE STEP SMALLER THAN THE ROW (QBX-201). The strip's own font is
+            // the tree font (QBX-115) and the request is for the NAME to be
+            // smaller than that inside a mixer column; suifonts::denseFont()
+            // derives it rather than naming a size, so it is smaller on every
+            // platform and not only on this box.
+            nameLabel->setFont(suifonts::denseFont());
+            // ...AND IT MUST BE ABLE TO SHRINK. A QLabel's minimum width is
+            // its FULL TEXT -- the measurement that cost proposal 48 AC1.7
+            // four times over (SMixerStrip's own name label, the QScrollArea
+            // floor, the two Add buttons) -- and a plugin name is longer than
+            // a 60 px column. Ignored tells qSmartMinSize() to leave the hint
+            // out of the minimum, so a long name is clipped and the COLUMN
+            // keeps its width; the full name is in the row's tooltip, which
+            // is where SMixerStrip puts an elided track name too.
+            nameLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            outer->addWidget(nameLabel);
+            outer->addLayout(controls);
+        } else {
+            rowLayout->addWidget(nameLabel);
+        }
 
         // THE LATENCY BADGE (proposal 21 L5). Shown only when the plugin
         // reports one, so a chain of ordinary effects is unchanged on screen;
@@ -348,10 +436,16 @@ void SPluginEffectStrip::rebuildUI()
         // Bypass checkbox. Disabled on a non-Active slot: the placeholder is
         // already transparent, so the control would promise something it cannot
         // do. The stored flag is untouched and re-serialized as it was.
-        QCheckBox *bypassCheckbox = new QCheckBox("Bypass");
+        // THE CHECKMARK ALONE IN COMPACT MODE (QBX-201): the word "Bypass"
+        // costs about as much width as a whole mixer column, and on the line
+        // under the name there is nothing for it to disambiguate. Its own
+        // tooltip says what it is, because the ROW's tooltip (the plugin's
+        // identity and channel mapping) does not.
+        QCheckBox *bypassCheckbox =
+            new QCheckBox(compact_ ? QString() : tr("Bypass"));
         bypassCheckbox->setChecked(slot->getBypass());
         bypassCheckbox->setEnabled(active);
-        bypassCheckbox->setToolTip(tooltip);
+        bypassCheckbox->setToolTip(compact_ ? tr("Bypass this plugin") : tooltip);
         rowLayout->addWidget(bypassCheckbox);
 
         // Edit (parameters). Double-clicking the row does the same thing; the
@@ -392,6 +486,10 @@ void SPluginEffectStrip::rebuildUI()
         removeBtn->setVisible( !compact_ );   // D5a: on the row's context menu
         rowLayout->addWidget(removeBtn);
 
+        // Left-align the controls line under the name rather than letting the
+        // hidden Edit/Reload/Remove buttons decide where the checkmark sits.
+        if (compact_) rowLayout->addStretch();
+
         pluginsLayout_->addWidget(container);
 
         // Store widget pointers with index
@@ -405,6 +503,7 @@ void SPluginEffectStrip::rebuildUI()
         pw.removeBtn = removeBtn;
         pw.container = container;
         pw.tooltip = tooltip;
+        pw.rowLayout = outer;
         pluginWidgets_.push_back(pw);
 
         // Connect signals
@@ -528,7 +627,19 @@ QString SPluginEffectStrip::describeSlot(int slotIndex) const
         // would break assertions about something else entirely. Model state,
         // like latency= and unlike every field before it - the flag lives in
         // the project and the row does not draw it.
-        + QStringLiteral("|editorOpen=%1").arg(pw.slot->getEditorOpen() ? 1 : 0);
+        + QStringLiteral("|editorOpen=%1").arg(pw.slot->getEditorOpen() ? 1 : 0)
+        // APPENDED AFTER editorOpen=, for the third time and the same reason
+        // (QBX-201): every field above is asserted as part of a contiguous
+        // span by a case that is about something else.
+        + QStringLiteral("|compact=%1|nameSmaller=%2|nameFontSet=%3"
+                         "|bypassBelowName=%4|bypassText=%5|menu=%6")
+              .arg(compact_ ? 1 : 0)
+              .arg(sIsSmallerFont(pw.nameLabel->font(), font()) ? 1 : 0)
+              .arg(pw.nameLabel->testAttribute(Qt::WA_SetFont) ? 1 : 0)
+              .arg(sIsOnALaterLine(pw.rowLayout, pw.nameLabel,
+                                   pw.bypassCheckbox) ? 1 : 0)
+              .arg(pw.bypassCheckbox->text())
+              .arg(describeRowMenu(slotIndex));
 }
 
 // THE CHAIN TOTAL (proposal 21 L5). A plain sum: every insert is in series, so
@@ -571,6 +682,191 @@ bool SPluginEffectStrip::eventFilter(QObject *watched, QEvent *event)
         }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+// --- the row's own context menu (QBX-201) ------------------------------------
+
+int SPluginEffectStrip::rowIndexAt( const QPoint &pos ) const
+{
+    // childAt() answers with the DEEPEST child under the point -- the name
+    // label, the checkbox, one of the buttons -- so the hit has to be walked
+    // back up to the row it belongs to, exactly as dropEvent() does.
+    QWidget *hit = childAt( pos );
+    if( !hit ) return -1;
+    for( size_t i = 0; i < pluginWidgets_.size(); ++i ) {
+        QWidget *c = pluginWidgets_[ i ].container;
+        if( c == hit || c->isAncestorOf( hit ) ) return (int) i;
+    }
+    return -1;
+}
+
+void SPluginEffectStrip::buildRowMenu_( int slotIndex, QMenu &menu ) const
+{
+    if( slotIndex < 0 || slotIndex >= (int) pluginWidgets_.size() ) return;
+    const PluginWidget &pw = pluginWidgets_[ slotIndex ];
+    if( !pw.slot ) return;
+
+    const bool active = ( pw.slot->getSlotState() == audio::twPluginSlotState::Active );
+
+    // ENABLEMENT IS THE ROW'S OWN, read off the widgets rather than
+    // re-derived from the model: the row already decided what a Missing slot
+    // may offer (CONTRACT inv. 4), and a second derivation here could come to
+    // a different answer than the checkbox beside it.
+    QAction *edit = menu.addAction( tr( "Edit..." ) );
+    edit->setObjectName( QStringLiteral( "edit" ) );
+    edit->setEnabled( pw.editBtn && pw.editBtn->isEnabled() );
+
+    QAction *bypass = menu.addAction( tr( "Bypass" ) );
+    bypass->setObjectName( QStringLiteral( "bypass" ) );
+    bypass->setCheckable( true );
+    bypass->setChecked( pw.slot->getBypass() );
+    bypass->setEnabled( pw.bypassCheckbox && pw.bypassCheckbox->isEnabled() );
+
+    // Only where it means something, exactly as the BUTTON is only built on a
+    // non-Active row.
+    if( !active ) {
+        QAction *reload = menu.addAction( tr( "Reload" ) );
+        reload->setObjectName( QStringLiteral( "reload" ) );
+        reload->setEnabled( true );
+    }
+
+    menu.addSeparator();
+    QAction *remove = menu.addAction( tr( "Remove" ) );
+    remove->setObjectName( QStringLiteral( "remove" ) );
+    remove->setEnabled( true );
+}
+
+QString SPluginEffectStrip::describeRowMenu( int slotIndex ) const
+{
+    // Parentless and never shown. A parentless widget that is SHOWN becomes a
+    // top-level window for that instant (QBX-117); this one is built, read and
+    // destroyed, so `strayWindows` stays at 0.
+    QMenu menu;
+    buildRowMenu_( slotIndex, menu );
+    QStringList out;
+    for( QAction *a : menu.actions() ) {
+        if( a->isSeparator() ) continue;
+        out << QStringLiteral( "%1=%2%3" )
+                   .arg( a->objectName() )
+                   .arg( a->isEnabled() ? 1 : 0 )
+                   .arg( a->isChecked() ? QStringLiteral( "*" ) : QString() );
+    }
+    return out.join( QLatin1Char( ',' ) );
+}
+
+void SPluginEffectStrip::connectRowMenu_( int slotIndex, QMenu &menu )
+{
+    // The ITEM calls runRowCommand(), and that is all it calls.
+    for( QAction *a : menu.actions() ) {
+        if( a->isSeparator() ) continue;
+        const QString cmd = a->objectName();
+        connect( a, &QAction::triggered, this,
+                 [this, slotIndex, cmd]{ runRowCommand( slotIndex, cmd ); } );
+    }
+}
+
+bool SPluginEffectStrip::triggerRowMenuItem( int slotIndex, const QString &command )
+{
+    if( slotIndex < 0 || slotIndex >= (int) pluginWidgets_.size() ) return false;
+    // Parentless and never shown, like describeRowMenu()'s: built, triggered
+    // and destroyed.
+    QMenu menu;
+    buildRowMenu_( slotIndex, menu );
+    connectRowMenu_( slotIndex, menu );
+    for( QAction *a : menu.actions() ) {
+        if( a->isSeparator() || a->objectName() != command ) continue;
+        // A GREYED ITEM IS NOT CLICKABLE, but QAction::trigger() does not
+        // know that -- it emits whatever its enabled state. Refusing here is
+        // what makes `expect="0"` mean "the user could not have done this".
+        if( !a->isEnabled() ) return false;
+        a->trigger();
+        return true;
+    }
+    return false;   // the menu does not offer it at all
+}
+
+void SPluginEffectStrip::contextMenuEvent( QContextMenuEvent *ev )
+{
+    const int row = rowIndexAt( ev->pos() );
+    if( row < 0 ) {
+        // NOT OURS, so it is not accepted: Qt then carries it on up to the
+        // mount, which is what keeps the mixer strip's track menu reachable
+        // from the strip's empty space and from the Add buttons.
+        ev->ignore();
+        return;
+    }
+
+    QMenu menu( this );
+    buildRowMenu_( row, menu );
+    connectRowMenu_( row, menu );
+    menu.exec( ev->globalPos() );
+    // ACCEPTED even when the user dismissed the menu: the gesture was handled
+    // here, and letting it propagate would pop the mount's own menu straight
+    // afterwards -- in the mixer that is the TRACK menu, whose first item is
+    // "Remove track", over a right-click aimed at a plugin.
+    ev->accept();
+}
+
+bool SPluginEffectStrip::runRowCommand( int slotIndex, const QString &command )
+{
+    if( slotIndex < 0 || slotIndex >= (int) pluginWidgets_.size() ) return false;
+    const PluginWidget &pw = pluginWidgets_[ slotIndex ];
+    if( !pw.slot ) return false;
+    const bool active = ( pw.slot->getSlotState() == audio::twPluginSlotState::Active );
+
+    if( command == QLatin1String( "edit" ) ) {
+        if( !pw.editBtn || !pw.editBtn->isEnabled() ) return false;
+        openParamEditor( slotIndex );
+        return true;
+    }
+    if( command == QLatin1String( "bypass" ) ) {
+        if( !pw.bypassCheckbox || !pw.bypassCheckbox->isEnabled() ) return false;
+        // CLICK THE REAL CHECKBOX rather than submitting the action again:
+        // the item then takes the control's own path through
+        // onPluginBypassToggled(), so a connect() lost there fails this too,
+        // and the box the user can see cannot disagree with the menu.
+        pw.bypassCheckbox->click();
+        return true;
+    }
+    if( command == QLatin1String( "reload" ) ) {
+        if( active ) return false;   // nothing to re-resolve
+        onReloadPluginClicked( slotIndex );
+        return true;
+    }
+    if( command == QLatin1String( "remove" ) ) {
+        // In EVERY state: remove-plugin is Missing-tolerant, and a slot one
+        // cannot delete is the complaint CONTRACT inv. 8 was filed under.
+        onRemovePluginClicked( slotIndex );
+        return true;
+    }
+    TW_LOGW( "pluginui",
+             "[fx strip] unknown row command '%s' (edit|bypass|reload|remove)",
+             command.toUtf8().constData() );
+    return false;
+}
+
+bool SPluginEffectStrip::driveRowDoubleClick( int slotIndex )
+{
+    if( slotIndex < 0 || slotIndex >= (int) pluginWidgets_.size() ) return false;
+    QWidget *c = pluginWidgets_[ slotIndex ].container;
+    if( !c ) return false;
+    // A REAL event to the REAL container, so this strip's own event filter is
+    // what dispatches it. Nothing is asserted around the filter: remove the
+    // installEventFilter() call and this stops opening anything.
+    QMouseEvent ev( QEvent::MouseButtonDblClick, QPointF( 1, 1 ),
+                    c->mapToGlobal( QPointF( 1, 1 ) ),
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier );
+    QCoreApplication::sendEvent( c, &ev );
+    return true;
+}
+
+int SPluginEffectStrip::rowMinimumWidth( int slotIndex ) const
+{
+    if( slotIndex < 0 || slotIndex >= (int) pluginWidgets_.size() ) return -1;
+    QWidget *c = pluginWidgets_[ slotIndex ].container;
+    // minimumSizeHint() is the LAYOUT's answer and needs no mapped widget:
+    // QWidget::minimumSizeHint() returns layout()->totalMinimumSize().
+    return c ? c->minimumSizeHint().width() : -1;
 }
 
 SPluginParamEditor *SPluginEffectStrip::ensureParamEditor(int slotIndex,
@@ -665,6 +961,14 @@ void SPluginEffectStrip::closeGenericEditorFor(SPluginSlot *slot)
 
 void SPluginEffectStrip::openParamEditor(int slotIndex)
 {
+    // NOTHING IS PUT ON SCREEN UNDER --test-case, and the editor is still
+    // built and attached. See the header: a qxa run uses the REAL platform
+    // plugin, so a shown editor would appear on the developer's desktop
+    // mid-suite — the rule SPluginNativeEditor::restoreOpenEditors() already
+    // follows, and what lets a case drive the real double-click and the real
+    // menu item instead of asserting around them.
+    const bool showWindow = !SApplication::app().isTestCaseMode();
+
     // THE FALLBACK CHAIN (proposal 33, decision D3). A plugin with its own GUI
     // opens that and ONLY that: the slider list is not reachable alongside it,
     // which is why every native edit has to be undoable (M5) before this branch
@@ -676,12 +980,12 @@ void SPluginEffectStrip::openParamEditor(int slotIndex)
             // The TRACK and the SLOT, not a path and an index: the window
             // outlives this strip and derives its own address at every commit
             // (see SPluginNativeEditor::openFor).
-            if( SPluginNativeEditor::openFor( track_, slot, this ) )
+            if( SPluginNativeEditor::openFor( track_, slot, this, showWindow ) )
                 return;
         }
     }
 
-    ensureParamEditor(slotIndex, /*showWindow=*/true);
+    ensureParamEditor(slotIndex, showWindow);
 }
 
 QString SPluginEffectStrip::editorKindFor( int slotIndex )

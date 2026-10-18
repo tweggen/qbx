@@ -619,16 +619,23 @@ And it SWALLOWS the event. On a QSlider the second press would otherwise start
 another drag or jump the handle to the click position, moving the control off
 the default it was just asked for.
 
-### `suifonts` — the two NAMED UI fonts (QBX-102)
+### `suifonts` — the NAMED UI fonts (QBX-102, QBX-115, QBX-201)
 
-`app/model/suifonts.h` spells the only two UI fonts that other widgets are
-required to MATCH, so "the same size as" is one function rather than two
+`app/model/suifonts.h` spells the only UI fonts that other widgets are
+required to MATCH, so "the same size as" is one function rather than a set of
 point sizes that happen to agree:
 
 | Font | Is | Used by |
 |---|---|---|
-| `smallFont()` | the application font at `SMALL_POINT_SIZE` (9 pt) — the arranger track head's NAME font | the track head's name and volume labels, `SMixerStrip` (set on the whole strip before its children exist), `SPluginEffectStrip` (both mounts) |
-| `treeFont()` | `QApplication::font("QDockWidgetTitle")` — the font `QDockWidget` draws its TITLE in (its own `init()` sets the title font from that class key) | `SExternFileList`, the media browser's tree |
+| `smallFont()` | the application font at `SMALL_POINT_SIZE` (9 pt) — the arranger track head's NAME font | the track head's name and volume labels |
+| `treeFont()` | `QApplication::font("QDockWidgetTitle")` — the font `QDockWidget` draws its TITLE in (its own `init()` sets the title font from that class key) | `SExternFileList`, the media browser's tree, `SMixerStrip` (set on the whole strip before its children exist) and `SPluginEffectStrip` (both mounts) — **both moved here from `smallFont()` by QBX-115**, which asked for the mixer to be DENSE rather than to agree with the track head |
+| `denseFont()` | `treeFont()` one point SMALLER, floored at `DENSE_MIN_POINT_SIZE` (7 pt) | the plugin NAME on a `SPluginEffectStrip` row in COMPACT mode (QBX-201) |
+
+`denseFont()` is a DERIVATION and not a third absolute size, which is the
+whole of why it can be asserted: the requirement is "smaller than the row it
+sits in", and an absolute 8 pt would be LARGER than the row on a platform whose
+dock-title font is smaller than that. `describeSlot()` reports the relation
+(`nameSmaller=1`), never a number.
 
 The tree font is the PLATFORM THEME's: macOS supplies a smaller dock-title
 font, while Windows and Linux supply none, so there it IS the application font.

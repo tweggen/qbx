@@ -119,6 +119,11 @@ How to test:
   on Windows uses the real platform plugin) and assert the Active row, the
   greyed Missing row with its reason tooltip and Reload, the editor→action
   wiring, and reorder-plugin.
+- `qxa.mixer_insert_row_menu` — the ROW's own context menu and the COMPACT
+  row's shape (QBX-201): what the menu offers on an Active and on a Missing
+  row, every command through the item itself (including the three refusals),
+  the double-click as a real event, and the stacked row's fonts, layout and
+  width floor. Watched failing under eleven sabotages.
 - `qxa.plugin_strip_nested_track` — the strip resolves a NESTED lane's path, and
   insert/remove on it work (invariant 8). Negative-control proven: restoring the
   top-level-only scan makes it fail with `trackPath=` empty.
@@ -126,8 +131,64 @@ How to test:
   the only gate on the `STrack::adoptPluginChain()` half of invariant 6's wiring
   (a loaded chain's slots never emit `slotInserted` at anyone).
 - `qxa.render_sawtooth_with_effects` covers the hosted chain audibly.
-- Still manual: that the strip and the editor LOOK right, the double-click
-  gesture, the drag-to-reorder gesture, and the browser dialog.
+- Still manual: that the strip and the editor LOOK right, the drag-to-reorder
+  gesture, the browser dialog, and `QMenu::exec()` itself — including the one
+  claim that follows from the row menu accepting its event, that the mixer
+  strip's TRACK menu no longer answers over a plugin row. (The double-click
+  gesture came off this list with QBX-201: `plugin-row-command
+  gesture="double-click"` delivers a real event to the row's container.)
+
+**THE INSERT ROW IS WHERE A PLUGIN IS MODIFIED, AND IT MUST ANSWER IN BOTH
+MOUNTS** (QBX-201). The same `SPluginEffectStrip` is mounted in the Track
+Detail dock with its full row and in a 60-96 px MIXER column with
+`setCompact(true)`, where Edit, Reload and Remove are hidden. Compact mode's
+founding condition (proposal 48 D5a) is that nothing becomes UNREACHABLE, only
+smaller — and it was not met: there was no context menu anywhere in this
+widget, so in the mixer a plugin could not be removed at all, and a right-click
+aimed at one PROPAGATED to `SMixerStrip::contextMenuEvent`, which answered with
+the TRACK menu ("Remove track" first, under a gesture meant for a plugin).
+
+- **Every row carries its own menu**: Edit (the plugin window), Bypass
+  (checkable), Reload on a non-Active slot, Remove. It is handled on the STRIP
+  and not on each row widget, because Qt carries an unaccepted context-menu
+  event up the parent chain and translates its position as it goes — one
+  handler therefore sees a right-click on the row, its name, its checkbox and
+  its buttons alike (`rowIndexAt`). A click over NO row is left unaccepted on
+  purpose, so the mount's own menu still answers for the strip's empty space
+  and its Add buttons.
+- **The menu's items do nothing themselves.** Each is wired to
+  `runRowCommand( row, command )` and that is all it calls, which is what makes
+  a context menu gateable at all — the same seam `SMixerStrip::runMenuCommand`
+  established for the mixer strip's three track commands. `buildRowMenu_` is
+  the ONE builder behind the real menu, `describeRowMenu()` and
+  `triggerRowMenuItem()`, so what a user sees and what a case asserts cannot
+  drift apart.
+- **The menu's enablement is READ OFF THE ROW**, never re-derived: Edit and
+  Bypass follow their own button and checkbox, so the greying the user sees and
+  the refusal `runRowCommand` returns are one decision. Remove is offered in
+  EVERY state, because `remove-plugin` is Missing-tolerant and "I cannot remove
+  a plugin even if it is missing" is the complaint inv. 8 was filed under.
+- **Bypass from the menu CLICKS THE REAL CHECKBOX** rather than submitting
+  `set-plugin-bypass` a second time. The item then takes the control's own path
+  through `onPluginBypassToggled`, so a connection lost there fails the menu
+  too, and the box the user can see cannot disagree with the menu it sits under.
+- **The compact row STACKS**: the plugin name on its own line in
+  `suifonts::denseFont()` — one step smaller than the row, DERIVED rather than
+  an absolute size, because an absolute 8 pt would be LARGER than the row on a
+  platform whose dock-title font is smaller — and a small UNLABELLED bypass
+  checkmark on the line below it. The name label is also told it may be
+  squeezed (`QSizePolicy::Ignored`): a QLabel's minimum width is its FULL TEXT,
+  and a plugin name is longer than a mixer column, so without that the row
+  demands 377 px where 14 px will do and the column cannot be a column. The
+  full name stays in the row's tooltip, exactly as `SMixerStrip` keeps an
+  elided track name there.
+- **The strip SHOWS no editor under `--test-case`** (`openParamEditor`), while
+  still building and attaching it — the rule
+  `SPluginNativeEditor::restoreOpenEditors` already follows, for the same
+  reason: a qxa run uses the real platform plugin, so a shown editor would
+  appear on the developer's desktop mid-suite. That is what lets a case drive
+  the real double-click and the real menu item and then read the editor
+  registry, instead of asserting around the dispatch.
 
 Value display: `SPluginParamEditor::formatValue()` prefers the live plugin's own
 value-to-text — `livePlugin()->paramValueText(id, v)` — so a value shows in the
