@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="mixer_insert_row_menu">
+
+  <!-- MODIFYING A PLUGIN FROM THE MIXER STRIP (QBX-201).
+
+       The mixer mounts the arranger's own insert list in COMPACT mode
+       (proposal 48 D5a), where the row's Edit, Reload and Remove buttons are
+       hidden. mixer_inserts' header has said since M1 that "nothing becomes
+       unreachable, only smaller: Edit is already the row's own double-click,
+       and Reload / Remove stay on its context menu" — and the second half of
+       that sentence was simply not true. There was no context menu anywhere in
+       SPluginEffectStrip, so in the mixer a plugin could not be removed at
+       all, and a right-click aimed at one PROPAGATED to SMixerStrip, which
+       answered with the TRACK menu: "Remove track" as the first item under a
+       gesture meant for a plugin.
+
+       WHAT IS GATED HERE, and the shape of each claim:
+
+       1. The compact row's LAYOUT: the name on its own line one step smaller
+          than the row's font, the bypass box a small unlabelled checkmark on
+          the line BELOW it, and the Track Detail dock's full row unchanged.
+          Read from the LAYOUT and from the fonts, never from geometry — a
+          widget built off screen is never mapped, so a rectangle can be true
+          of a layout that never ran.
+
+       2. The row's MENU, as the one builder behind the real menu and
+          describeRowMenu() reports it: what it offers on an Active row, on a
+          Missing one, and which items are greyed.
+
+       3. Every command through the ITEM ITSELF: `plugin-row-command
+          gesture="menu"` builds the menu the right-click builds, wires it the
+          same way and triggers the named QAction, so the connection from the
+          item to SPluginEffectStrip::runRowCommand() is on the path. Both
+          REFUSALS are asserted too — Edit and Bypass on a Missing slot, and
+          Reload on an Active one — because a verb that reported success there
+          would hide the greying, and a greyed item is one a user cannot click
+          either.
+
+       4. The DOUBLE-CLICK as a real event delivered to the row's container, so
+          the strip's own event filter is what dispatches it. That retires one
+          of pluginui/CONTRACT.md's "still manual" items.
+
+       WHAT IS NOT GATED, and cannot be from here: QMenu::exec() itself, the
+       event's accept(), and therefore the one claim that follows from the
+       accept — that the mixer strip's TRACK menu no longer answers over a
+       plugin row. exec() is modal and a headless modal is a hang (no qxa case
+       may open one), so the mixer strip's own menu lives with the identical
+       limit: proposal 48 AC4.2 gates its three commands through
+       runMenuCommand() for exactly this reason. Which row a point is over
+       (rowIndexAt) is geometry, and a widget built off screen is never
+       mapped. The propagation stays a manual check.
+
+       The row-width claim (`maxRowWidth`) is the measured one. Proposal 48
+       found the FULL row's layout minimum at 113 px against a WIDE mixer strip
+       of 96, which is why compact mode exists at all; measured again here over
+       one row with this fixture's name it is 377 px full and 14 px compact.
+       The bound is 60 — SMixerStrip::NARROW_WIDTH, so the compact row fits
+       even the narrow column it is hidden in — and the headroom is
+       deliberate: a platform whose checkbox indicator is wider must not fail a
+       case that is about the stacking. What takes the row from 377 to 14 is
+       the name label's size policy: a QLabel's minimum width is its FULL TEXT,
+       and a plugin name is longer than a mixer column, so the label is told it
+       may be squeezed and the full name lives in the row's tooltip. Both
+       sabotage of that one policy takes the compact row from 14 px to 133 px,
+       well past the bound. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- ========== 1. THE COMPACT ROW'S SHAPE ========================== -->
+    <!-- The name is smaller than the row AND set explicitly: on Linux and
+         Windows no theme names a dock-title font, so treeFont() equals the
+         application font there and a font EQUALITY would pass with the
+         setFont() call deleted (QBX-102's own lesson). nameSmaller is the
+         requirement; nameFontSet is what makes it non-vacuous. -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="1" slotIndex="0"
+                         contains="compact=1|nameSmaller=1|nameFontSet=1|bypassBelowName=1"/>
+    <!-- ...and the checkmark carries no text of its own. -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="0"
+                         absent="bypassText=Bypass"/>
+    <!-- It fits a mixer column, which is the whole reason for the stacking. -->
+    <assert-plugin-strip trackIndex="0" compact="1" maxRowWidth="60"/>
+    <!-- Nothing was shown parentless while the compact row was built: the
+         stacking adds a layout, not a widget made visible before its parent
+         adopts it (QBX-117). -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="1" strayWindows="0"/>
+
+    <!-- THE TRACK DETAIL DOCK KEEPS THE FULL ROW. Same class, the other
+         mount: one line, the labelled checkbox beside the name, and the name
+         at the row's own font. If compact leaked into the dock this flips. -->
+    <assert-plugin-strip trackIndex="0" compact="0" slotIndex="0"
+                         contains="compact=0|nameSmaller=0|nameFontSet=0|bypassBelowName=0|bypassText=Bypass"/>
+
+    <!-- ========== 2. THE MENU ON AN ACTIVE ROW ======================== -->
+    <!-- In menu order, `1` enabled, `0` greyed. No `reload` at all: there is
+         nothing to re-resolve on an Active slot, and the BUTTON is not built
+         there either, so the menu and the row agree. -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="0"
+                         contains="menu=edit=1,bypass=1,remove=1"/>
+    <!-- `,reload=` and not `reload`: describeSlot's OWN older field says
+         whether a Reload BUTTON was built (`reload=0` here), so the bare word
+         appears either way. The comma is the menu list's separator, which is
+         what makes this an assertion about the menu. -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="0"
+                         absent=",reload="/>
+    <!-- ...and the same menu in the dock's mount: the commands are the row's,
+         not the mixer's. -->
+    <assert-plugin-strip trackIndex="0" compact="0" slotIndex="0"
+                         contains="menu=edit=1,bypass=1,remove=1"/>
+
+    <!-- `reload` is REFUSED on an Active row, which is the other half of it
+         not being offered. -->
+    <plugin-row-command trackIndex="0" slotIndex="0" command="reload" expect="0"/>
+
+    <!-- ========== 3. BYPASS FROM THE MENU ITEM ======================== -->
+    <!-- The item clicks the row's REAL checkbox, so this goes through
+         onPluginBypassToggled() and therefore through set-plugin-bypass
+         (pluginui/CONTRACT.md inv. 3). The UNDO is what proves it was an
+         action and not a direct slot poke — a poke would leave nothing to
+         undo and the count below would fail. -->
+    <plugin-row-command trackIndex="0" slotIndex="0" command="bypass"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="0"
+                         contains="bypass=1"/>
+    <!-- The menu now shows the state it is about, checked. -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="0"
+                         contains="menu=edit=1,bypass=1*,remove=1"/>
+
+    <undo count="1"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="0"
+                         contains="bypass=0"/>
+
+    <!-- ========== 4. EDIT FROM THE MENU ITEM ========================== -->
+    <!-- The fixture has no clap.gui, so the plugin window for this slot is the
+         generic slider list (proposal 33 D3's fallback, gated as a DECISION by
+         plugin_ui_strip_and_editor). Nothing is put on screen: in
+         test-case mode openParamEditor() builds and attaches the editor without
+         showing it, which is what makes the registry readable here. -->
+    <assert-plugin-editor-kind trackIndex="0" slotIndex="0" expect="generic"/>
+    <plugin-generic-editor trackIndex="0" slotIndex="0" action="assert" expectOpen="0"/>
+
+    <plugin-row-command trackIndex="0" slotIndex="0" command="edit"/>
+    <plugin-generic-editor trackIndex="0" slotIndex="0" action="assert" expectOpen="1"/>
+    <plugin-generic-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+
+    <!-- ...and the DOUBLE-CLICK on the row does the same thing, as a real
+         MouseButtonDblClick delivered to the row's container. Remove the
+         installEventFilter() call and this stops opening anything. -->
+    <plugin-row-command trackIndex="0" slotIndex="0" gesture="double-click"/>
+    <plugin-generic-editor trackIndex="0" slotIndex="0" action="assert" expectOpen="1"/>
+    <plugin-generic-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+
+    <!-- ========== 5. A MISSING ROW'S MENU AND ITS REFUSALS ============ -->
+    <insert-plugin trackPath="0" slotIndex="1"
+                   format="clap" uid="tw.nobody.ships.this.plugin"
+                   name="Nonexistent Reverb" vendor="Acme"
+                   path="nosuchmodule.clap" nIn="2" nOut="2"/>
+
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="2" slotIndex="1"
+                         contains="state=Missing"/>
+    <!-- Edit and Bypass are GREYED — the placeholder has no parameters and is
+         already transparent — Reload is offered, and Remove is offered in
+         every state, because remove-plugin is Missing-tolerant and "I cannot
+         remove a plugin even if it is missing" is the complaint CONTRACT
+         inv. 8 was filed under. -->
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="1"
+                         contains="menu=edit=0,bypass=0,reload=1,remove=1"/>
+
+    <plugin-row-command trackIndex="0" slotIndex="1" command="edit" expect="0"/>
+    <plugin-row-command trackIndex="0" slotIndex="1" command="bypass" expect="0"/>
+    <!-- Refused, so nothing opened and nothing was bypassed. -->
+    <plugin-generic-editor trackIndex="0" slotIndex="1" action="assert" expectOpen="0"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotIndex="1"
+                         contains="bypass=0"/>
+
+    <!-- Reload IS offered on a Missing row. It cannot succeed here (nobody
+         ships that plugin), and that is the point of the slot staying Missing
+         with its stored state chunk untouched — the command being reachable
+         is what is claimed, not that it finds anything. -->
+    <plugin-row-command trackIndex="0" slotIndex="1" command="reload" expect="1"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="2" slotIndex="1"
+                         contains="name=Nonexistent Reverb (missing)|state=Missing"/>
+
+    <!-- ========== 6. REMOVE FROM THE MENU ITEM ======================== -->
+    <!-- The headline: in the mixer's mount this is the ONLY route to it. -->
+    <plugin-row-command trackIndex="0" slotIndex="1" command="remove"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="1" slotIndex="0"
+                         contains="state=Active"/>
+
+    <!-- ...through remove-plugin, so it undoes. -->
+    <undo count="1"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="2" slotIndex="1"
+                         contains="state=Missing"/>
+
+    <!-- And the Active row can be removed too, from the same item. -->
+    <plugin-row-command trackIndex="0" slotIndex="0" command="remove"/>
+    <assert-plugin-strip trackIndex="0" compact="1" slotCount="1" slotIndex="0"
+                         contains="state=Missing"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

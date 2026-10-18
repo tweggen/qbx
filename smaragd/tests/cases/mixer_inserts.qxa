@@ -20,8 +20,16 @@
   written again and could then disagree with this one.
 
   NOTHING BECOMES UNREACHABLE in compact mode, which is the condition on the
-  whole idea: Edit is already the row's own double-click, and Reload / Remove
-  stay on its context menu.
+  whole idea: Edit is the row's own double-click, and Reload / Remove are on
+  its context menu.
+
+  THAT LAST CLAUSE WAS FALSE UNTIL QBX-201. There was no context menu anywhere
+  in SPluginEffectStrip, so in this mount Remove and Reload were unreachable
+  and a right-click over a plugin row propagated to SMixerStrip, which answered
+  with the TRACK menu. The menu, the compact row's stacked layout and every
+  command on it are gated by mixer_insert_row_menu; this case stays what it
+  was, the claim that the mixer MOUNTS the arranger's widgets and asks them for
+  compact mode.
 -->
 <SActionScript version="1" name="mixer_inserts">
   <actions>

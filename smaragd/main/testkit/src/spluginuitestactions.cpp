@@ -181,10 +181,28 @@ SApplyResult SAssertPluginStripAction::apply( SProject *project )
         return { false, nullptr };
     }
 
+    // COMPACT IS APPLIED AFTER THE BUILD, which is what the MIXER does too
+    // (SMixerStrip's ctor constructs the strip and then calls setCompact), so
+    // the rebuild this triggers is the production one.
+    if( compact_ >= 0 ) strip->setCompact( compact_ != 0 );
+
     if( slotCount_ >= 0 && strip->slotRowCount() != slotCount_ ) {
         qWarning() << "assert-plugin-strip FAILED: strip rendered"
                    << strip->slotRowCount() << "rows, expected" << slotCount_;
         return { false, nullptr };
+    }
+
+    if( maxRowWidth_ >= 0 ) {
+        for( int i = 0; i < strip->slotRowCount(); ++i ) {
+            const int w = strip->rowMinimumWidth( i );
+            if( w > maxRowWidth_ ) {
+                qWarning() << "assert-plugin-strip FAILED: row" << i
+                           << "demands a minimum width of" << w
+                           << "px, at most" << maxRowWidth_
+                           << "px fits the column";
+                return { false, nullptr };
+            }
+        }
     }
 
     if( slotIndex_ >= 0 && ( !contains_.isEmpty() || !absent_.isEmpty() ) ) {
@@ -217,6 +235,8 @@ void SAssertPluginStripAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "contains", contains_ );
     elem.setAttribute( "absent", absent_ );
     elem.setAttribute( "strayWindows", strayWindows_ );
+    elem.setAttribute( "compact", compact_ );
+    elem.setAttribute( "maxRowWidth", maxRowWidth_ );
 }
 
 bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -228,6 +248,8 @@ bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/
     contains_   = elem.attribute( "contains" );
     absent_     = elem.attribute( "absent" );
     strayWindows_ = elem.attribute( "strayWindows", "-1" ).toInt();
+    compact_      = elem.attribute( "compact", "-1" ).toInt();
+    maxRowWidth_  = elem.attribute( "maxRowWidth", "-1" ).toInt();
     return true;
 }
 
@@ -860,4 +882,99 @@ static const bool s_reg_assertpluginbrowser =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "assert-plugin-browser" ),
           [] { return new SAssertPluginBrowserAction; } ),
+      true );
+
+// --- plugin-row-command ----------------------------------------------------
+
+SApplyResult SPluginRowCommandAction::apply( SProject *project )
+{
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+                                         : trackAtPath( project, pathRoot_, trackPath_ );
+    if( !track ) {
+        qWarning() << "plugin-row-command: no track"
+                   << ( trackPath_.isEmpty() ? QString::number( trackIndex_ )
+                                             : trackPath_ );
+        return { false, nullptr };
+    }
+
+    // PARENTED TO THE REAL MAIN WINDOW, with the same caveat
+    // plugin-generic-editor's "open-via-strip" records: `edit` opens the
+    // generic editor as a child of `strip->window()`, and a PARENTLESS strip
+    // IS its own window() -- the dialog would then be a Qt child of a strip
+    // this verb is about to destroy, and the registry read that follows would
+    // report nothing open for a reason that has nothing to do with the
+    // gesture under test.
+    SMainWindow *host = mainWindowForStrip_();
+    if( !host ) {
+        qWarning() << "plugin-row-command: no main window to parent the"
+                      " throwaway strip to";
+        return { false, nullptr };
+    }
+
+    auto strip = std::make_unique<SPluginEffectStrip>( track, host );
+    // The MIXER's mount applies compact after construction; so does this.
+    strip->setCompact( compact_ != 0 );
+
+    bool ok = false;
+    if( gesture_ == QLatin1String( "double-click" ) ) {
+        ok = strip->driveRowDoubleClick( slotIndex_ );
+    } else if( gesture_ == QLatin1String( "menu" ) ) {
+        if( command_.isEmpty() ) {
+            qWarning() << "plugin-row-command: gesture=menu needs a command"
+                          " (edit|bypass|reload|remove)";
+            return { false, nullptr };
+        }
+        // Through the MENU's own item, not straight into runRowCommand():
+        // triggerRowMenuItem() builds the menu the right-click builds, wires
+        // it the same way and triggers the named item, so the QAction ->
+        // command connection is on the path too. Everything exec() adds (the
+        // modal loop, the accept) is what no headless case can reach.
+        ok = strip->triggerRowMenuItem( slotIndex_, command_ );
+    } else {
+        qWarning() << "plugin-row-command: gesture must be menu|double-click,"
+                      " got" << gesture_;
+        return { false, nullptr };
+    }
+
+    // The strip goes before the check, deliberately: everything this verb
+    // claims has to outlive it -- the model for bypass/remove/reload, the
+    // module-level editor registry for edit (CONTRACT inv. 7).
+    strip.reset();
+
+    if( ok != ( expect_ != 0 ) ) {
+        qWarning() << "plugin-row-command FAILED:" << gesture_ << command_
+                   << "on row" << slotIndex_ << "returned" << ok
+                   << "expected" << ( expect_ != 0 );
+        return { false, nullptr };
+    }
+    return { true, nullptr };   // a gesture seam has nothing of its own to undo
+}
+
+void SPluginRowCommandAction::writeXml( QDomElement &elem ) const
+{
+    if( !trackPath_.isEmpty() ) elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "trackIndex", trackIndex_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "command", command_ );
+    elem.setAttribute( "gesture", gesture_ );
+    elem.setAttribute( "compact", compact_ );
+    elem.setAttribute( "expect", expect_ );
+}
+
+bool SPluginRowCommandAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_  = elem.attribute( "trackPath" );
+    trackIndex_ = elem.attribute( "trackIndex", "0" ).toInt();
+    slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
+    command_    = elem.attribute( "command" );
+    gesture_    = elem.attribute( "gesture", "menu" );
+    compact_    = elem.attribute( "compact", "1" ).toInt();
+    expect_     = elem.attribute( "expect", "1" ).toInt();
+    return true;
+}
+
+static const bool s_reg_pluginrowcommand =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "plugin-row-command" ),
+          [] { return new SPluginRowCommandAction; } ),
       true );

@@ -43,6 +43,21 @@
 //                         the time apply() could look at the widget tree, so
 //                         this is measured with an event filter DURING the
 //                         build rather than asserted afterwards.
+//   compact     = "-1"    1 builds the strip in COMPACT mode -- the MIXER's
+//                         mount (proposal 48 D5a), where the row stacks and
+//                         the name shrinks (QBX-201). -1 (the default) leaves
+//                         it as constructed, which is the Track Detail dock's
+//                         full row, so every committed assertion still reads
+//                         the mount it was written for.
+//   maxRowWidth = "-1"    if >= 0, EVERY row's layout minimum width must be at
+//                         most this. A FLOOR-shaped claim, and the one number
+//                         that decides whether an insert list can live in a
+//                         mixer column at all: proposal 48 measured the full
+//                         row at 113 px against a WIDE strip of 96, which is
+//                         what compact mode exists for. Asserted over every
+//                         row rather than the addressed one, because a row's
+//                         width is set by its longest content and the point is
+//                         that NONE of them pushes the column open.
 class SAssertPluginStripAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "assert-plugin-strip" ); }
@@ -58,6 +73,76 @@ private:
     QString contains_;
     QString absent_;
     int     strayWindows_ = -1;
+    int     compact_      = -1;
+    int     maxRowWidth_  = -1;
+};
+
+// plugin-row-command — drive an insert ROW the way a user does (QBX-201): its
+// context-menu items, and the double-click on the row itself.
+//
+// WHY A GESTURE VERB AND NOT A MODEL ONE. Every command here already has a
+// verb that performs it directly (`remove-plugin`, `set-plugin-bypass`); what
+// those cannot say is that the MENU ITEM and the DOUBLE-CLICK reach them. The
+// menu items call SPluginEffectStrip::runRowCommand() and nothing else, and
+// `gesture="double-click"` sends a REAL MouseButtonDblClick to the row's
+// container so the strip's own event filter is what dispatches it — delete the
+// installEventFilter() call and this stops opening anything. Same discipline
+// as SMixerStrip::driveControl and SSendStrip's own verb.
+//
+// `gesture="menu"` goes through SPluginEffectStrip::triggerRowMenuItem(),
+// which builds the menu the right-click builds, WIRES IT THE SAME WAY and
+// triggers the named item. So the QAction -> command connection is on the path
+// too, and a greyed item refuses exactly as a user's click would. What stays
+// out of reach from here is QMenu::exec() and the event's accept() — a modal
+// in a headless run is a hang, which is the same limit proposal 48 AC4.2's
+// `runMenuCommand` lives with for the mixer strip's own menu.
+//
+// NOTHING IS SHOWN. `edit` opens the plugin window through the production
+// path, which puts nothing on screen under --test-case (see
+// SPluginEffectStrip::openParamEditor) while still building and attaching the
+// editor — so the proof is the editor REGISTRY, read with
+// `plugin-generic-editor action="assert"` / `plugin-native-editor
+// action="assert"` after this verb.
+//
+//   trackPath  = ""        index-path from the root mixer; empty = trackIndex
+//   trackIndex = "0"
+//   slotIndex  = "0"       which row
+//   command    = ""        `edit` | `bypass` | `reload` | `remove`. Required
+//                          for gesture="menu"; ignored for "double-click",
+//                          which has only one meaning.
+//   gesture    = "menu"    `menu` runs the item's own code path;
+//                          `double-click` delivers the real event to the row
+//   compact    = "1"       build the strip the way the MIXER mounts it, which
+//                          is where these affordances are the only ones there
+//                          are. "0" is the Track Detail dock's full row.
+//   expect     = "1"       what the seam must return: 1 = the row offered the
+//                          command, 0 = it refused. A refusal is a real claim
+//                          — `edit` and `bypass` on a Missing slot have
+//                          nothing to act on, and a verb that reported success
+//                          there would hide the greying.
+class SPluginRowCommandAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "plugin-row-command" );
+    }
+    QStringList knownAttributes() const override
+    {
+        return { "trackPath", "trackIndex", "slotIndex", "command",
+                 "gesture", "compact", "expect" };
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_;
+    int     trackIndex_ = 0;
+    int     slotIndex_  = 0;
+    QString command_;
+    QString gesture_    = QStringLiteral( "menu" );
+    int     compact_    = 1;
+    int     expect_     = 1;
 };
 
 // assert-plugin-editor-kind — WHICH editor a double-click would open for a
