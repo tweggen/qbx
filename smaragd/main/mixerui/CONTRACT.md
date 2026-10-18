@@ -107,8 +107,15 @@ other one is untouched.
 Detail dock is not.** `SPluginEffectStrip::setCompact` and
 `SSendStrip::setCompact` (proposal 48 D5a). Measured: the FX strip's two Add
 buttons alone carry a 113 px layout minimum against a 96 px wide strip.
-Nothing becomes unreachable — Edit is already the row's double-click and
-Reload / Remove stay on its context menu.
+Nothing becomes unreachable — Edit is the row's double-click and Reload /
+Remove are on its context menu. **That menu is the ROW's and it did not exist
+until QBX-201**, so until then this mount could not remove a plugin at all, and
+a right-click over a plugin row reached `SMixerStrip::contextMenuEvent` and was
+answered with the TRACK menu — "Remove track" first, under a gesture aimed at a
+plugin. `SPluginEffectStrip` now accepts a context-menu event that lands on one
+of its rows and leaves one that does not, which is what keeps the strip's own
+track commands reachable from the pane's empty space; see
+`main/pluginui/CONTRACT.md` for the menu itself.
 
 **inv. 10 — THE PER-STRIP NARROW FLAG LIVES ON `STrack`, and the pane owns no
 `STrack*`-keyed container at all.** Proposal 48 D9 says it cannot, because
