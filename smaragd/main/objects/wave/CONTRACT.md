@@ -205,6 +205,7 @@ Windows to Linux: 3 unreachable samples, **3 waves and 4 clips gone**.
 | `getDuration()` reports the **project's recorded `durationSec`**, not the component's | There is no file to measure and `twWavInput::getLength()` answers -1 with no source, so every clip on the absent sample would load with a nonsense extent. The attribute is read in `instantiateFromDomElement`, because `SPlainWave` overrides `hasDuration()`/`getDuration()` out of its component and `SObject::readPreChildrenAttributes`' `duration_` is therefore never consulted for a wave. |
 | `serializeSelfAttributes` writes the **spelling the project file used, verbatim** — never `SFilePathRef::toStored` | The reference is unresolvable HERE, so this machine has no standing to rewrite where it points. Re-encoding it would take a project carried from another OS and rewrite its unreachable samples relative to a folder they were never in — breaking it on the machine where they DO exist, silently, one save away. Gate: `missing_sample_reference_verbatim.qxa`, whose fixture is deliberately PROJECT-RELATIVE; the home-relative fixture in `collect_external_media_missing.qxa` re-encodes to the same string and cannot bite this. |
 | `relocateTo()` **REFUSES** on a placeholder | There are no bytes to have been copied, so "Collect external media" reports it as skipped rather than quietly re-pointing a reference at a file that is not there either. |
+| The miss is **ANNOUNCED in the log**, naming both spellings: `sample NOT FOUND, keeping a silent placeholder: "<stored>" -> looked in "<resolved>"` | QBX-200. A placeholder used to be created SILENTLY — the user saw the miss in the resources list, but a reader of the log had no way to learn why a project came up silent without opening that panel. Both spellings are there because they answer different questions: the STORED one is what the project file says and what a re-save must reproduce verbatim, the RESOLVED one is where THIS machine looked, which is what makes a surprising `$HOME` or an adopted neighbour visible in the run. |
 | `enqueueAnalysis()` is deliberately NOT called | No content, and a null content hash is declined by every sidecar job anyway. |
 | The placeholder is **registered like any other extern file** (`addExternObject`) | It must appear in the resources list — that is where the user sees the miss — a second clip on the same absent sample must find it, and `~SPlainWave` deregisters by name whether it loaded or not. |
 
@@ -222,6 +223,18 @@ Gates: `sample_missing_survives.qxa`, `load_missing_sample_placed_survives.qxa`
 here**: a dropped clip and a placeholder are BOTH SILENT, so no audio assertion
 anywhere can separate them — which is exactly how the drop shipped under a green
 suite for as long as it did.
+
+**EVERY ONE OF THOSE GATES RESTS ON A CLAIM ABOUT THE MACHINE**, and since
+QBX-200 each states it as its first assertion instead of assuming it. "This file
+is absent here" depends on the environment twice over: a stored `~` spelling is
+expanded against `$HOME`, and a resolution that fails then adopts any file with
+the same basename sitting next to the project file (the last-resort recovery in
+`instantiateFromDomElement`, which exists for projects carried as a unit). A
+machine that supplies either path turns these gates into failures on an exact
+COUNT — `missing is 0 expected 1` — which says nothing about which assumption
+gave way. Asserting the announcement above makes the precondition fail first and
+name itself. Two of these cases flaked once in CI with exactly that signature
+and the mechanism was never established; `docs/LINUX_GATE.md` has the measurements.
 
 **NOT gated:** what a placeholder LOOKS like on the arranger (it falls to the
 solid-body fill, since `SCut::getPreview` has no capture to build peaks from);

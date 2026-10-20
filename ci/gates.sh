@@ -74,6 +74,17 @@ run_static
 # cannot host, and every such case has an entry in the platform gate doc
 # (docs/LINUX_GATE.md, docs/MACOS_GATE.md, docs/ASIO_WINDOWS_GATE.md) saying
 # why. An exclusion with no entry there is a bug, not a configuration.
+# A FAILED CASE MUST CARRY ITS OWN DIAGNOSIS (QBX-200). Console logging is off
+# by default in a Release build, so a .qxa that failed in CI left only the
+# runner's one-line summary -- "4 actions rejected" and their verb names, with
+# every warning the actions themselves emitted (the counts that were wrong, the
+# paths that were looked for) discarded. Three tests flaked in CI run
+# 38911317466 and two of them still have no established mechanism, because
+# there was nothing to read. With this set, `--output-on-failure` prints the
+# failing case's own log and nothing else changes: ctest shows the output of
+# FAILED tests only, so a green run is as quiet as it ever was.
+export SMARAGD_LOG_CONSOLE="${SMARAGD_LOG_CONSOLE:-1}"
+
 say "ctest"
 CTEST_ARGS=( --test-dir smaragd/build -j"${CTEST_JOBS:-4}" --output-on-failure )
 if [ -n "${CTEST_EXCLUDE:-}" ]; then

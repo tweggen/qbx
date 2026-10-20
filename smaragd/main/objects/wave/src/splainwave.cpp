@@ -634,6 +634,21 @@ SLink *SPlainWave::linkToMissingFile( SProject &project,
         delete w;
         return NULL;
     }
+
+    // ANNOUNCE IT (QBX-200). A placeholder used to be created silently: the
+    // user saw the miss in the resources list, but the LOG said nothing, so a
+    // project that came up silent gave a reader no way to find out why without
+    // opening the resources panel. It also left the two .qxa cases over this
+    // path unable to state their own precondition -- that the file really is
+    // absent HERE -- which matters because both the "~" expansion and the
+    // basename recovery above read the machine, and a machine that happens to
+    // supply either one turns the gate's exact counts into an opaque failure.
+    // Both spellings are logged: the STORED one is what the project file says
+    // and what a re-save must reproduce verbatim, the RESOLVED one is where
+    // this machine actually looked.
+    qWarning() << "SPlainWave: sample NOT FOUND, keeping a silent placeholder:"
+               << storedSpelling << "-> looked in" << resolvedPath;
+
     project.noteMissingFile( storedSpelling, resolvedPath );
     return new SLink( *w );
 }
