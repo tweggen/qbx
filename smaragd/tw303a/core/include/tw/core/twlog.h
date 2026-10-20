@@ -144,6 +144,38 @@ public:
     // burst into a visible GUI stall.
     static void formatTimestamp( const LogRecord &rec, char *out, size_t cap );
 
+    // ---- test seam ---------------------------------------------------------
+    //
+    // HOLD THE SINK'S MUTEX (QBX-193). Invariant 5 promises that a thread which
+    // called markNonBlocking() never waits: it try_locks and counts a drop. To
+    // prove that, the lock has to be genuinely UNAVAILABLE at a moment the test
+    // chooses, and no producer-side API can arrange it — contending threads only
+    // make unavailability LIKELY. That is how the gate on invariant 5 came to be
+    // a wall-clock worst case, which measures the scheduler: one descheduling of
+    // the probe thread breaks any microsecond bound with the design working
+    // perfectly (measured 25 failures in 60 runs on an unmodified tree).
+    //
+    // RAII, so a failed assertion or an early return cannot leave the sink
+    // wedged. Two rules for the holder, both of which cost a deadlock:
+    //
+    //   * THE HOLDING THREAD MUST NOT LOG. `mtx` is not recursive.
+    //   * THE HOLDING THREAD MUST NOT CALL firstSeq(), nextSeq() OR snapshot().
+    //     Those take the same mutex. droppedCount() is the one counter that is
+    //     lock-free and therefore readable while the guard is alive.
+    //
+    // Tests only. Nothing in the app or the engine may construct one.
+    class SinkLockForTest
+    {
+    public:
+        explicit SinkLockForTest( TwLog &log );
+        ~SinkLockForTest();
+        SinkLockForTest( const SinkLockForTest & ) = delete;
+        SinkLockForTest &operator=( const SinkLockForTest & ) = delete;
+
+    private:
+        TwLog &log_;
+    };
+
 private:
     TwLog();
     ~TwLog();

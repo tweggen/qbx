@@ -28,6 +28,23 @@ Invariants:
    Qt (docs/contracts/THREADING.md).
 5. A thread that calls TwLog::markNonBlocking() (the RT audio callback) never
    waits: it truncates at TW_LOG_RT_MAX and try_locks, counting a drop.
+   THIS IS A BEHAVIOUR AND IS GATED AS ONE (QBX-193). It was gated for a time
+   by a wall-clock worst case -- `worst single logf < 2000us` over 300 ms of
+   five-way contention -- which measures the SCHEDULER: one descheduling of the
+   probe thread breaks any microsecond bound with the design working perfectly
+   (measured 25 failures in 60 runs on an unmodified tree, and it turned CI red
+   on a PR whose entire diff was a markdown paragraph). The gate is now
+   deterministic: a test holds the sink's mutex through TwLog::SinkLockForTest,
+   so try_lock CANNOT succeed, and one non-blocking call must then return,
+   count exactly one drop, and leave the ring unchanged -- no clock involved.
+   NO THROUGHPUT FLOOR SEPARATES THE TWO IMPLEMENTATIONS, measured rather than
+   assumed: starve the non-blocking thread of CPU and its throughput collapses
+   towards the blocking threads it competes with (626,505-769,873 calls idle,
+   but 134,259-252,420 under 36 spinners on 12 cores, against 118,015-128,879
+   for a blocking build idle -- the ranges overlap, and a ratio against one
+   noise thread fails for the same reason). So the contention test asserts only
+   that a losing non-blocking producer DROPS -- a blocking build reports
+   exactly zero drops on every host -- and prints the rest.
 6. TwLog IS IMMORTAL. TwLog::instance() returns a heap instance that is created
    once and NEVER destroyed, so a record emitted from any thread at any point
    in process teardown can never lock a destroyed mutex. A function-local
@@ -77,8 +94,14 @@ codebase, not just this module.
 How to test: `ctest -R 'exact_arithmetic|serialization_roundtrip|twfraction|timemap|twlog'`
 (five executables under core/tests/, linking only tw_core). twlog_test covers
 ring wraparound accounting, 8-thread seq density, category interning against
-address reuse, the bounded non-blocking path, and the immortality of the sink
-(invariant 6).
+address reuse, the non-blocking path (deterministically, by holding the lock --
+see invariant 5), and the immortality of the sink (invariant 6).
+
+TwLog::SinkLockForTest is a TEST SEAM and nothing in the app or the engine may
+construct one. Its holder may not log, and may not call firstSeq(), nextSeq() or
+snapshot(): all of those take the mutex it is holding and std::mutex is not
+recursive. droppedCount() is lock-free and is the one counter readable from
+inside the guard.
 
 Known debt: QtCore dependency (QString in twfraction.cpp tail); SAMPLE_NORM_*
 are macros; DTOR_DEL macro survives for legacy call sites.

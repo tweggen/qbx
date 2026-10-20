@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <mutex>
 #include <set>
@@ -271,24 +272,180 @@ static void testConcurrentProducers(TestRunner& runner)
 // ============================================================================
 // The non-blocking (realtime) path must never wait
 // ============================================================================
+//
+// INVARIANT 5 IS A BEHAVIOUR, NOT A LATENCY, AND IS NOW GATED AS ONE (QBX-193).
+// This was one test that kept the worst single `logf` latency of an RT thread
+// over 300 ms of five-way contention and asserted `worst < 2000us`. The intent
+// was right -- the point of try_lock IS a bounded worst case -- but a worst
+// case over 300 ms of five contending threads is dominated by OS SCHEDULING,
+// not by the lock: one descheduling of the probe thread exceeds any microsecond
+// bound with the design working perfectly. Measured on an unmodified tree, 60
+// consecutive runs of this binary: 35 passed, 25 FAILED, the failures arriving
+// in one contiguous block while the load average was 4.51 -- min 2820us,
+// median 4989us, max 11452us, which is 5.7x the bound. It turned CI red on a
+// PR whose entire diff was one paragraph of markdown, and again on a release
+// gate (QBX-200), where the same run reported 211,295 records dropped to
+// contention: the machine was saturated, which is the condition a wall-clock
+// ceiling is least able to survive.
+//
+// Worse, the load-INSENSITIVE property sat beside it unasserted:
+//
+//     runner.assertTrue("contention was reported as drops, not stalls ...",
+//                       true);   // informational: any value is correct
+//
+// `assertTrue(..., true)` asserts nothing, so the only real gate on "the RT
+// path never waits" was a measurement of the scheduler. Relaxing the number
+// would have left the design ungated; raising it makes the test meaningless at
+// any load. So it is split in two, which is this project's standing rule --
+// assert load-sensitive quantities as floors and the load-insensitive
+// structure exactly:
+//
+//   1. testNonBlockingDropsRatherThanWaits -- the real gate, and it contains
+//      no clock at all. The test HOLDS the sink's mutex, so try_lock cannot
+//      succeed and the drop is a fact rather than a probability.
+//   2. testNonBlockingUnderContention -- the five-thread scenario, kept
+//      because it is the only place the two paths run concurrently for real,
+//      with its load-sensitive quantities asserted as FLOORS and the worst-case
+//      latency REPORTED rather than asserted.
 
-static void testNonBlockingPath(TestRunner& runner)
+// (1) THE DETERMINISTIC HALF, and the one that gates the design.
+//
+// Hold the lock, make exactly ONE non-blocking call, and the promise becomes
+// observable without a clock: the call returns, the drop counter moves by
+// exactly one, and the ring does not grow. Release, and the next call lands.
+//
+// WHY IT CANNOT HANG WHEN THE PROPERTY IS BROKEN: a build whose non-blocking
+// path took a blocking acquire would wait on the held lock forever. So the call
+// is made on its own thread and awaited with a bounded `wait_for`, and the
+// guard is released before the future is joined. That timeout is NOT a latency
+// bound -- it is a deadlock escape, and any value orders of magnitude above
+// scheduling noise does the same job -- so this test has no tolerance that load
+// can break. A blocking build fails it in about a second instead of timing the
+// suite out.
+static void testNonBlockingDropsRatherThanWaits(TestRunner& runner)
 {
     TwLog& log = TwLog::instance();
     log.setConsole(false);
     log.setMinLevel(LogLevel::Trace);
     log.setCapacity(4096);
 
+    // Deltas, never absolutes: the sink is a process-wide singleton and the
+    // tests above have already written to this ring.
+    const uint64_t seqBefore     = log.nextSeq();
+    const uint64_t droppedBefore = log.droppedCount();
+
+    std::future<void> call;
+    bool     returnedWhileHeld = false;
+    uint64_t droppedDelta      = 0;
+
+    {
+        // Inside this scope THIS thread may not log, and may not call
+        // nextSeq()/firstSeq()/snapshot(): all of them take the very mutex the
+        // guard holds, and std::mutex is not recursive. droppedCount() is
+        // lock-free, so it is the one counter readable from in here.
+        TwLog::SinkLockForTest held(log);
+
+        call = std::async(std::launch::async, [&log] {
+            TwLog::markNonBlocking();
+            TwLog::nameThread("rt-probe");
+            log.logf(LogLevel::Warn, "rt", __FILE__, __LINE__, "one rt record");
+        });
+
+        returnedWhileHeld =
+            call.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+        if (returnedWhileHeld)
+            droppedDelta = log.droppedCount() - droppedBefore;
+    }
+
+    // The lock is free again, so a call that BLOCKED (a broken build) completes
+    // here instead of deadlocking the test process.
+    call.wait();
+
+    runner.assertTrue("a non-blocking logf RETURNS while the lock is held",
+                      returnedWhileHeld);
+    runner.assertEqualU("...counting exactly one drop", droppedDelta, 1);
+    runner.assertEqualU("...and the dropped record never reached the ring",
+                        log.nextSeq(), seqBefore);
+    // A build that blocks rather than drops fails all three, and all three name
+    // the same cause. That is deliberate: the pass/fail counts stay comparable
+    // between a good and a broken run, which a skip would not do.
+
+    // THE OTHER HALF OF THE PROMISE: dropping is what CONTENTION costs, not
+    // what the path always does. With the lock free, the same call must land --
+    // otherwise "never waits" could be satisfied by never logging at all.
+    const uint64_t droppedAtRelease = log.droppedCount();
+    std::thread after([&log] {
+        TwLog::markNonBlocking();
+        TwLog::nameThread("rt-probe-2");
+        log.logf(LogLevel::Warn, "rt", __FILE__, __LINE__, "one rt record");
+    });
+    after.join();
+
+    runner.assertEqualU("with the lock free the same call LANDS",
+                        log.nextSeq(), seqBefore + 1);
+    runner.assertEqualU("...and counts no drop",
+                        log.droppedCount(), droppedAtRelease);
+}
+
+// (2) THE CONTENTION HALF. It asserts the BEHAVIOUR and reports the numbers.
+//
+// Four noise threads hammer the lock while one non-blocking thread logs as fast
+// as it can for 300 ms. Nothing here is a tolerance on time, and -- measured,
+// see below -- nothing here is a throughput floor either.
+//
+// WHY THERE IS NO THROUGHPUT FLOOR, THOUGH QBX-193 ASKED FOR ONE. The ticket
+// proposed raising the old `rtCalls > 100` to "something a BLOCKING
+// implementation could not reach". No such number exists, because a
+// non-blocking producer's advantage requires it to be SCHEDULED: starve it of
+// CPU and its throughput collapses towards the blocking threads it competes
+// with, while the design is working perfectly. Measured on the 12-core dev box,
+// same binary, only the emit path changed:
+//
+//   non-blocking (try_lock, shipped), idle         : 626,505-769,873 calls
+//   blocking acquire (sabotage S1), idle           : 118,015-128,879 calls
+//   non-blocking (shipped), 36 spinners on 12 cores: 134,259-252,420 calls
+//
+// The third row OVERLAPS the second, so an absolute floor between them does not
+// exist. A RATIO against one noise thread in the same run was tried next and
+// fails for the same reason: 4.05-5.60x idle, but 1.18-2.2x under that load, so
+// a 2x floor failed 23 runs in 60. (For scale, the OLD 2000us ceiling failed
+// 60 of those same 60.) A floor low enough to be safe everywhere is one a
+// blocking build also clears, which gates nothing.
+//
+// So the load-sensitive quantities are PRINTED and the load-INSENSITIVE
+// behaviour is asserted: a non-blocking producer that loses the race DROPS, and
+// a blocking one never drops at all (sabotage S1 reports exactly zero). The
+// deterministic test above is where the design is really gated; this one proves
+// the two paths survive each other for real and that the scenario contends.
+
+// The scenario has to have RUN. Deliberately far below anything either
+// implementation reaches, because it is not a performance claim: 1000 calls
+// over 300 ms is 3.3 per millisecond, and a box that cannot manage that has
+// told us something other than whether try_lock works.
+static const uint64_t kScenarioRanFloor = 1000;
+
+static void testNonBlockingUnderContention(TestRunner& runner)
+{
+    TwLog& log = TwLog::instance();
+    log.setConsole(false);
+    log.setMinLevel(LogLevel::Trace);
+    log.setCapacity(4096);
+
+    const uint64_t droppedBefore = log.droppedCount();
+
     std::atomic<bool> stop{false};
     std::atomic<int64_t> worstUs{0};
     std::atomic<uint64_t> rtCalls{0};
+    std::atomic<uint64_t> noiseCalls{0};
 
     // Hammer the lock from ordinary threads so the RT thread genuinely contends.
     std::vector<std::thread> noise;
     for (int t = 0; t < 4; ++t) {
-        noise.emplace_back([&log, &stop] {
-            while (!stop.load(std::memory_order_relaxed))
+        noise.emplace_back([&log, &stop, &noiseCalls] {
+            while (!stop.load(std::memory_order_relaxed)) {
                 log.logf(LogLevel::Info, "noise", __FILE__, __LINE__, "filler filler filler");
+                noiseCalls.fetch_add(1, std::memory_order_relaxed);
+            }
         });
     }
 
@@ -312,18 +469,37 @@ static void testNonBlockingPath(TestRunner& runner)
     rt.join();
     for (std::thread& th : noise) th.join();
 
-    runner.assertTrue("the RT producer ran", rtCalls.load() > 100);
+    const uint64_t calls    = rtCalls.load();
+    const uint64_t perNoise = noiseCalls.load() / 4;
+    const uint64_t dropped  = log.droppedCount() - droppedBefore;
 
-    // The point of try_lock: a bounded worst case. A blocking acquire under this
-    // much contention would routinely exceed this.
-    const int64_t worst = worstUs.load();
-    runner.assertTrue("RT log call is bounded (worst < 2000us, got " +
-                          std::to_string(worst) + "us)",
-                      worst < 2000);
+    // REPORTED, NOT ASSERTED -- all three. The worst case is the number the old
+    // bound gated on, and what it is honestly good for is telling a reader how
+    // loaded the machine was. The throughput and the ratio are here so that a
+    // future reader can repeat the measurement in the comment above rather than
+    // trust it. None of them costs a pass count.
+    std::cout << "INFO rt=" << calls << " calls vs " << perNoise
+              << " per blocking producer (ratio "
+              << (perNoise ? (double)calls / (double)perNoise : 0.0) << "x), "
+              << dropped << " dropped, worst single RT logf " << worstUs.load()
+              << "us -- all REPORTED, none asserted: every one of them is a"
+                 " property of the scheduler as much as of the code (QBX-193)"
+              << std::endl;
 
+    runner.assertTrue("the contention scenario ran (rt calls=" +
+                          std::to_string(calls) + " >= " +
+                          std::to_string(kScenarioRanFloor) + ")",
+                      calls >= kScenarioRanFloor);
+
+    // THE LOAD-INSENSITIVE BEHAVIOUR, and the only assertion here that gates
+    // the design: under real contention a non-blocking producer loses the race
+    // sometimes, and when it does it DROPS. A build that waits instead reports
+    // exactly zero drops however loaded the machine is, so this bites sabotage
+    // S1 on every host. It also keeps the scenario from going vacuous -- a run
+    // in which the RT thread never once lost the race would prove nothing.
     runner.assertTrue("contention was reported as drops, not stalls (dropped=" +
-                          std::to_string(log.droppedCount()) + ")",
-                      true);   // informational: any value is correct behaviour
+                          std::to_string(dropped) + ")",
+                      dropped > 0);
 }
 
 // ============================================================================
@@ -397,7 +573,8 @@ int main()
     testLevelGate(runner);
     testInterning(runner);
     testConcurrentProducers(runner);
-    testNonBlockingPath(runner);
+    testNonBlockingDropsRatherThanWaits(runner);
+    testNonBlockingUnderContention(runner);
     testShutdownIsSafe(runner);
 
     runner.printSummary();
