@@ -34,11 +34,16 @@ public:
     void setProject( SProject *project );
 
 signals:
-    // The user picked "Cleanup..." from the context menu. This widget lives in
-    // app/model, which may include NO other app module (tools/check_layering.py,
-    // APP_DEPS['model'] == set()), so it cannot open the dialog itself — the
-    // shell, which sees both this list and app/servicesui, does that.
-    void cleanupRequested();
+    // The user picked "Unused recordings..." from the context menu. This widget
+    // lives in app/model, which may include NO other app module
+    // (tools/check_layering.py, APP_DEPS['model'] == set()), so it cannot open
+    // anything itself — the shell, which owns the docks, does that.
+    //
+    // It was `cleanupRequested()` and it opened SCleanupDialog, which deleted
+    // permanently on its own looser copy of the recorder's naming (QBX-197).
+    // The name changed with the destination: this asks to SEE the list, and
+    // removing anything from it is a separate, confirmed, undoable gesture.
+    void unusedRecordingsRequested();
 
 protected:
     void startDrag(Qt::DropActions supportedActions) override;

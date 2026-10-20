@@ -73,8 +73,9 @@ SCleanupTakesDialog::SCleanupTakesDialog( QWidget *parent,
 
     QDialogButtonBox *buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this );
-    // The SAFE answer is the default one, as SCleanupDialog's own confirmation
-    // already has it: this removes things.
+    // The SAFE answer is the default one: this removes things. (The precedent
+    // was SCleanupDialog's own confirmation, retired in QBX-197 along with the
+    // permanent delete behind it; the rule it set is kept.)
     if( QPushButton *cancel = buttons->button( QDialogButtonBox::Cancel ) )
         cancel->setDefault( true );
     connect( buttons, &QDialogButtonBox::accepted, this, &QDialog::accept );
