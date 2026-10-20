@@ -32,6 +32,17 @@
 
   <actions>
     <load-project path="../sample_missing_survives.qxp"/>
+
+    <!-- The same precondition as sample_missing_survives, and the same reason
+         (QBX-200): the "~" spelling is expanded against $HOME and a failed
+         resolution falls back to a same-named neighbour of the project file, so
+         "this file is absent" is a claim about the machine. Of the four actions
+         CI rejected in run 38911317466, three were the assert-extern-files and
+         collect counts below, which can only report that a number was wrong.
+         This says WHICH assumption broke. -->
+    <assert-log level="warn" minCount="1"
+                contains="sample NOT FOUND, keeping a silent placeholder"/>
+
     <assert-extern-files count="2" missing="1"/>
 
     <save-project path="../../build/test-output/collect_external_media_missing/missing.qxp"/>

@@ -49,6 +49,20 @@
   <actions>
     <load-project path="../sample_missing_survives.qxp"/>
 
+    <!-- THE PRECONDITION, STATED RATHER THAN ASSUMED (QBX-200). Everything
+         below rests on wave2 being unreachable on THIS machine, and that is a
+         question about the machine: the stored "~" spelling is expanded against
+         $HOME, and if resolution fails the loader then adopts any same-named
+         file sitting next to the project file. A machine that supplies either
+         one makes this case fail on an exact COUNT with nothing in the log to
+         say why — which is what happened in CI run 38911317466, where the
+         mechanism could not be established afterwards. This line fails first
+         and names the file, so the next reader is told which half gave way.
+         The resolved path is in the message, so a surprising $HOME shows up
+         in the run rather than having to be reproduced. -->
+    <assert-log level="warn" minCount="1"
+                contains="sample NOT FOUND, keeping a silent placeholder"/>
+
     <render filename="sample_missing_survives.wav" format="wav" quality="10" durationSec="2.5"/>
 
     <!-- 0-1 s: good track plays source sec1 (slip offset via startOffset=48000) -->

@@ -47,7 +47,16 @@
   <actions>
     <load-project path="../load_missing_sample_placed_survives.qxp"/>
 
-    <!-- The recovery named the file it could not find. -->
+    <!-- The recovery named the file it could not find — and since QBX-200 it
+         says so unambiguously. This case shares the HOME-relative path of
+         sample_missing_survives, so it carries the same precondition: the "~"
+         is expanded against $HOME, and a failed resolution then adopts any
+         same-named neighbour of the project file. The basename assertion below
+         is kept because it pins the SPELLING, but on its own it was satisfiable
+         by a line about a file that RESOLVED — "Name of extern file is …"
+         carries the basename too, for present and absent files alike. -->
+    <assert-log level="warn" minCount="1"
+                contains="sample NOT FOUND, keeping a silent placeholder"/>
     <assert-log contains="__missing_sample__.wav" minCount="1"/>
 
     <!-- A newer formatVersion warns and loads anyway. -->
