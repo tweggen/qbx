@@ -651,4 +651,23 @@ void TwLog::Impl::writerLoop()
     closeFile();
 }
 
+// ---------------------------------------------------------------------------
+// Test seam (QBX-193)
+// ---------------------------------------------------------------------------
+//
+// A nested class reaches the enclosing class's private `d_`, so the sink's
+// mutex stays private to TwLog and no test needs to see `Impl`'s layout. See
+// the header for the two deadlock rules the holder has to observe.
+
+TwLog::SinkLockForTest::SinkLockForTest( TwLog &log )
+    : log_( log )
+{
+    log_.d_->mtx.lock();
+}
+
+TwLog::SinkLockForTest::~SinkLockForTest()
+{
+    log_.d_->mtx.unlock();
+}
+
 }  // namespace tw
