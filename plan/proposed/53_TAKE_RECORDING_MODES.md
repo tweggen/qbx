@@ -2134,6 +2134,21 @@ something a case may do, and the PR says so).
 > name tests that can disagree, one of them irreversible. Changing what an
 > existing command does is the author's call, so it is filed rather than folded
 > in: **QBX-197**.
+>
+> **QBX-197 SHIPPED, and the answer was to RETIRE the older command** (the
+> author's decision, 2026-10-20, between redirecting the dialog at
+> `srecfiles::scanUnused` and deleting it). `SCleanupDialog`,
+> `SMainWindow::showCleanupDialog()` and `SExternFileList::cleanupRequested`
+> are gone, `kRecordingPattern` with them, so `srecfiles::isCaptureName` is the
+> app's only definition of "a file the recorder wrote" and no surface deletes a
+> recording in place any more. The resources window keeps its item: it now
+> opens the Unused recordings dock (`SMainWindow::showUnusedRecordings`), which
+> also gained the View-menu entry it had never had. One accepted loss, recorded
+> in `recordingfiles_test.cpp`: the old pattern matched the FORMER recorder
+> naming `<stamp>_<trackName>`, so captures written by an older build are no
+> longer offered for clean-up by any surface. A predicate loose enough to take
+> them is loose enough to take a file the user named, and a missed clean-up is
+> recoverable where a deleted take is not.
 
 ### P7 — QBX-157 backdrop and cut marks — depends on A0b, B4 — **SHIPPED**
 

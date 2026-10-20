@@ -449,7 +449,6 @@ set(APP_UI_FILES
     pluginui/src/spluginnativeeditor.cpp
     pluginui/src/spluginparamereditor.cpp
     # --- app/servicesui
-    servicesui/include/app/servicesui/scleanupdialog.h
     servicesui/include/app/servicesui/scleanuptakesdialog.h
     servicesui/include/app/servicesui/slogmodel.h
     servicesui/include/app/servicesui/slogview.h
@@ -459,7 +458,6 @@ set(APP_UI_FILES
     servicesui/include/app/servicesui/srenderdialog.h
     servicesui/include/app/servicesui/srenderprogress.h
     servicesui/include/app/servicesui/stransportoptionactions.h
-    servicesui/src/scleanupdialog.cpp
     servicesui/src/scleanuptakesdialog.cpp
     servicesui/src/slogmodel.cpp
     servicesui/src/slogview.cpp

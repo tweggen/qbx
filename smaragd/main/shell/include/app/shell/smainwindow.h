@@ -764,7 +764,17 @@ protected slots:
     void redo();
     void showOptionsDialog();
     // Opened from the resources dock's context menu (SExternFileList).
-    void showCleanupDialog();
+    /**
+     * Show, raise and refresh the Unused recordings dock (QBX-197).
+     *
+     * The resources window's context-menu item lands here. It replaced
+     * showCleanupDialog(), which opened SCleanupDialog -- a second answer to
+     * "which recordings does this project not use", with its own copy of the
+     * recorder's naming convention and a PERMANENT delete. There is now one
+     * authority (srecfiles::scanUnused) and one removal (cleanup-takes, to the
+     * trash).
+     */
+    void showUnusedRecordings();
     /**
      * The Edit menu's "Clean up takes..." and the Unused recordings dock's
      * button, both of them (plan 53 §6.3, QBX-195) -- ONE route, so there is

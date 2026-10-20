@@ -156,14 +156,18 @@ void SExternFileList::startDrag(Qt::DropActions /*supportedActions*/)
 
 void SExternFileList::contextMenuEvent( QContextMenuEvent *event )
 {
-    // Deliberately a menu on the WIDGET, not on a row: "Cleanup..." acts on the
+    // Deliberately a menu on the WIDGET, not on a row: the item acts on the
     // project directory as a whole, so a right-click into the empty area below
     // the last row has to offer it too.
+    //
+    // It said "Cleanup..." and opened a dialog that deleted files permanently
+    // (QBX-197). It now opens the Unused recordings dock, so the item is named
+    // after what the user gets: a LIST. Nothing on this path removes anything.
     QMenu menu( this );
-    QAction *cleanupAction = menu.addAction( tr( "Cleanup..." ) );
+    QAction *unusedAction = menu.addAction( tr( "Unused recordings..." ) );
     QAction *chosen = menu.exec( event->globalPos() );
-    if( chosen && chosen == cleanupAction ) {
-        emit cleanupRequested();
+    if( chosen && chosen == unusedAction ) {
+        emit unusedRecordingsRequested();
     }
 }
 

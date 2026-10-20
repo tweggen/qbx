@@ -107,6 +107,39 @@ int main()
     no( "" );
     no( ".wav" );
 
+    // ---- WHAT THE RETIRED SECOND TEST WOULD HAVE TAKEN (QBX-197) -----------
+    //
+    // Until QBX-197 the app had a SECOND answer to "which recordings does this
+    // project not use": SCleanupDialog, with its own pattern
+    //
+    //     ^\d{8}_\d{6}_\d{3}_.*\.(wav|ogg|flac|aif|aiff|mp3)$
+    //
+    // and `QFile::remove` behind it. Note where the two differ: `.*` where this
+    // one requires `track\d+`, and six extensions where this one allows wav.
+    // So the LOOSER test was the one with the irreversible delete, and every
+    // name below was a file it would have offered to destroy outright.
+    //
+    // These are kept as cases, not as history, because the difference IS the
+    // feature: the stamp prefix alone does not make a file the recorder's.
+    // Anything may be named after a timestamp, including by another tool, and
+    // `.*` then accepts whatever follows.
+    no( "20261014_190949_902_mytrack.ogg" );
+    no( "20261014_190949_902_guitar.flac" );
+    no( "20261014_190949_902_track0.mp3" );
+    no( "20261014_190949_902_mixdown.aiff" );
+    no( "20261014_190949_902_.wav" );            // `.*` matches empty, too
+    no( "20261014_190949_902_Lead vocal.wav" );
+
+    // THAT LAST ONE IS ALSO A DELIBERATE LOSS, and it is the reason this block
+    // is commented rather than just listed. An OLDER recorder wrote
+    // <stamp>_<trackName>.wav, so a project recorded with it has captures this
+    // predicate refuses, and with the dialog gone NO surface offers to clean
+    // them up any more. That is the accepted cost of having one strict test: a
+    // pattern loose enough to take `..._Lead vocal.wav` is loose enough to take
+    // a file the user named, and a missed clean-up is recoverable where a
+    // deleted take is not. If those files ever need sweeping it wants its own
+    // ticket and its own opt-in, not a widened predicate here.
+
     std::printf( "%s (%d failure(s))\n", gFailures == 0 ? "OK" : "FAILED",
                  gFailures );
     return gFailures == 0 ? 0 : 1;

@@ -54,7 +54,8 @@ constexpr int kSearchDebounceMs = 250;
 
 // Decimal (1000-based) k/M/G, at most 3 significant digits, no "B" and no
 // prefix letter under 1000 bytes (task §k; no existing convention to match —
-// SExternFileList and SCleanupDialog both use QLocale::formattedDataSize(),
+// SExternFileList uses QLocale::formattedDataSize() (so did SCleanupDialog,
+// retired in QBX-197),
 // which is binary/locale-dependent and spells out "bytes"/"KiB"/etc., not the
 // fixed-width form asked for here). `v` is reduced by repeated /1000 into
 // [1,1000) and the decimal count follows its own digit width (2/1/0) — but

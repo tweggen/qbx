@@ -1665,10 +1665,18 @@ into `skipped_`, cleared at the top of every commit so the report always
 describes the pass that just ended — a punch-out reaches the same function by
 its own path and gets its own report. `skippedLanes()` exposes the list and
 `unusedRecordings()` the distinct capture files no lane took (plan 53 Q13). The
-LIST is this invariant's; the Unused recordings dock that presents it is P6's,
-and `scleanupdialog` is a different thing again — it sweeps the recordings
-DIRECTORY for files no project references, which is housekeeping rather than
-"the take you just made went nowhere".
+LIST is this invariant's; the Unused recordings dock that presents it is P6's.
+A THIRD thing used to exist here — `scleanupdialog`, which swept the recordings
+DIRECTORY for files no project references, housekeeping rather than "the take
+you just made went nowhere". **It was retired in QBX-197** because once QBX-195
+gave P6's path a UI the two became visible to a user as alternatives, and they
+selected different file sets: the dialog carried its own regex over the
+recorder's naming (matching the OLD `<stamp>_<trackName>` shape), did not know
+about extern files with no placements, and deleted with `QFile::remove` where
+`cleanup-takes files="1"` moves to the trash. The looser name test was the one
+with the irreversible delete. `srecfiles` is now the only answer, and the
+resources window's context-menu item opens the dock instead of a dialog
+(`SMainWindow::showUnusedRecordings`).
 
 **TWO CAUSES REACH IT.** The capture file was never written, and the lane's
 PLANNER REFUSED the pass. The second only became reachable when QBX-172 gave

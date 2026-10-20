@@ -152,10 +152,11 @@ public:
      * The capture files of this pass that no lane took (plan 53 Q13).
      *
      * Distinct, in pass order. This is the LIST only; the Unused recordings
-     * dock that presents it is P6's, and `scleanupdialog` is a different thing
-     * again -- it sweeps the recordings DIRECTORY for files no project
-     * references, which is housekeeping rather than "the take you just made
-     * went nowhere".
+     * dock that presents it is P6's. A third thing used to sit beside them --
+     * `scleanupdialog`, which swept the recordings DIRECTORY for files no
+     * project references, housekeeping rather than "the take you just made went
+     * nowhere". It was retired in QBX-197: it was a second answer to the same
+     * question, on a looser name test, with a permanent delete behind it.
      */
     QStringList unusedRecordings() const;
     /// The files the last take wrote, in armed-track order.

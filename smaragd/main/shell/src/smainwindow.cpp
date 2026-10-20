@@ -114,7 +114,6 @@
 #include "app/objects/track/sfeelflowpose.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptionsdialog.h"
-#include "app/servicesui/scleanupdialog.h"
 
 #include "tw/playback/twspeaker.h"
 #include "tw/devices/audio_input.h"
@@ -2077,10 +2076,10 @@ SMainWindow::SMainWindow()
         qDockExternFileList_->setWidget( container );
     }
     addDockWidget( Qt::LeftDockWidgetArea, qDockExternFileList_ );
-    // The list only ANNOUNCES the cleanup request (app/model may not reach
-    // app/servicesui); the shell owns the dialog and the current project.
-    connect( externFileList_, &SExternFileList::cleanupRequested,
-             this, &SMainWindow::showCleanupDialog );
+    // The list only ANNOUNCES the request (app/model may not reach any other
+    // app module); the shell owns the docks and the current project.
+    connect( externFileList_, &SExternFileList::unusedRecordingsRequested,
+             this, &SMainWindow::showUnusedRecordings );
 
     // The track detail panel, docked directly BELOW the extern file list in the
     // same left area. It used to be a child of the arranger's track-control
@@ -2307,6 +2306,15 @@ SMainWindow::SMainWindow()
     QAction *actPuppet = qDockFeelFlowPuppet_->toggleViewAction();
     actPuppet->setText( tr( "Feel Flow &puppet" ) );
     viewMenu->addAction( actPuppet );
+    // THE NINTH DOCK HAD NO MENU ENTRY AT ALL (QBX-197). It is created hidden,
+    // so before this the only ways in were QMainWindow's own dock-area context
+    // menu and the resources window's item -- and retiring SCleanupDialog
+    // pointed that item here, which would have made one obscure route the main
+    // one. No shortcut, for the reason the mixer's comment gives: a binding
+    // nobody chose is worse than none.
+    QAction *actUnused = qDockUnusedRecordings_->toggleViewAction();
+    actUnused->setText( tr( "&Unused recordings" ) );
+    viewMenu->addAction( actUnused );
     menuBar()->insertMenu( qTestMenu_->menuAction(), viewMenu );
 
     // F2 (default) opens the clip properties panel. There is no keybinding UI,
@@ -5349,16 +5357,30 @@ void SMainWindow::showOptionsDialog()
     openOptionsDialogAt( -1 );
 }
 
-void SMainWindow::showCleanupDialog()
+void SMainWindow::showUnusedRecordings()
 {
-    SProject *project = SApplication::app().getCurrentProject();
-    if( !project ) {
-        QMessageBox::warning( this, "No Project",
-            "Please open or create a project first." );
-        return;
-    }
-    SCleanupDialog dlg( this, project );
-    dlg.exec();   // the dialog does the scanning, confirming and deleting itself
+    // THE RESOURCES WINDOW ASKS THE QUESTION; THE DOCK ANSWERS IT (QBX-197).
+    // This used to open SCleanupDialog, which carried its OWN regex over the
+    // recorder's naming and its own reference walk, and deleted with
+    // QFile::remove -- permanently, and on the looser of the app's two name
+    // tests. The dock reads srecfiles::scanUnused, which is now the only
+    // definition of "a file the recorder wrote", and removal goes through
+    // cleanup-takes to the TRASH.
+    //
+    // show + raise + refresh rather than a blind toggle, for the reason the F2
+    // action gives: a dock may be closed, or open but buried in a tab group,
+    // and a toggle would then HIDE the thing the user just asked for. The
+    // refresh is because the dock is cheap to rescan and the user has just
+    // said they want current information.
+    //
+    // NO PROJECT IS NOT AN ERROR HERE, which is why the warning box the dialog
+    // showed is gone: the dock is honest with no project open (it then lists
+    // only what this session reported as skipped) and saying so in a modal was
+    // only necessary because the dialog had nothing to show.
+    if( !qDockUnusedRecordings_ ) return;
+    qDockUnusedRecordings_->show();
+    qDockUnusedRecordings_->raise();
+    if( unusedRecordingsView_ ) unusedRecordingsView_->refresh();
 }
 
 void SMainWindow::measureAudioLatenciesIfNeeded()
