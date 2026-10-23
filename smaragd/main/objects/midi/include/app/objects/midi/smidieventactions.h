@@ -103,7 +103,22 @@ class SSetNotesAction : public SAction
 public:
     SSetNotesAction() = default;
     SSetNotesAction( const QList<int> &clipPath, std::vector<SEvent> notes,
-                     int take, bool broadcast );
+                     int take, bool broadcast, quint64 gesture = 0 );
+
+    /**
+     * A FRESH GESTURE TOKEN (QBX-203). Every `set-notes` built with the SAME
+     * one coalesces into ONE undo step; actions from different gestures never
+     * coalesce, and one built with no token at all gets a token of its own and
+     * so stands alone.
+     *
+     * A caller needs this only when ONE gesture submits a STREAM of absolute
+     * states: a held arrow key auto-repeats and nudges once per repeat, and
+     * collapsing a hold into one undo step is the point. Every other surface
+     * commits once -- a piano-roll move, resize or velocity drag discards its
+     * preview and submits a single absolute state at the release -- so it
+     * passes nothing and is its own step.
+     */
+    static quint64 newGestureId();
 
     QString name() const override { return QStringLiteral( "set-notes" ); }
     QStringList knownAttributes() const override;
@@ -120,6 +135,19 @@ private:
     std::vector<SEvent> notes_;
     int                 take_ = -1;
     bool                broadcast_ = true;
+    /**
+     * WHICH GESTURE THIS EDIT BELONGS TO, and the whole of what bounds the
+     * merge (QBX-203). It defaults to a token of this action's OWN, so an
+     * action nobody gave a gesture to -- a scripted `set-notes`, one rebuilt
+     * by readXml, a single drag -- can never merge with anything, because no
+     * other action carries its number.
+     *
+     * The key is therefore never EMPTY, which also keeps the two merge sites
+     * from disagreeing: SActionUndoCommand reads an empty key as "never
+     * merge" (id() == -1) while SActionQueue compares keys for equality, and
+     * two empty keys are equal.
+     */
+    quint64             gesture_ = newGestureId();
 };
 
 /** `add-event` - one non-note event (CC, bend, metadata, sysex). */

@@ -133,6 +133,59 @@ QStringList SDragNoteAction::knownAttributes() const
              QStringLiteral( "toValue" ), QStringLiteral( "modifiers" ) };
 }
 
+QStringList SEventEditorKeyAction::knownAttributes() const
+{
+    return { "clip", "key", "repeat" };
+}
+
+SApplyResult SEventEditorKeyAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "event-editor-key: no main window";
+        return { false, nullptr };
+    }
+    if( !win->eventEditorKey( clip_, key_, repeats_ ) ) {
+        qWarning() << "event-editor-key: the view refused" << key_
+                   << "on clip" << clip_;
+        return { false, nullptr };
+    }
+    // NOT undoable ITSELF: what it drives may submit an action of its own (a
+    // nudge or a delete submits `set-notes`), and that is what lands on the
+    // undo stack -- the same shape drag-note has.
+    return { true, nullptr };
+}
+
+void SEventEditorKeyAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "key", key_ );
+    elem.setAttribute( "repeat", QString::number( repeats_ ) );
+}
+
+bool SEventEditorKeyAction::readXml( const QDomElement &elem, int )
+{
+    clip_    = elem.attribute( "clip" );
+    key_     = elem.attribute( "key" );
+    repeats_ = elem.attribute( "repeat", "0" ).toInt();
+
+    static const QStringList kKeys = {
+        QStringLiteral( "left" ),   QStringLiteral( "right" ),
+        QStringLiteral( "up" ),     QStringLiteral( "down" ),
+        QStringLiteral( "delete" ), QStringLiteral( "select-all" )
+    };
+    if( !kKeys.contains( key_ ) ) {
+        qWarning() << "event-editor-key: unknown key:" << key_
+                   << "- expected one of" << kKeys.join( QLatin1Char( ',' ) );
+        return false;
+    }
+    if( repeats_ < 0 ) {
+        qWarning() << "event-editor-key: repeat must not be negative";
+        return false;
+    }
+    return true;
+}
+
 SApplyResult SDragNoteAction::apply( SProject * )
 {
     SMainWindow *win = mainWindow();
@@ -402,6 +455,12 @@ static const bool s_reg_dragnote =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "drag-note" ),
           [] { return new SDragNoteAction; } ),
+      true );
+
+static const bool s_reg_eventeditorkey =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "event-editor-key" ),
+          [] { return new SEventEditorKeyAction; } ),
       true );
 
 static const bool s_reg_scrolleventeditorkeys =

@@ -414,6 +414,10 @@ const Fixture kFixtures[] = {
     { "drag-note",
       "<drag-note clip='1,0' tick='960' key='64' channel='2' toTick='1920'"
       " toKey='67' edge='end' lane='notes' toValue='90'/>" },
+    // `repeat` is non-zero deliberately: 0 is the default, so a dropped
+    // attribute would read back identical and hide itself.
+    { "event-editor-key",
+      "<event-editor-key clip='1,0' key='right' repeat='3'/>" },
     { "assert-event-editor",
       "<assert-event-editor clip='1,0' kind='pianoroll' contains='notes=2'"
       " absent='empty=1' grabPng='roll.png' grabWidth='640'"

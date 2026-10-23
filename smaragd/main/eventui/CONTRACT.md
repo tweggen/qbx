@@ -31,6 +31,20 @@ Invariants:
    inv. 3). A drag of N notes is one `set-notes`, not N `add-note`s; a
    quantize is one `quantize-notes`; a CC point is one `set-events`. The batch
    verbs are absolute, so the previous table IS the inverse.
+
+   **AND ONE UNDO STEP PER GESTURE, which this rule did NOT get for free**
+   (QBX-203). `set-notes` carries a merge key, `SActionUndoCommand::id()` is
+   its hash, and `QUndoStack::push` folds a new command into the one on top
+   whenever the keys match — with no gesture and no time boundary, in a layer
+   `SActionQueue`'s own tail merge knows nothing about. The key was the CLIP,
+   so one action per gesture still became one ENTRY for every gesture on a
+   clip: two drags collapsed, one Ctrl+Z took back the whole editing session,
+   and a subsequent edit cleared the redo it would have needed. The key is
+   gesture-qualified now. A surface that commits ONCE passes no token, gets
+   one of its own and stands alone; the ONE surface that submits a stream
+   within a single gesture — a held arrow key, which nudges once per
+   auto-repeat — passes the same token for the whole hold
+   (`SSetNotesAction::newGestureId()`, `event-editor-key repeat=`).
 3. **A live drag never touches the model.** It paints out of `SPianoRollView::
    drag_` and the release DISCARDS that preview and submits the action
    (revert-then-action). There is consequently nothing to roll back when a
