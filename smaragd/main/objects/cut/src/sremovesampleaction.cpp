@@ -169,31 +169,58 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
     //
     // So columnOfLink is both the predicate AND the reach now. What still
     // refuses below is a live SRecordingContent, for ownership.
-    const bool canPin = stakes::columnOfLink( clipLink ) != nullptr;
+    const bool canPinColumn = stakes::columnOfLink( clipLink ) != nullptr;
+
+    // THE PIN IS THE FALLBACK FOR EVERY OTHER CONTENT (QBX-202), and what is
+    // left refused is a LIVE RECORDING -- nothing else.
+    //
+    // Step (a) reached only a take column, so every other un-rebuildable shape
+    // kept the refusal, and the commonest of those is an ordinary MIDI clip:
+    // its content is an SMidiSequence, which is not an SExternFile, not a path
+    // container and not a column. Deleting a recorded MIDI clip therefore did
+    // nothing at all but write this warning -- the author's report, QBX-202.
+    //
+    // There was never a fidelity reason for the narrow reach. The pin does not
+    // rebuild anything and so needs to know nothing about what it holds: it
+    // addRef()s the object, and the inverse re-links THAT object. The
+    // conservative thing is the ORDER, not the reach -- the two rebuild
+    // branches keep their priority, so every clip that could be deleted before
+    // this change is restored exactly as it was before it, and only the shapes
+    // that were refused take the new path.
+    //
+    // isLiveRecording() is the predicate, which SCut forwards to its content,
+    // so a growing capture is recognised through its cut without this module
+    // naming SRecordingContent's type at all.
+    const bool contentIsLiveRecording = clipLink->getSObject().isLiveRecording();
+    const bool canPin =
+        canPinColumn || ( !canRestoreContainer && !canRestoreFile
+                          && !contentIsLiveRecording );
 
     if( !canRestoreContainer && !canRestoreFile && !canPin ) {
         // REFUSE, and say so. A refusal the user cannot see is the same bug
         // wearing a different face, and this project's rule is that any
         // refusal is announced rather than silent.
         //
-        // This is deliberately the CONSERVATIVE half of the fix: nothing is
-        // lost, at the cost of a delete the user has to work around. Giving
-        // these shapes a real inverse -- a restore-take-column action
-        // carrying every take and the selected index -- is the follow-up.
+        // ONE SHAPE REACHES HERE, and since QBX-202 the reason is ownership
+        // ALONE: SAudioRecorder::Armed holds the growing SCut and its SLink as
+        // borrowed raw pointers, touches them every tick and deletes them at
+        // stop. Removing that clip is a use-after-free IN THE RECORDER, before
+        // undo enters the picture -- which is why SExtractArrangementAction
+        // and merge-columns refuse a live recording too. No inverse would make
+        // it safe, so this is not a placeholder for unfinished work.
+        //
+        // The MIDI recorder has no such exposure by construction: it buffers
+        // its messages and submits `place-midi-recording` once, at the stop,
+        // so no growing MIDI clip is ever in the model to delete.
         const SObject *content = nullptr;
         if( SClipWindow *w = SClipWindow::of( &clipLink->getSObject() ) ) {
             content = &w->windowContent();
         }
-        // What reaches here now is a live SRecordingContent, and the reason is
-        // OWNERSHIP rather than fidelity: SAudioRecorder::Armed holds the
-        // growing SCut and its SLink as borrowed raw pointers, touches them
-        // every tick and deletes them at stop. Removing that clip is a
-        // use-after-free IN THE RECORDER, before undo enters the picture --
-        // which is why SExtractArrangementAction refuses a live recording too.
         TW_LOGW( "cut",
-                 "remove-sample: refusing to delete clip %d on '%s' -- its "
-                 "content (%s) cannot be restored. A live SRecordingContent "
-                 "belongs to the recorder until stop. QBX-146.",
+                 "remove-sample: refusing to delete clip %d on '%s' -- it is a "
+                 "LIVE RECORDING (%s). A growing clip belongs to the recorder "
+                 "until stop; every other content is restored by identity. "
+                 "QBX-146, QBX-202.",
                  clipIndex_,
                  strackpath::qualifiedToString( pathRoot_, trackPath_ )
                      .toUtf8().constData(),
@@ -209,6 +236,17 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
         obj->addRef();
         heldObject_ = obj;
         holdsRef_   = true;
+
+        // WHAT THE LINK ITSELF CARRIED (QBX-202). The pin holds the CONTENT;
+        // this SLink is about to be destroyed and the inverse builds a new
+        // one, which is born with SLink::defaultTimebaseFor()'s timebase and
+        // no channel override. Captured as the link's own types -- rounding
+        // startTicks through an integer here would move a beats-timebase clip
+        // on every undo, which is why merge-columns' Operand keeps a Fraction
+        // too.
+        pinnedLink_.timebase             = clipLink->getTimebase();
+        pinnedLink_.startTicks           = clipLink->getStartTicks();
+        pinnedLink_.eventChannelOverride = clipLink->getEventChannelOverride();
 
         // STrack::trackChildWasAdded wires TWO object-level signals --
         // durationChanged, and eventsChanged for Event-kind content -- and

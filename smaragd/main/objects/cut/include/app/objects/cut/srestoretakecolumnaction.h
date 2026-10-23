@@ -9,7 +9,16 @@ class SRemoveSampleAction;
 
 /**
  * The inverse of deleting a clip whose content nothing can rebuild from
- * parameters -- a take column (QBX-146 step a, plan/proposed/52).
+ * parameters (QBX-146 step a, plan/proposed/52).
+ *
+ * IT IS NOT ONLY A TAKE COLUMN since QBX-202, and the NAME IS HISTORICAL. The
+ * pin reaches every content `remove-sample` is not asked to rebuild -- a MIDI
+ * clip's SMidiSequence above all -- because re-linking the same object needs
+ * to know nothing about what the object is. The verb string is deliberately
+ * left alone here: renaming a public header's action is its own, separately
+ * reviewed change (it is live-only and registered nowhere, so nothing but
+ * logs and this file reads the name), not something to fold into the bug fix
+ * that widened the reach. QBX-205 carries it.
  *
  * It restores the clip by RE-LINKING THE VERY OBJECT that was deleted, which
  * SRemoveSampleAction kept alive with an addRef() pin. That is the whole point:
