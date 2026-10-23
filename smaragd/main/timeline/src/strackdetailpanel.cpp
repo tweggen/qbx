@@ -190,6 +190,11 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
         if (updatingPan_) return;
         applyPan(sTickToPan(tick));
     });
+    // ONE DRAG IS ONE UNDO STEP (QBX-206).
+    connect(panSlider_, &QSlider::sliderPressed, this,
+            [this] { panGesture_ = SAction::newGesture(); });
+    connect(panSlider_, &QSlider::sliderReleased, this,
+            [this] { panGesture_ = 0; });
 
     slidersSection_ = new SCollapsibleSection(QStringLiteral("sliders"),
                                               tr("Sliders"), this);
@@ -204,6 +209,10 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
 
     connect(volumeSlider_, &QSlider::valueChanged,
             this, &STrackDetailPanel::onVolumeSliderMoved);
+    connect(volumeSlider_, &QSlider::sliderPressed, this,
+            [this] { volumeGesture_ = SAction::newGesture(); });
+    connect(volumeSlider_, &QSlider::sliderReleased, this,
+            [this] { volumeGesture_ = 0; });
     connect(&SApplication::app(), &SApplication::meterTick,
             this, &STrackDetailPanel::onMeterTick);
     connect(&SApplication::app(), &SApplication::meterReset,
@@ -432,7 +441,9 @@ void STrackDetailPanel::applyVolumeDb(double dB)
     const QList<int> trackPath =
         root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
     if (!trackPath.isEmpty()) {
-        stimeline::submitActive(new SSetTrackVolumeAction(trackPath, dB));
+        SSetTrackVolumeAction *act = new SSetTrackVolumeAction(trackPath, dB);
+        act->setGesture(volumeGesture_);
+        stimeline::submitActive(act);
     } else {
         currentTrack_->setVolume(dB);
         if (SProject *p = SApplication::app().getCurrentProject())
@@ -452,7 +463,9 @@ void STrackDetailPanel::applyPan(double pan)
     const QList<int> trackPath =
         root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
     if (!trackPath.isEmpty()) {
-        stimeline::submitActive(new SSetTrackPanAction(trackPath, pan));
+        SSetTrackPanAction *act = new SSetTrackPanAction(trackPath, pan);
+        act->setGesture(panGesture_);
+        stimeline::submitActive(act);
     } else {
         currentTrack_->setPan(pan);
         if (SProject *p = SApplication::app().getCurrentProject())

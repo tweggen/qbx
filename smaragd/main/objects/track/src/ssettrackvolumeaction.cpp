@@ -86,13 +86,16 @@ QString SSetTrackVolumeAction::mergeKey() const
     // a bare index would collide across folders (top-level track 0 and the
     // first child of a folder both being "0"), merging two different faders'
     // drags into one undo step.
-    return QStringLiteral("set-track-volume:%1").arg(qualifiedToString( pathRoot_, trackPath_ ));
+    // ...AND the GESTURE (QBX-206): the path says which fader, the token says
+    // which drag of it. Without it two separate drags were one undo step.
+    return QStringLiteral("set-track-volume:%1").arg(qualifiedToString( pathRoot_, trackPath_ ))
+           + gestureKeySuffix();
 }
 
 bool SSetTrackVolumeAction::mergeWith(const SAction *later)
 {
     const SSetTrackVolumeAction *o = dynamic_cast<const SSetTrackVolumeAction*>(later);
-    if (!o || o->trackPath_ != trackPath_) {
+    if (!o || o->trackPath_ != trackPath_ || !sameGesture( o )) {
         return false;
     }
     // Absorb the newer target volume; keep our own (older) value as the
@@ -101,6 +104,10 @@ bool SSetTrackVolumeAction::mergeWith(const SAction *later)
     return true;
 }
 
+// NOTE: `gesture` is read (see readXml) but deliberately NOT written. It is a
+// RUN-LOCAL token, not data: writing it would put a counter value into every
+// serialized form, and two actions reloaded from a log would inherit a merge
+// relationship they were never meant to have.
 void SSetTrackVolumeAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("trackPath", qualifiedToString( pathRoot_, trackPath_ ));
@@ -116,6 +123,22 @@ bool SSetTrackVolumeAction::readXml(const QDomElement &elem, int /*version*/)
         ? parseInto( pathRoot_, elem.attribute("trackPath") )
         : QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     newVolume_ = elem.attribute("volume", "0").toDouble();
+    // `gesture` (QBX-206) lets a SCRIPT say that two edits belong to ONE
+    // gesture, which no .qxa could otherwise express: a script has no press
+    // and no release, so every verb would be its own gesture and the
+    // cross-root rule (proposal 09 D21) would be satisfied for the wrong
+    // reason -- by the tokens differing rather than by the roots differing.
+    // merge_across_roots therefore gives both its edits the SAME token.
+    //
+    // Numbers in a script are a NAMESPACE OF THEIR OWN, deliberately kept away
+    // from the live counter: `gesture="1"` must mean "the same gesture as the
+    // other element that says 1", and must never collide with a token
+    // SAction::newGesture() handed a real drag. Offsetting into a high range
+    // is what keeps those two apart.
+    if( elem.hasAttribute( "gesture" ) ) {
+        const qulonglong g = elem.attribute( "gesture" ).toULongLong();
+        if( g ) setGesture( SCRIPT_GESTURE_BASE + g );
+    }
     return true;
 }
 

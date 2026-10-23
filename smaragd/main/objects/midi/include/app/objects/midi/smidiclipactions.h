@@ -122,8 +122,13 @@ public:
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
-    // A tempo spin box drag is one undo step.
-    QString mergeKey() const override { return QStringLiteral( "set-tempo" ); }
+    // ONE TEMPO EDIT IS ONE UNDO STEP (QBX-206). The old comment here said
+    // "a tempo spin box drag is one undo step" and the key was the bare verb
+    // name -- but the tempo control is a modal QInputDialog that commits ONE
+    // value (sstdmixerview.cpp), so there was no drag to coalesce and the
+    // constant key merged every tempo change in the session instead.
+    QString mergeKey() const override
+    { return QStringLiteral( "set-tempo" ) + gestureKeySuffix(); }
     bool mergeWith( const SAction *later ) override;
 
 private:

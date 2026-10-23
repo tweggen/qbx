@@ -18,6 +18,14 @@
   and ONE undo, exactly one of the two faders has moved back and the other has
   not. Merged, one undo reverts both (or reverts the wrong one) and the pair
   cannot hold.
+
+  EVERY EDIT BELOW CARRIES AN EXPLICIT `gesture` (QBX-206), and without it this
+  case would no longer gate anything. A merge key now ends with a GESTURE
+  token that is unique per action unless something says otherwise, and a script
+  has no press and no release, so two bare elements are two gestures and
+  would fail to merge for a reason that has nothing to do with their roots.
+  Sharing one token puts the root rule back in the position of being the only
+  thing that can prevent the merge, which is what D21 is about.
 -->
 <SActionScript version="1" name="merge_across_roots">
 
@@ -32,10 +40,11 @@
     <assert-track-volume trackPath="0" volumeDb="0.0" tolerance="0.01"/>
     <assert-track-volume trackPath="Drums:0" volumeDb="0.0" tolerance="0.01"/>
 
-    <!-- Two consecutive volume edits, same index, different roots. Same verb,
-         so they are exactly the pair that used to coalesce. -->
-    <set-track-volume trackPath="0" volume="-6.0"/>
-    <set-track-volume trackPath="Drums:0" volume="-12.0"/>
+    <!-- Two consecutive volume edits, same index, different roots, declared
+         as ONE gesture. Same verb and now the same token, so they are exactly
+         the pair that used to coalesce - and the ROOT is all that stops it. -->
+    <set-track-volume trackPath="0" volume="-6.0" gesture="1"/>
+    <set-track-volume trackPath="Drums:0" volume="-12.0" gesture="1"/>
     <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
     <assert-track-volume trackPath="Drums:0" volumeDb="-12.0" tolerance="0.01"/>
 
@@ -58,13 +67,31 @@
     <assert-track-volume trackPath="Drums:0" volumeDb="-12.0" tolerance="0.01"/>
     <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
 
-    <!-- The CONTROL: two edits on the SAME lane in the SAME root still merge,
-         which is what the coalescing is for. Two drags, ONE undo entry. -->
-    <set-track-volume trackPath="0" volume="-3.0"/>
-    <set-track-volume trackPath="0" volume="-4.0"/>
+    <!-- THE CONTROL: two edits on the SAME lane in the SAME root, in ONE
+         gesture, still merge - which is what the coalescing is for. Two
+         values, ONE undo entry, so the undo lands on -6.0 and not on -3.0.
+         Before QBX-206 these two elements carried no token and merged because
+         the key was the path alone; they merge now because they SAY they are
+         one gesture, which is the only sense in which a script can have one. -->
+    <set-track-volume trackPath="0" volume="-3.0" gesture="2"/>
+    <set-track-volume trackPath="0" volume="-4.0" gesture="2"/>
     <assert-track-volume trackPath="0" volumeDb="-4.0" tolerance="0.01"/>
     <undo/>
     <assert-track-volume trackPath="0" volumeDb="-6.0" tolerance="0.01"/>
+
+    <!-- AND THE COUNTERPART (QBX-206): the same lane, the same root, TWO
+         gestures. These must NOT merge, so one undo takes back only the
+         second. This is the half that was broken: with no token at all, the
+         two blocks above and below here were indistinguishable. -->
+    <redo/>
+    <assert-track-volume trackPath="0" volumeDb="-4.0" tolerance="0.01"/>
+    <set-track-volume trackPath="0" volume="-8.0" gesture="3"/>
+    <set-track-volume trackPath="0" volume="-9.0" gesture="4"/>
+    <assert-track-volume trackPath="0" volumeDb="-9.0" tolerance="0.01"/>
+    <undo/>
+    <assert-track-volume trackPath="0" volumeDb="-8.0" tolerance="0.01"/>
+    <undo/>
+    <assert-track-volume trackPath="0" volumeDb="-4.0" tolerance="0.01"/>
   </actions>
 
 </SActionScript>

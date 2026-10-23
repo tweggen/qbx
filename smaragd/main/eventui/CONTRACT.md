@@ -44,7 +44,11 @@ Invariants:
    one of its own and stands alone; the ONE surface that submits a stream
    within a single gesture — a held arrow key, which nudges once per
    auto-repeat — passes the same token for the whole hold
-   (`SSetNotesAction::newGestureId()`, `event-editor-key repeat=`).
+   (`SAction::newGesture()`, `event-editor-key repeat=`). QBX-206 found the same
+   defect on the fader, the pan knob, the plugin slider, the tempo and the two
+   automation keys and moved the token to `SAction`, so this view now USES the
+   shared mechanism rather than owning one; the rule it states is unchanged and
+   `main/actions/CONTRACT.md` carries the general form.
 3. **A live drag never touches the model.** It paints out of `SPianoRollView::
    drag_` and the release DISCARDS that preview and submits the action
    (revert-then-action). There is consequently nothing to roll back when a

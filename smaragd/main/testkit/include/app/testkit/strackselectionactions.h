@@ -95,6 +95,35 @@ private:
 // re-spelling of it. Not undoable — like select-track, it drives a UI gesture,
 // not a model edit (the transport move it triggers is asserted separately,
 // e.g. by wait-playhead/assert-source-position).
+/**
+ * `fader-drag` - ONE HELD DRAG of a lane's fader (QBX-206).
+ *
+ * The `fader-key` twin, and the only verb that can state the undo claim this
+ * ticket is about: a drag HOLDS the handle, streams `steps` values and lets
+ * go, so the whole burst must land as ONE undo entry while a SECOND call must
+ * land as a second. `set-track-volume` cannot express it (two calls are two
+ * gestures by construction) and neither can a setValue()-based seam, which
+ * emits no sliderPressed and so makes every tick look like its own gesture.
+ *
+ * The lane must have a HEAD, as `fader-key` requires; `db` is the dB to land
+ * on and a `db` the fader already holds is REFUSED rather than silently
+ * asserting nothing.
+ */
+class SFaderDragAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "fader-drag" ); }
+    QStringList knownAttributes() const override
+    { return { "trackPath", "db", "steps" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    double  db_        = 0.0;
+    int     steps_     = 4;
+};
+
 class SFaderKeyAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "fader-key" ); }

@@ -145,6 +145,7 @@ protected:
 
 private slots:
     void onFaderMoved( int value );
+    void onFaderPressed();
     void onFaderReleased();
     void onMuteToggled( bool on );
     void onSoloToggled( bool on );
@@ -222,6 +223,14 @@ private:
     bool updating_        = false;   ///< model->view write in progress
     double lastReadDb_    = 1e30;    ///< the Read-family pump's last value
     double lastReadPan_   = 1e30;    ///< the same, for the pan pump
+    /// THE CURRENT DRAG, per control (QBX-206). A slider streams valueChanged
+    /// while it is held, so every action between sliderPressed and
+    /// sliderReleased carries ONE token and the burst is one undo step; 0
+    /// means no drag is in progress, and SAction::setGesture() ignores it, so
+    /// a wheel notch, a double-click reset or a model write keeps the unique
+    /// token the action was born with and is its own step.
+    quint64 volumeGesture_ = 0;
+    quint64 panGesture_    = 0;
 };
 
 #endif // SMIXERSTRIP_H

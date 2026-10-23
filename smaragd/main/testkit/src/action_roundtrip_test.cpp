@@ -418,6 +418,10 @@ const Fixture kFixtures[] = {
     // attribute would read back identical and hide itself.
     { "event-editor-key",
       "<event-editor-key clip='1,0' key='right' repeat='3'/>" },
+    // `steps` is non-default deliberately, for the reason the row above gives:
+    // 4 is the default, so a dropped attribute would read back identical.
+    { "fader-drag",
+      "<fader-drag trackPath='0' db='-6' steps='7'/>" },
     { "assert-event-editor",
       "<assert-event-editor clip='1,0' kind='pianoroll' contains='notes=2'"
       " absent='empty=1' grabPng='roll.png' grabWidth='640'"
@@ -1006,6 +1010,7 @@ const LaneRow kLaneRows[] = {
     { "set-track-mute",        Accept, "AC5.4 heard through twGainStage. On the CONDUCTOR it is accepted on purpose where volume and pan are refused: mute is not purely an audio control, it also drives the lane/clip colour through strackcolormodifier, so refusing it would remove a visible behaviour rather than an inert one (QBX-114). Gate: master_mute_audible" },
     { "head-fader",            Accept, "the master head's own fader gesture (M4)" },
     { "fader-key",             Accept, "the same fader, by keyboard" },
+    { "fader-drag",            Accept, "the same fader again, HELD (QBX-206)" },
     { "set-track-name",        Accept, "renaming a system lane is harmless and useful" },
     { "set-lane-hidden",       Accept,
       "M4/AC4.5, and it is the INVERSE of the others: this verb refuses a lane "

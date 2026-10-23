@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-206. ONE CONTROL GESTURE IS ONE UNDO STEP, for the fader, the pan knob
+  and an automation lane - the claim QBX-203 made for an event edit, now for
+  every other control that coalesces.
+
+  WHAT WENT WRONG. The merge keys were the control's PATH alone. The queue's
+  tail merge is bounded by the drain, but QUndoStack::push folds a new command
+  into the top one whenever SActionUndoCommand::id() matches, with no time or
+  gesture boundary - so every edit a control ever received merged into one
+  entry. Two separate fader drags were ONE undo step, and because the stack was
+  then one entry short, the undo AFTER them took back the `add-track`. That
+  second half is what `assert-track-count` below pins: the first version of
+  this case reported "no track at 0" for every assertion after the second undo.
+
+  WHY A `fader-drag` VERB EXISTS (QBX-206). Two `set-track-volume` elements are
+  two gestures by construction, so they can only gate the BOUNDARY. They cannot
+  gate the other direction - that a HELD drag still collapses - because no
+  scripted verb holds a handle down, and a seam built on setValue() emits no
+  sliderPressed, which would make every tick look like its own gesture and let
+  the gate pass whatever the wiring does.
+
+  TOLERANCES. The fader is an integer control whose dB curve does not round
+  trip (sDbToFader(0.0) is tick -191 and back is +0.0625 dB), so a value that
+  came FROM the fader is asserted with room; a value UNDO restored comes from
+  the model untouched and is asserted exactly.
+
+  NOT ASSERTED HERE, and deliberately: `set-plugin-param` (no verb reports a
+  plugin's parameter value), `set-tempo` and `set-project-channels`. All three
+  carry the same base-class boundary - SAction::gestureKeySuffix() in the key
+  and sameGesture() in mergeWith - so what this case pins for the fader is the
+  mechanism they use; it is NOT a measurement of their own keys.
+-->
+<SActionScript version="1" name="control_edit_undo_steps">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <assert-track-volume trackPath="0" volumeDb="0"/>
+
+    <!-- ========= 1. ONE HELD DRAG IS ONE UNDO STEP ===================== -->
+    <!-- Five streamed values under one press. If the burst stopped
+         coalescing, the undo at the end of this block would land on an
+         INTERMEDIATE value instead of exactly 0. -->
+    <fader-drag trackPath="0" db="-6" steps="5"/>
+    <assert-track-volume trackPath="0" volumeDb="-6" tolerance="0.3"/>
+
+    <!-- ========= 2. A SECOND DRAG IS A SECOND STEP ===================== -->
+    <fader-drag trackPath="0" db="-12" steps="5"/>
+    <assert-track-volume trackPath="0" volumeDb="-12" tolerance="0.3"/>
+
+    <!-- One undo takes back drag 2 ONLY. -->
+    <undo count="1"/>
+    <assert-track-volume trackPath="0" volumeDb="-6" tolerance="0.3"/>
+    <!-- One more takes back drag 1, WHOLE: exactly the pristine 0 dB. -->
+    <undo count="1"/>
+    <assert-track-volume trackPath="0" volumeDb="0"/>
+    <!-- AND THE TRACK IS STILL THERE. Two gestures cost two entries, so the
+         two undos above cannot have reached the `add-track` beneath them. -->
+    <assert-track-count count="1"/>
+
+    <redo count="2"/>
+    <assert-track-volume trackPath="0" volumeDb="-12" tolerance="0.3"/>
+    <undo count="2"/>
+    <assert-track-volume trackPath="0" volumeDb="0"/>
+    <assert-track-count count="1"/>
+
+    <!-- ========= 3. THE SCRIPTED VERB IS ITS OWN GESTURE =============== -->
+    <!-- Nobody stamped these, so each carries the unique token SAction gives
+         every action by default and neither can merge with anything. -->
+    <set-track-volume trackPath="0" volume="-3"/>
+    <set-track-volume trackPath="0" volume="-9"/>
+    <assert-track-volume trackPath="0" volumeDb="-9"/>
+    <undo count="1"/>
+    <assert-track-volume trackPath="0" volumeDb="-3"/>
+    <undo count="1"/>
+    <assert-track-volume trackPath="0" volumeDb="0"/>
+    <assert-track-count count="1"/>
+
+    <!-- ========= 4. PAN, the other knob on the same strip ============== -->
+    <set-track-pan trackPath="0" pan="-0.5"/>
+    <set-track-pan trackPath="0" pan="0.5"/>
+    <assert-track-pan trackPath="0" pan="0.5"/>
+    <undo count="1"/>
+    <assert-track-pan trackPath="0" pan="-0.5"/>
+    <undo count="1"/>
+    <assert-track-pan trackPath="0" pan="0"/>
+
+    <!-- ========= 5. AN AUTOMATION WINDOW ============================== -->
+    <!-- set-automation-points merges only on an IDENTICAL window, so this
+         pair is the one shape its old key DID fold together: same owner, same
+         target, same [from, to). -->
+    <add-automation-lane owner="0" target="self:Volume" mode="read" name="Vol"/>
+    <set-automation-points owner="0" target="self:Volume" from="0" to="48000">
+      <p t="0" v="-4" c="linear"/>
+    </set-automation-points>
+    <set-automation-points owner="0" target="self:Volume" from="0" to="48000">
+      <p t="0" v="-8" c="linear"/>
+    </set-automation-points>
+    <assert-automation-value owner="0" target="self:Volume" time="0" value="-8"/>
+    <undo count="1"/>
+    <assert-automation-value owner="0" target="self:Volume" time="0" value="-4"/>
+  </actions>
+
+</SActionScript>

@@ -173,6 +173,8 @@ void SPluginParamEditor::buildUI()
         const int paramIndex = (int) i;
         connect( slider, &QSlider::valueChanged, this,
                  [this, paramIndex]() { onParamSliderChanged( paramIndex ); } );
+        connect( slider, &QSlider::sliderPressed, this,
+                 &SPluginParamEditor::onSliderPressed );
         connect( slider, &QSlider::sliderReleased, this,
                  &SPluginParamEditor::onSliderReleased );
 
@@ -219,8 +221,10 @@ void SPluginParamEditor::onParamSliderChanged( int sliderIndex )
     // THE action, not twPlugin::setParam(). The action broadcasts to every
     // instance, stales the slot's cached pages (without which the edit is
     // inaudible) and lands one coalesced entry on the undo stack per drag.
-    SApplication::app().submitAction(
-        new SSetPluginParamAction( trackPath_, slotIndex_, info.id, value ) );
+    SSetPluginParamAction *act =
+        new SSetPluginParamAction( trackPath_, slotIndex_, info.id, value );
+    act->setGesture( paramGesture_ );
+    SApplication::app().submitAction( act );
 }
 
 void SPluginParamEditor::onParamsChanged()
@@ -291,10 +295,18 @@ SAutomationLane *SPluginParamEditor::laneFor( std::uint32_t paramId ) const
     return slot_->automationLane( QStringLiteral( "param:%1" ).arg( paramId ) );
 }
 
+void SPluginParamEditor::onSliderPressed()
+{
+    // "The hand took hold" -- the start of the gesture the undo stack has to
+    // bound (QBX-206).
+    paramGesture_ = SAction::newGesture();
+}
+
 void SPluginParamEditor::onSliderReleased()
 {
     // Touch commits here; Latch and Write hold their value to the transport
     // stop. The recorder knows which - this is just "the hand let go".
+    paramGesture_ = 0;
     SApplication::app().automationRecorder().releaseControl();
 }
 

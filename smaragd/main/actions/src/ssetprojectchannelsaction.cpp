@@ -89,16 +89,19 @@ SApplyResult SSetProjectChannelsAction::apply( SProject *project )
 
 QString SSetProjectChannelsAction::mergeKey() const
 {
-    // One channel count per project, so a constant key: there is nothing to
-    // disambiguate and two consecutive changes are always the same control.
-    return QStringLiteral("set-project-channels");
+    // One channel count per project, so there is nothing about WHICH control
+    // to disambiguate -- but a constant key merged every change the project
+    // ever saw into one undo step (QBX-206). The GESTURE token is the whole
+    // key's content here: this control has no UI call site and is reached only
+    // as a committed value, so each one is its own undo step.
+    return QStringLiteral("set-project-channels") + gestureKeySuffix();
 }
 
 bool SSetProjectChannelsAction::mergeWith( const SAction *later )
 {
     const SSetProjectChannelsAction *o =
         dynamic_cast<const SSetProjectChannelsAction*>( later );
-    if( !o ) return false;
+    if( !o || !sameGesture( o ) ) return false;
     // Absorb the newer target; keep our own (older) value as the baseline the
     // inverse will be captured against.
     channels_ = o->channels_;

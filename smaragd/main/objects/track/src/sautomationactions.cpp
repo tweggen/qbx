@@ -597,9 +597,14 @@ QString SMoveAutomationPointAction::mergeKey() const
 {
     // A DRAG of one point is one undo step. Keyed on where the point STARTED,
     // which is what the successive events of a drag share.
+    // ...and on the GESTURE (QBX-206). The chain check in mergeWith() below
+    // is NOT a gesture boundary on its own: a second, separate drag of one
+    // point STARTS where the first left it, which is exactly the condition
+    // that check accepts.
     return QStringLiteral( "move-automation-point:%1:%2:%3:%4" )
         .arg( qualifiedToString( pathRoot_, ownerPath_ ) ).arg( slotIndex_ )
-        .arg( target_ ).arg( (qlonglong) time_ );
+        .arg( target_ ).arg( (qlonglong) time_ )
+           + gestureKeySuffix();
 }
 
 bool SMoveAutomationPointAction::mergeWith( const SAction *later )
@@ -608,7 +613,7 @@ bool SMoveAutomationPointAction::mergeWith( const SAction *later )
         dynamic_cast<const SMoveAutomationPointAction *>( later );
     if( !o ) return false;
     if( o->ownerPath_ != ownerPath_ || o->target_ != target_
-        || o->slotIndex_ != slotIndex_ ) return false;
+        || o->slotIndex_ != slotIndex_ || !sameGesture( o ) ) return false;
     // The newer action starts where we LEFT the point, or the two are not one
     // gesture.
     if( o->time_ != toTime_ ) return false;
@@ -697,8 +702,16 @@ QString SSetAutomationPointsAction::mergeKey() const
     // OWNER + TARGET (design §3.4). Curve drawing and a Touch/Latch/Write pass
     // both issue a stream of these; without coalescing a single gesture would
     // become hundreds of undo steps.
+    // ...AND the GESTURE (QBX-206). Nothing today streams these: a recorder
+    // PASS accumulates its ticks and submits ONE of them at the stop, a lane
+    // drag submits ONE at the release, and the set-track-volume redirect onto
+    // a Read-family lane applies its point INLINE rather than pushing a
+    // second command, so the fader's own key is what the stack merges on. The
+    // token is therefore the whole boundary here, and what it buys is that two
+    // separate passes, or two separate drags on one lane, are two undo steps.
     return QStringLiteral( "set-automation-points:%1:%2:%3" )
-        .arg( qualifiedToString( pathRoot_, ownerPath_ ) ).arg( slotIndex_ ).arg( target_ );
+        .arg( qualifiedToString( pathRoot_, ownerPath_ ) ).arg( slotIndex_ ).arg( target_ )
+           + gestureKeySuffix();
 }
 
 bool SSetAutomationPointsAction::mergeWith( const SAction *later )
@@ -707,7 +720,8 @@ bool SSetAutomationPointsAction::mergeWith( const SAction *later )
         dynamic_cast<const SSetAutomationPointsAction *>( later );
     if( !o ) return false;
     if( o->ownerPath_ != ownerPath_ || o->target_ != target_
-        || o->slotIndex_ != slotIndex_ || o->take_ != take_ ) return false;
+        || o->slotIndex_ != slotIndex_ || o->take_ != take_
+        || !sameGesture( o ) ) return false;
     // ONLY an identical window merges. A wider one would silently drop the
     // points this action wrote outside the newcomer's span, and the captured
     // inverse would then no longer describe the state we started from.

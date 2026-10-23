@@ -242,6 +242,12 @@ void SMixerStrip::buildUi_()
         if( updatingPan_ ) return;
         applyPan_( sTickToPan( tick ) );
     } );
+    // ONE DRAG IS ONE UNDO STEP (QBX-206), the press/release pair being the
+    // only thing that knows where a gesture starts and ends.
+    connect( pan_, &QSlider::sliderPressed,  this,
+             [this]{ panGesture_ = SAction::newGesture(); } );
+    connect( pan_, &QSlider::sliderReleased, this,
+             [this]{ panGesture_ = 0; } );
     sdefaultreset::onDoubleClick( pan_, [this]{ applyPan_( SPAN_DEFAULT ); } );
     panRow_->addWidget( pan_, 1 );
     fixed->addLayout( panRow_ );
@@ -291,6 +297,7 @@ void SMixerStrip::buildUi_()
     fader_->setTickPosition( QSlider::TicksRight );
     fader_->setTickInterval( 120 );
     connect( fader_, &QSlider::valueChanged, this, &SMixerStrip::onFaderMoved );
+    connect( fader_, &QSlider::sliderPressed, this, &SMixerStrip::onFaderPressed );
     connect( fader_, &QSlider::sliderReleased, this, &SMixerStrip::onFaderReleased );
     // Double-click resets to EXACTLY 0.0 dB, committed as a dB rather than
     // through the slider: the curve does not round-trip (`sDbToFader( 0.0 )`
@@ -391,8 +398,17 @@ void SMixerStrip::onFaderMoved( int value )
     applyVolumeDb_( sFaderToDb( value ) );
 }
 
+// The two ends of ONE fader drag (QBX-206). The release already existed, for
+// the automation recorder's Touch mode; the undo stack needs the same boundary
+// and for the same reason -- a gesture is a thing only the control can see.
+void SMixerStrip::onFaderPressed()
+{
+    volumeGesture_ = SAction::newGesture();
+}
+
 void SMixerStrip::onFaderReleased()
 {
+    volumeGesture_ = 0;
     SApplication::app().automationRecorder().releaseControl();
 }
 
@@ -427,7 +443,9 @@ void SMixerStrip::applyVolumeDb_( double db )
                target, db, SApplication::app().getGlobalLocatorPos() ) )
         return;
 
-    submit_( new SSetTrackVolumeAction( path, db ) );
+    SSetTrackVolumeAction *act = new SSetTrackVolumeAction( path, db );
+    act->setGesture( volumeGesture_ );   // 0 = not a drag; see the member
+    submit_( act );
 }
 
 // The pan twin (proposal 49 M4): the same offer-the-recorder-first rule, and
@@ -455,7 +473,9 @@ void SMixerStrip::applyPan_( double pan )
                target, pan, SApplication::app().getGlobalLocatorPos() ) )
         return;
 
-    submit_( new SSetTrackPanAction( path, pan ) );
+    SSetTrackPanAction *act = new SSetTrackPanAction( path, pan );
+    act->setGesture( panGesture_ );
+    submit_( act );
 }
 
 // Disabled with a tooltip at width != 2 and on the conductor lane (49 D1/D2).

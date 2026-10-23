@@ -220,6 +220,43 @@ SApplyResult SFaderKeyAction::apply( SProject * /*project*/ )
     return { true, nullptr };
 }
 
+SApplyResult SFaderDragAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "fader-drag: no main window";
+        return { false, nullptr };
+    }
+    if( !win->dragFader( trackPath_, db_, steps_ ) ) {
+        qWarning() << "fader-drag: no head for" << trackPath_
+                   << "or the fader already sits at" << db_ << "dB";
+        return { false, nullptr };
+    }
+    // The GESTURE is not undoable; what it submits is. Each set-track-volume
+    // the drag produced went through the history on its own, exactly as a
+    // user's drag does, which is the whole point of driving the real control.
+    return { true, nullptr };
+}
+
+void SFaderDragAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "db", db_ );
+    elem.setAttribute( "steps", steps_ );
+}
+
+bool SFaderDragAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    db_        = elem.attribute( "db", "0" ).toDouble();
+    steps_     = elem.attribute( "steps", "4" ).toInt();
+    if( steps_ < 1 ) {
+        qWarning() << "fader-drag: steps must be >= 1, got" << steps_;
+        return false;
+    }
+    return true;
+}
+
 void SFaderKeyAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "trackPath", trackPath_ );
@@ -394,6 +431,12 @@ static const bool s_reg_dragtrack =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "drag-track" ),
           [] { return new SDragTrackAction; } ),
+      true );
+
+static const bool s_reg_faderdrag =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "fader-drag" ),
+          [] { return new SFaderDragAction; } ),
       true );
 
 static const bool s_reg_faderkey =

@@ -135,6 +135,11 @@ private:
     // True while the panel writes the pan slider from the model, so the
     // resulting valueChanged never turns a DISPLAY into a new action.
     bool updatingPan_ = false;
+    // THE CURRENT DRAG, per control (QBX-206) -- see SMixerStrip's twins. A
+    // slider streams valueChanged while held, so one press/release pair is one
+    // undo step; 0 means no drag, and setGesture() ignores it.
+    quint64 volumeGesture_ = 0;
+    quint64 panGesture_    = 0;
     QLabel *placeholder_;   // shown instead of the content when no track is set
     SLevelMeter *meter_ = nullptr;   // proposal 34
     twLevelProbe probe_;             // re-bound whenever the track changes

@@ -3,7 +3,6 @@
 #include <QDebug>
 #include <QDomElement>
 
-#include <atomic>
 #include <algorithm>
 #include <cmath>
 
@@ -256,19 +255,11 @@ SSetNotesAction::SSetNotesAction( const QList<int> &clipPath,
                                   std::vector<SEvent> notes, int take,
                                   bool broadcast, quint64 gesture )
     : clipPath_( clipPath ), notes_( std::move( notes ) ), take_( take ),
-      broadcast_( broadcast ),
-      gesture_( gesture ? gesture : newGestureId() )
+      broadcast_( broadcast )
 {
-}
-
-quint64 SSetNotesAction::newGestureId()
-{
-    // Monotonic and never 0, so 0 can mean "give me one of my own". Atomic
-    // because the project LOADER builds actions off the GUI thread, and a
-    // duplicated token would merge two unrelated edits into one undo step --
-    // which is the very defect this exists to prevent.
-    static std::atomic<quint64> next{ 0 };
-    return ++next;
+    // 0 means "keep the unique one SAction already gave me", which is what
+    // setGesture() does with it.
+    setGesture( gesture );
 }
 
 QStringList SSetNotesAction::knownAttributes() const
@@ -337,7 +328,7 @@ QString SSetNotesAction::mergeKey() const
     // action still waiting to be applied.
     return QStringLiteral( "set-notes:" ) + qualifiedToString( pathRoot_, clipPath_ )
          + ":" + QString::number( take_ )
-         + ":" + QString::number( gesture_ );
+         + gestureKeySuffix();
 }
 
 bool SSetNotesAction::mergeWith( const SAction *later )
@@ -349,7 +340,7 @@ bool SSetNotesAction::mergeWith( const SAction *later )
     // is supposed to carry it. Both merge sites compare keys before calling
     // this, so the test is a backstop against a key that stops carrying the
     // token.
-    if( o->gesture_ != gesture_ ) return false;
+    if( !sameGesture( o ) ) return false;
     notes_ = o->notes_;   // the LATER absolute state wins
     return true;
 }
