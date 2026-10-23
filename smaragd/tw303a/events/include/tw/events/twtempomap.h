@@ -58,6 +58,17 @@ public:
 
     int32_t numerator() const { return numerator_; }
     int32_t denominator() const { return denominator_; }
+
+    // ONE BAR IN TICKS. DERIVED, like bpm() below, and here because the map is
+    // the only thing that knows what a bar is -- `ppq * 4 / denominator` is one
+    // beat of the signature's note value, times `numerator` beats.
+    //
+    // It exists because three call sites had written the arithmetic out
+    // longhand (the event ruler, insert-midi-clip and place-midi-recording),
+    // in two different factor orders, and QBX-207 needed a fourth in UI code.
+    // A formula copied four times is a second authority with extra steps.
+    int64_t barTicks() const
+    { return (int64_t) ppq_ * 4 * numerator_ / denominator_; }
     void setTimeSignature(int32_t num, int32_t den) {
         if (num > 0) numerator_ = num;
         if (den > 0) denominator_ = den;

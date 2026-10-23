@@ -220,6 +220,93 @@ SApplyResult SFaderKeyAction::apply( SProject * /*project*/ )
     return { true, nullptr };
 }
 
+SApplyResult SArrangerMenuAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "arranger-menu: no main window";
+        return { false, nullptr };
+    }
+    if( !win->triggerArrangerMenu( trackPath_, (offset_t) at_, clip_, item_ ) ) {
+        qWarning() << "arranger-menu: no lane at" << trackPath_
+                   << "or the menu does not offer" << item_
+                   << "(or offers it greyed)";
+        return { false, nullptr };
+    }
+    // The GESTURE is not undoable; whatever the item submitted is. Opening a
+    // menu and clicking it is not itself an edit -- the same rule select-track
+    // and fader-key follow.
+    return { true, nullptr };
+}
+
+void SArrangerMenuAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "at", (qlonglong) at_ );
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "item", item_ );
+}
+
+bool SArrangerMenuAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    at_        = elem.attribute( "at", "0" ).toLongLong();
+    clip_      = elem.attribute( "clip", "-1" ).toInt();
+    item_      = elem.attribute( "item" );
+    if( item_.isEmpty() ) {
+        qWarning() << "arranger-menu: `item` is required";
+        return false;
+    }
+    return true;
+}
+
+SApplyResult SAssertArrangerMenuAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "assert-arranger-menu: no main window";
+        return { false, nullptr };
+    }
+    const QString desc =
+        win->describeArrangerMenu( trackPath_, (offset_t) at_, clip_ );
+    if( desc.isEmpty() ) {
+        qWarning() << "assert-arranger-menu: no lane at" << trackPath_
+                   << "(or no arranger)";
+        return { false, nullptr };
+    }
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning().noquote() << "assert-arranger-menu FAILED: expected"
+                             << contains_ << "in" << desc;
+        return { false, nullptr };
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning().noquote() << "assert-arranger-menu FAILED: did NOT expect"
+                             << absent_ << "in" << desc;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertArrangerMenuAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "at", (qlonglong) at_ );
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "contains", contains_ );
+    elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertArrangerMenuAction::readXml( const QDomElement &elem,
+                                         int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    at_        = elem.attribute( "at", "0" ).toLongLong();
+    clip_      = elem.attribute( "clip", "-1" ).toInt();
+    contains_  = elem.attribute( "contains" );
+    absent_    = elem.attribute( "absent" );
+    return true;
+}
+
 SApplyResult SFaderDragAction::apply( SProject * /*project*/ )
 {
     SMainWindow *win = mainWindow();
@@ -431,6 +518,18 @@ static const bool s_reg_dragtrack =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "drag-track" ),
           [] { return new SDragTrackAction; } ),
+      true );
+
+static const bool s_reg_arrangermenu =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "arranger-menu" ),
+          [] { return new SArrangerMenuAction; } ),
+      true );
+
+static const bool s_reg_assertarrangermenu =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-arranger-menu" ),
+          [] { return new SAssertArrangerMenuAction; } ),
       true );
 
 static const bool s_reg_faderdrag =

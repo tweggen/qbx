@@ -190,6 +190,14 @@ public:
     bool sendFaderKey( const QString &trackPath, const QString &key );
     /// QBX-206: ONE HELD fader drag on that lane's head, `steps` ticks long.
     bool dragFader( const QString &trackPath, double db, int steps );
+    /// QBX-207: aim the arranger's context menu at (lane, time, optional
+    /// child clip index; < 0 = none) and read what it offers.
+    QString describeArrangerMenu( const QString &trackPath, offset_t at,
+                                  int clipIndex );
+    /// ...and perform one of its items by name. False when the menu does not
+    /// offer it, or offers it GREYED.
+    bool triggerArrangerMenu( const QString &trackPath, offset_t at,
+                              int clipIndex, const QString &item );
 
     // TEST ENTRY POINT: a real click (press+release, no move) into a track's
     // LANE — the clip-drawing area, not the head — at `time`. Runs the same

@@ -3544,6 +3544,51 @@ bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
     return v->tkSendFaderKey( track, key );
 }
 
+// QBX-207: the arranger context menu, aimed and read, then one item performed.
+//
+// Both halves share one private helper because a DESCRIBE that aimed the menu
+// differently from the TRIGGER would be the one thing a menu gate must not do:
+// assert what one menu offers and then click another.
+static SStdMixerView *sAimArrangerMenu( SMainWindow *win, SStdMixerView *v,
+                                        STrack *track, offset_t at,
+                                        int clipIndex )
+{
+    (void) win;
+    if( !v || !track ) return nullptr;
+    // clipIndex < 0 means "the pointer was on the lane, not on a clip", which
+    // is the branch the New MIDI clip item lives in. A non-negative index
+    // addresses one of the lane's own children, as a right-click on a clip
+    // would leave it.
+    SLink *clip = nullptr;
+    if( clipIndex >= 0 ) {
+        const SChildLinks kids = track->childLinks();
+        if( clipIndex >= kids.size() ) return nullptr;
+        clip = kids.at( clipIndex );
+    }
+    v->tkAimMenu( track, at, clip );
+    return v;
+}
+
+QString SMainWindow::describeArrangerMenu( const QString &trackPath,
+                                           offset_t at, int clipIndex )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return QString();
+    STrack *track = trackAtPath_( trackPath );
+    if( !sAimArrangerMenu( this, v, track, at, clipIndex ) ) return QString();
+    return v->describeMenu();
+}
+
+bool SMainWindow::triggerArrangerMenu( const QString &trackPath, offset_t at,
+                                       int clipIndex, const QString &item )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !sAimArrangerMenu( this, v, track, at, clipIndex ) ) return false;
+    return v->tkTriggerMenu( item );
+}
+
 // QBX-206's twin of the above: one HELD drag rather than one keystroke.
 bool SMainWindow::dragFader( const QString &trackPath, double db, int steps )
 {

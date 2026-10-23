@@ -1832,12 +1832,52 @@ beneath it. That matters more than it looks: before the seam existed, a
 sabotage making the item submit a PLAIN `select-take` passed the entire suite —
 the feature wholly broken for every user with the suite green.
 
-**STILL NOT GATED: the QAction itself** — that its text carries the reason and
-that `setEnabled` is actually called with the answer. Nothing builds the
-arranger's lane popup off screen, the same gap that leaves
-`"Create &asset from range"` and QBX-195's "Clean up takes" item ungated. Two
-things narrow it: the DECISION behind the enabled flag is gated (phase E's
-`expectRefused`), and the BEHAVIOUR the dimming communicates is gated (phase C
-asserts that on a full-extent take `whole="1"` and the plain click render
-byte-identically, so the item is dimmed over an operation known to be a
-no-op).
+**THE QAction ITSELF IS NOW REACHABLE (QBX-207), THOUGH THIS ITEM IS STILL NOT
+ASSERTED.** This paragraph used to read "STILL NOT GATED: the QAction itself —
+that its text carries the reason and that `setEnabled` is actually called with
+the answer. Nothing builds the arranger's lane popup off screen, the same gap
+that leaves `"Create &asset from range"` and QBX-195's "Clean up takes" item
+ungated." That gap is closed as a SEAM: `assert-arranger-menu` builds the real
+popup off screen and reports every item's key and enabled state, and
+`arranger-menu` performs one by name and refuses a greyed one. What is still
+missing is a CASE using it for *this* item — QBX-207 needed the seam for its
+own menu item and built it for all of them, so "Play take alone", "Create
+&asset from range" and "Clean up takes" became assertable without becoming
+asserted. Two things still narrow the gap in the meantime: the DECISION behind
+the enabled flag is gated (phase E's `expectRefused`), and the BEHAVIOUR the
+dimming communicates is gated (phase C asserts that on a full-extent take
+`whole="1"` and the plain click render byte-identically, so the item is dimmed
+over an operation known to be a no-op).
+
+## The arranger context menu, and its three seams (QBX-207)
+
+The menu is `qGlobalPopup_`, built per right-click by
+`SMVActualView::ctGlobalShow()` from `lastClickTrack_`, `lastClickSLink_` and
+`lastClickOffset_` — and shown with **`popup()`, not `exec()`**, which is what
+makes it testable at all: a modal `exec()` in a headless run is a hang, not a
+failure.
+
+Three seams over that ONE builder, the pattern QBX-201 set for the mixer insert
+row: `tkAimMenu()` puts the click state where a right-click would leave it and
+runs the builder, `describeMenu()` reads what the user would see, and
+`tkTriggerMenu()` performs one item by name. The builder is never copied — a
+menu assertion that read a re-spelling of the builder would pass on a menu
+nobody could use.
+
+**AN ITEM'S KEY IS ITS `objectName()` WHEN IT HAS ONE, AND ITS LABEL
+OTHERWISE.** Only items a gate needs to address stably carry an objectName
+(`new-midi-clip` is the first), because a label is user-visible text that moves
+and several in this menu carry a parenthetical reason that varies with the
+project — "Clean up takes (3 tracks)". Naming all twenty at once would be a
+wide change in a menu that otherwise needed none; a later ticket names the one
+it needs.
+
+**"NEW MIDI CLIP (2 BARS)" GOES THROUGH THE VERB.** `ctNewMidiClip()` submits
+`insert-midi-clip`, so a new clip is undoable — unlike `ctInsertSample()`
+directly beside it on the same menu, which builds its `SCut` and `SLink` by
+hand and calls `setParent()`, leaving no history entry. Two bars comes from
+`twTempoMap::barTicks()` in TICKS, never a frame count, so the clip keeps its
+two bars across a tempo edit; the position is the click snapped with
+`alignTime()`. The item's enabled state asks `SObject::acceptsClips()` — the
+SAME predicate `splacements::placementLaneAt` refuses on — so the greyed item
+and the action can never disagree about which lanes take a clip.

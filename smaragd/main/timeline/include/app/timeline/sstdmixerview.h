@@ -141,6 +141,26 @@ public:
     SLink *getLastClickSLink() const { return lastClickSLink_; }
     void resetLastClickSLink() { lastClickSLink_ = NULL; }
     offset_t getLastClickOffset() const { return lastClickOffset_; }
+
+    /**
+     * THE ARRANGER CONTEXT MENU'S THREE TEST SEAMS, over the ONE builder
+     * `ctGlobalShow()` already is (QBX-207, the pattern QBX-201 set for the
+     * mixer insert row). Nothing could reach this menu before: it is built
+     * per right-click from `lastClickTrack_` / `lastClickSLink_` /
+     * `lastClickOffset_`, none of which a script can set.
+     *
+     * It is `popup()`, NOT `exec()`, that shows it -- so none of this needs to
+     * dodge a modal loop, and the seams drive the REAL builder rather than a
+     * second copy of it. A menu assertion that read a re-spelling of the
+     * builder would pass on a menu nobody could use.
+     *
+     * `tkAimMenu` puts the click state where a right-click would leave it and
+     * runs the builder; `describeMenu` reads what the user would see;
+     * `tkTriggerMenu` performs one item BY NAME.
+     */
+    void    tkAimMenu( STrack *track, offset_t at, SLink *clip );
+    QString describeMenu() const;
+    bool    tkTriggerMenu( const QString &item );
     QPoint getLastClickPos() const { return lastClickPos_; }
     offset_t getLastClickStartOffset() const { return lastClickSelStartOffset_; }
     int getXPosOfOffset( offset_t ) const;
@@ -695,6 +715,11 @@ public:
     /// has no head, which is what a hidden lane means.
     bool tkSetFaderDb( STrack *t, double db );
     bool tkSendFaderKey( STrack *t, const QString &key );
+    /// QBX-207: the arranger context menu's three seams, forwarded to the
+    /// content view that owns the menu and the click state.
+    void    tkAimMenu( STrack *track, offset_t at, SLink *clip );
+    QString describeMenu() const;
+    bool    tkTriggerMenu( const QString &item );
     /// QBX-206: ONE HELD drag of that track's fader; see
     /// SSMVMixerControl::tkDragFaderDb.
     bool tkDragFaderDb( STrack *t, double db, int steps );
@@ -973,6 +998,10 @@ public slots:
     void ctGroupTrack();     // wrap the clicked track in a new folder track
     void ctUngroupTrack();   // dissolve the clicked folder, promoting its children
     void ctInsertSample();
+    // QBX-207: a two-bar MIDI clip on the clicked lane, at the clicked
+    // position. Unlike ctInsertSample() beside it, this goes through the
+    // `insert-midi-clip` VERB and is therefore undoable.
+    void ctNewMidiClip();
     void ctRemoveSample();
     void ctDeleteSample();
     void ctSplitSample();

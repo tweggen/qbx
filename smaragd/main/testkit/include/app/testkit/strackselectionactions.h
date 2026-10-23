@@ -96,6 +96,71 @@ private:
 // not a model edit (the transport move it triggers is asserted separately,
 // e.g. by wait-playhead/assert-source-position).
 /**
+ * `arranger-menu` - PERFORM ONE ITEM of the arranger's context menu (QBX-207).
+ *
+ * The menu is built per right-click from state no script could set, so until
+ * this verb nothing could reach it at all -- including the items that have
+ * been on it for years. It aims the REAL builder (`SMVActualView::ctGlobalShow`)
+ * at (lane, time, optional clip) and triggers one item, so what runs is the
+ * production handler a user's click runs.
+ *
+ * `item` is the item's objectName when it has one (`new-midi-clip`) and
+ * otherwise a PREFIX of its label with the mnemonic `&` removed -- a prefix
+ * because several labels carry a parenthetical reason that changes with the
+ * project.
+ *
+ * REFUSED when the menu does not offer the item, and ALSO when it offers it
+ * GREYED: a disabled item is one the user could not have clicked, so
+ * `expectReject="true"` over a greyed item is a real assertion about the UI
+ * rather than about the handler.
+ */
+class SArrangerMenuAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "arranger-menu" ); }
+    QStringList knownAttributes() const override
+    { return { "trackPath", "at", "clip", "item" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    qint64  at_        = 0;    // timeline FRAMES, the click position
+    int     clip_      = -1;   // < 0 = the pointer was on the lane, not a clip
+    QString item_;
+};
+
+/**
+ * `assert-arranger-menu` - WHAT THAT MENU OFFERS (QBX-207), the read-only
+ * twin of `arranger-menu` over the same builder.
+ *
+ * Matches substrings of `SMVActualView::describeMenu()`, which reads
+ * `items=<n>|<key>=<0|1>[*]|...` in menu order, 1 enabled and 0 greyed, `*`
+ * checked. Keys are as `arranger-menu`'s `item`.
+ *
+ * It exists because `arranger-menu` alone cannot tell "the item is missing"
+ * from "the item is greyed" -- both are a refusal -- and those are different
+ * bugs.
+ */
+class SAssertArrangerMenuAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "assert-arranger-menu" ); }
+    QStringList knownAttributes() const override
+    { return { "trackPath", "at", "clip", "contains", "absent" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    qint64  at_        = 0;
+    int     clip_      = -1;
+    QString contains_;
+    QString absent_;
+};
+
+/**
  * `fader-drag` - ONE HELD DRAG of a lane's fader (QBX-206).
  *
  * The `fader-key` twin, and the only verb that can state the undo claim this

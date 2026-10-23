@@ -422,6 +422,13 @@ const Fixture kFixtures[] = {
     // 4 is the default, so a dropped attribute would read back identical.
     { "fader-drag",
       "<fader-drag trackPath='0' db='-6' steps='7'/>" },
+    // `clip` is non-default (-1) and `at` non-zero, for the reason the two
+    // rows above give: a default value would read back identical.
+    { "arranger-menu",
+      "<arranger-menu trackPath='0' at='96000' clip='2' item='new-midi-clip'/>" },
+    { "assert-arranger-menu",
+      "<assert-arranger-menu trackPath='0' at='96000' clip='2'"
+      " contains='new-midi-clip=1' absent='no-such-item'/>" },
     { "assert-event-editor",
       "<assert-event-editor clip='1,0' kind='pianoroll' contains='notes=2'"
       " absent='empty=1' grabPng='roll.png' grabWidth='640'"
@@ -1011,6 +1018,14 @@ const LaneRow kLaneRows[] = {
     { "head-fader",            Accept, "the master head's own fader gesture (M4)" },
     { "fader-key",             Accept, "the same fader, by keyboard" },
     { "fader-drag",            Accept, "the same fader again, HELD (QBX-206)" },
+    { "arranger-menu",         Accept,
+      "QBX-207: the menu IS offered on a system lane (lane height, the "
+      "automation picker), and the items that would place material are greyed "
+      "there by acceptsClips() -- which this verb refuses to trigger, so the "
+      "D6 policy is enforced by the menu rather than by excluding the verb" },
+    { "assert-arranger-menu",  Accept,
+      "read-only: it describes whatever that lane's menu offers, and a system "
+      "lane showing `new-midi-clip=0` is exactly what a case wants to assert" },
     { "set-track-name",        Accept, "renaming a system lane is harmless and useful" },
     { "set-lane-hidden",       Accept,
       "M4/AC4.5, and it is the INVERSE of the others: this verb refuses a lane "

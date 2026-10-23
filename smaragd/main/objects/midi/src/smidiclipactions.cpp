@@ -48,8 +48,7 @@ SApplyResult SInsertMidiClipAction::apply( SProject *project )
     if( lengthTicks <= 0 ) {
         // 0 = ONE BAR of the project's time signature, read from the tempo map
         // (which is the only thing that knows what a bar is).
-        const twTempoMap &map = project->tempoMap();
-        lengthTicks = (qint64) map.ppq() * 4 * map.numerator() / map.denominator();
+        lengthTicks = project->tempoMap().barTicks();
     }
 
     SMidiSequence *seq = new SMidiSequence( project );

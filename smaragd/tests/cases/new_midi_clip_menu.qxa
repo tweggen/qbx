@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-207. "New MIDI clip" on the arranger's context menu makes a TWO-BAR
+  MIDI clip on the clicked lane, at the clicked position, undoably.
+
+  THE MENU HAD NO GATE AT ALL before this. It is built per right-click from
+  lastClickTrack_ / lastClickSLink_ / lastClickOffset_, none of which a script
+  could set, so every item on it - some of them years old - was unreachable.
+  `arranger-menu` and `assert-arranger-menu` aim the REAL builder
+  (SMVActualView::ctGlobalShow) and then trigger or read it; the menu is shown
+  with popup() rather than exec(), so there is no modal loop to dodge.
+
+  WHY THE TEMPO CHANGES HALFWAY. At 120 BPM, 4/4, 48 kHz a bar is 96000 frames,
+  so "two bars" and "four seconds" are the SAME NUMBER and a gate at the
+  default tempo cannot tell a musical length from a frame count. At 96 BPM a
+  bar is 120000 frames, so the clip must GROW to 240000 - which only a clip
+  measured in ticks on a beats-timebase link does. 96 BPM is chosen because
+  both bar lengths are exact in frames; a tempo like 143 makes them fractional
+  and the assertion would be about rounding instead.
+-->
+<SActionScript version="1" name="new_midi_clip_menu">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- ========= 1. THE MENU OFFERS IT, ENABLED ======================== -->
+    <assert-arranger-menu trackPath="0" at="96000"
+                          contains="new-midi-clip=1"/>
+
+    <!-- ========= 2. CLICKING IT MAKES THE CLIP ======================== -->
+    <!-- at = 96000 frames is exactly bar 2 at the default tempo, so the
+         grid snap leaves it where it is and the assertion below is about
+         the ITEM rather than about alignTime's rounding. -->
+    <arranger-menu trackPath="0" at="96000" item="new-midi-clip"/>
+
+    <!-- Two bars at 120 BPM = 192000 frames, starting at the click, on a
+         BEATS timebase (which is what makes step 3 possible at all). -->
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"
+                        timebase="beats"/>
+    <assert-midi-events clip="0,0" kind="note" count="0"/>
+
+    <!-- ========= 3. IT IS UNDOABLE =================================== -->
+    <!-- The point of going through the `insert-midi-clip` VERB rather than
+         building the SCut and SLink by hand, which is what "Insert sample"
+         beside it on the same menu still does.
+
+         THIS BLOCK COMES BEFORE THE TEMPO ONE DELIBERATELY. `set-tempo` is
+         itself undoable, and since QBX-206 two separate tempo edits are two
+         separate undo steps rather than one coalesced entry, so a tempo round
+         trip in between would leave two entries on top of the insert and
+         `undo count="1"` would take back a tempo change instead of the clip.
+         Which is exactly what the first version of this case did. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+    <redo count="1"/>
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"/>
+
+    <!-- ========= 4. IT IS TWO BARS, NOT FOUR SECONDS ================== -->
+    <set-tempo bpm="96"/>
+    <!-- A bar is now 120000 frames, so two bars is 240000 - and the clip
+         still starts at bar 2, which is now 120000. -->
+    <assert-clip-window clip="0,0" startTime="120000" duration="240000"
+                        timebase="beats"/>
+    <set-tempo bpm="120"/>
+    <assert-clip-window clip="0,0" startTime="96000" duration="192000"/>
+
+    <!-- ========= 5. THE CLICK IS SNAPPED TO THE GRID ================= -->
+    <!-- On its own lane, so the overlap question never arises. 192137 is 137
+         frames past bar 3; alignTime() puts the clip on the bar. Without the
+         snap the clip would start at 192137 and a two bar MIDI clip would
+         begin a hundred and thirty seven frames before nothing in particular.
+         Measured rather than assumed: a probe at 96137 landed on 96000. -->
+    <add-track index="-1"/>
+    <arranger-menu trackPath="1" at="192137" item="new-midi-clip"/>
+    <assert-clip-window clip="1,0" startTime="192000" duration="192000"
+                        timebase="beats"/>
+
+    <!-- ========= 6. A SYSTEM LANE IS GREYED, NOT SILENT =============== -->
+    <!-- The master carries no clips (proposal 45 D6), and the item says so
+         by being disabled - asked through the SAME acceptsClips() predicate
+         splacements::placementLaneAt refuses on, so the menu and the action
+         cannot disagree. Both halves are asserted, because "missing" and
+         "greyed" are different bugs and a refusal alone cannot tell them
+         apart. -->
+    <assert-arranger-menu trackPath="$master"
+                          contains="new-midi-clip=0"/>
+    <arranger-menu trackPath="$master" item="new-midi-clip"
+                   expectReject="true"/>
+  </actions>
+
+</SActionScript>
