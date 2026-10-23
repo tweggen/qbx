@@ -434,7 +434,7 @@ SApplyResult SPlaceMidiRecordingAction::apply( SProject *project )
     const int         rate = project->getSRate();
     qint64 durationTicks = durationTicks_;
     if( durationTicks <= 0 )
-        durationTicks = (qint64) map.ppq() * 4 * map.numerator() / map.denominator();
+        durationTicks = map.barTicks();
     // The pass window in FRAMES, derived once, here.
     const length_t durationFrames = (length_t)
         map.ticksToFrames( TickLen( Fraction( durationTicks, 1 ) ), rate )

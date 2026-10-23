@@ -63,7 +63,7 @@ void SEventTimeRuler::paintEvent( QPaintEvent * )
     const int srate = project->getSRate();
     const int ppq = map.ppq();
     const qint64 beatTicks = ppq;
-    const qint64 barTicks = (qint64) ppq * map.numerator() * 4 / map.denominator();
+    const qint64 barTicks = map.barTicks();
     if( barTicks <= 0 ) return;
 
     const qint64 subTicks = SQuantizeNotesAction::gridTicks( grid_, ppq );

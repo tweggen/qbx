@@ -860,6 +860,48 @@ void SStdMixerView::ctDeleteSample()
 {
 }
 
+// QBX-207: a TWO-BAR MIDI clip on the clicked lane, at the clicked position.
+//
+// Through the `insert-midi-clip` VERB, which matters and is the one way this
+// differs from ctInsertSample() directly above: that slot builds its SCut and
+// SLink by hand and calls setParent(), so inserting a sample is not undoable
+// and leaves no history entry. A new clip created from a menu is an edit like
+// any other, so it goes through an action.
+//
+// TWO BARS comes from the tempo map, which is the only thing that knows what a
+// bar is -- never a frame count, because `insert-midi-clip`'s duration is in
+// musical TICKS and the link is born `timebase=beats`, so the clip keeps its
+// two bars across a tempo edit instead of drifting into 1.97 of them.
+//
+// WHERE: the clicked position, snapped with alignTime(), which is the same
+// grid every drag and drop in this view snaps to. Unsnapped, a two-bar clip
+// would start wherever the pixel under the pointer happened to land, and a
+// MIDI clip that begins 3/97ths of a beat before bar 3 is not a thing anyone
+// asked for.
+void SStdMixerView::ctNewMidiClip()
+{
+    STrack *track = qContent_ ? qContent_->getLastClickTrack() : nullptr;
+    if( !track ) return;
+
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) return;
+
+    SObject *root = splacements::rootContainer( project );
+    if( !root ) return;
+
+    // pathOf() returns {} for "the root itself" as well as "not found", but a
+    // track can never BE the root, so empty means not found (ctRemoveSample's
+    // note, same reasoning).
+    const QList<int> trackPath = strackpath::pathOf( root, track );
+    if( trackPath.isEmpty() ) return;
+
+    const offset_t at = alignTime( qContent_->getLastClickOffset() );
+    const qint64 twoBars = 2 * (qint64) project->tempoMap().barTicks();
+
+    stimeline::submitActive(
+        new SInsertMidiClipAction( trackPath, at, twoBars, QString() ) );
+}
+
 // Split every clip in the CURRENT SELECTION whose extent strictly contains
 // the split position (start < splitTime < end) — not the last-clicked object.
 // When nothing is selected, fall back to the last-clicked clip (mirrors
@@ -1353,6 +1395,65 @@ void SMVActualView::ctShowClipProperties()
     if( mw ) mw->showClipProperties();
 }
 
+// --- the arranger context menu's three test seams (QBX-207) ----------------
+//
+// The key for an item is its objectName() when it has one and its LABEL
+// otherwise. Only items a gate needs to address stably carry an objectName --
+// a label is user-visible text that moves, and several in this menu carry a
+// parenthetical reason that changes with the project ("Clean up takes (3
+// tracks)"). Giving all twenty an objectName would be a wide change in a menu
+// this ticket otherwise does not touch; a later ticket can name the one it
+// needs, as `new-midi-clip` does here.
+static QString sMenuKeyOf( const QAction *a )
+{
+    if( !a->objectName().isEmpty() ) return a->objectName();
+    QString t = a->text();
+    t.remove( QLatin1Char( '&' ) );      // the mnemonic is not part of a name
+    return t;
+}
+
+void SMVActualView::tkAimMenu( STrack *track, offset_t at, SLink *clip )
+{
+    // Exactly the state a right-click leaves behind, so the builder below
+    // takes the branches it would really take.
+    lastClickTrack_  = track;
+    lastClickSLink_  = clip;
+    lastClickOffset_ = at;
+    ctGlobalShow();
+}
+
+QString SMVActualView::describeMenu() const
+{
+    QStringList out;
+    int n = 0;
+    for( QAction *a : qGlobalPopup_->actions() ) {
+        if( a->isSeparator() ) continue;
+        ++n;
+        out << QStringLiteral( "%1=%2%3" )
+                   .arg( sMenuKeyOf( a ) )
+                   .arg( a->isEnabled() ? 1 : 0 )
+                   .arg( a->isChecked() ? QStringLiteral( "*" ) : QString() );
+    }
+    return QStringLiteral( "items=%1|" ).arg( n ) + out.join( QLatin1Char( '|' ) );
+}
+
+bool SMVActualView::tkTriggerMenu( const QString &item )
+{
+    for( QAction *a : qGlobalPopup_->actions() ) {
+        if( a->isSeparator() ) continue;
+        const QString key = sMenuKeyOf( a );
+        if( key != item && !key.startsWith( item ) ) continue;
+        // A GREYED ITEM IS NOT CLICKABLE, but QAction::trigger() does not know
+        // that -- it emits whatever its enabled state. Refusing here is what
+        // makes `expectReject="true"` mean "the user could not have done
+        // this", rather than "the handler happened to bail out".
+        if( !a->isEnabled() ) return false;
+        a->trigger();
+        return true;
+    }
+    return false;   // the menu does not offer it at all
+}
+
 void SMVActualView::ctGlobalShow()
 {
     qGlobalPopup_->clear();
@@ -1416,6 +1517,29 @@ void SMVActualView::ctGlobalShow()
     }
     if( lastClickTrack_ ) {
         qGlobalPopup_->addAction( smv_.actInsertSample_ );
+        // QBX-207. A NEW, EMPTY MIDI CLIP, two bars long, here on this lane.
+        //
+        // Asked through `SObject::acceptsClips()` -- the SAME predicate
+        // `splacements::placementLaneAt` refuses on -- so the greyed item and
+        // the action can never disagree about which lanes take a clip. A
+        // system lane (master, send, conductor) carries no clips by proposal
+        // 45 D6, and the item says so in its own text rather than failing
+        // after the fact: the treatment "Clean up takes (no take columns)"
+        // and "Create asset from range (select a range first)" already use
+        // further down this menu.
+        {
+            const QString label = QStringLiteral( "New &MIDI clip (2 bars)" );
+            QAction *aMidi = qGlobalPopup_->addAction(
+                label, &smv_, SLOT( ctNewMidiClip() ) );
+            // The gate's stable handle on this item, independent of the
+            // reason suffix the next lines may append (see sMenuKeyOf).
+            aMidi->setObjectName( QStringLiteral( "new-midi-clip" ) );
+            if( !lastClickTrack_->acceptsClips() ) {
+                aMidi->setEnabled( false );
+                aMidi->setText( label + QStringLiteral(
+                    "  (this lane carries no clips)" ) );
+            }
+        }
         qGlobalPopup_->addAction( smv_.actRemoveSample_ );
         qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
         qGlobalPopup_->addSeparator();
@@ -2012,6 +2136,21 @@ bool SStdMixerView::tkSendFaderKey( STrack *t, const QString &key )
         if( mc && &mc->getTrack() == t ) return mc->tkSendFaderKey( key );
     }
     return false;      // no head for that track (it is inside a collapsed folder)
+}
+
+void SStdMixerView::tkAimMenu( STrack *track, offset_t at, SLink *clip )
+{
+    if( qContent_ ) qContent_->tkAimMenu( track, at, clip );
+}
+
+QString SStdMixerView::describeMenu() const
+{
+    return qContent_ ? qContent_->describeMenu() : QString();
+}
+
+bool SStdMixerView::tkTriggerMenu( const QString &item )
+{
+    return qContent_ && qContent_->tkTriggerMenu( item );
 }
 
 bool SStdMixerView::tkDragFaderDb( STrack *t, double db, int steps )
