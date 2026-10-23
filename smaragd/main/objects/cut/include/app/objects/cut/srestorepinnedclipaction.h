@@ -1,5 +1,5 @@
-#ifndef SRESTORETAKECOLUMNACTION_H
-#define SRESTORETAKECOLUMNACTION_H
+#ifndef SRESTOREPINNEDCLIPACTION_H
+#define SRESTOREPINNEDCLIPACTION_H
 
 #include "app/actions/saction.h"
 #include "tw/graph/tw303aenv.h"
@@ -11,14 +11,24 @@ class SRemoveSampleAction;
  * The inverse of deleting a clip whose content nothing can rebuild from
  * parameters (QBX-146 step a, plan/proposed/52).
  *
- * IT IS NOT ONLY A TAKE COLUMN since QBX-202, and the NAME IS HISTORICAL. The
- * pin reaches every content `remove-sample` is not asked to rebuild -- a MIDI
- * clip's SMidiSequence above all -- because re-linking the same object needs
- * to know nothing about what the object is. The verb string is deliberately
- * left alone here: renaming a public header's action is its own, separately
- * reviewed change (it is live-only and registered nowhere, so nothing but
- * logs and this file reads the name), not something to fold into the bug fix
- * that widened the reach. QBX-205 carries it.
+ * THE NAME SAYS "PINNED", NOT "TAKE COLUMN" (QBX-205). It restores whatever
+ * `remove-sample` PINNED, which since QBX-202 is every content that verb is
+ * not asked to rebuild from parameters -- a MIDI clip's SMidiSequence above
+ * all -- because re-linking the same object needs to know nothing about what
+ * the object is. It was called `restore-take-column` until QBX-205, from the
+ * one shape it could reach when QBX-146 wrote it, and that name then read as
+ * a limit the code no longer had.
+ *
+ * The rename cost nothing to the outside, which is worth recording so the
+ * next person does not go looking for the compatibility seam: this action is
+ * LIVE-ONLY and registered NOWHERE, so the string reaches no `.qxa`, no saved
+ * project and no golden, and `action_roundtrip_test` (which enumerates the
+ * registry) never sees it. It is constructed in exactly one place,
+ * `SRemoveSampleAction::apply`, and read only by logs.
+ *
+ * `restore-pinned-clip` is deliberately parallel to `restore-container-clip`,
+ * because the pair is the real distinction: this one restores the SAME object
+ * from a pin, that one REBUILDS a clip from a container recipe.
  *
  * It restores the clip by RE-LINKING THE VERY OBJECT that was deleted, which
  * SRemoveSampleAction kept alive with an addRef() pin. That is the whole point:
@@ -40,16 +50,16 @@ class SRemoveSampleAction;
  * SRestoreContainerClipAction is. The FORWARD stays serializable, just as
  * remove-track does while restore-track does not.
  */
-class SRestoreTakeColumnAction : public SAction {
+class SRestorePinnedClipAction : public SAction {
 public:
-    SRestoreTakeColumnAction() = default;
-    SRestoreTakeColumnAction( SRemoveSampleAction *owner,
+    SRestorePinnedClipAction() = default;
+    SRestorePinnedClipAction( SRemoveSampleAction *owner,
                               const QList<int> &lanePath,
                               offset_t timePos,
                               int restoreAtIndex );
 
     QString name() const override
-        { return QStringLiteral("restore-take-column"); }
+        { return QStringLiteral("restore-pinned-clip"); }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -64,4 +74,4 @@ private:
     int        restoreAtIndex_ = -1;
 };
 
-#endif // SRESTORETAKECOLUMNACTION_H
+#endif // SRESTOREPINNEDCLIPACTION_H

@@ -1,4 +1,4 @@
-#include "app/objects/cut/srestoretakecolumnaction.h"
+#include "app/objects/cut/srestorepinnedclipaction.h"
 
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
@@ -10,7 +10,7 @@
 
 #include <QDomElement>
 
-SRestoreTakeColumnAction::SRestoreTakeColumnAction(
+SRestorePinnedClipAction::SRestorePinnedClipAction(
         SRemoveSampleAction *owner, const QList<int> &lanePath,
         offset_t timePos, int restoreAtIndex )
     : owner_( owner ), lanePath_( lanePath ), timePos_( timePos ),
@@ -18,7 +18,7 @@ SRestoreTakeColumnAction::SRestoreTakeColumnAction(
 {
 }
 
-SApplyResult SRestoreTakeColumnAction::apply( SProject *project )
+SApplyResult SRestorePinnedClipAction::apply( SProject *project )
 {
     if( !project || !owner_ ) {
         return {false, nullptr};
@@ -30,13 +30,13 @@ SApplyResult SRestoreTakeColumnAction::apply( SProject *project )
         // rebuild instead) or the pin was already released by an earlier
         // apply of this inverse. Refusing is right: re-linking nothing would
         // report success for a clip that is not back.
-        TW_LOGW( "cut", "restore-take-column: nothing pinned to restore" );
+        TW_LOGW( "cut", "restore-pinned-clip: nothing pinned to restore" );
         return {false, nullptr};
     }
 
     SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = root ? splacements::placementLaneAt( root, lanePath_,
-                                                         "restore-take-column" )
+                                                         "restore-pinned-clip" )
                          : nullptr;
     if( !lane ) {
         // The lane is genuinely gone -- the one refusal that is correct here.
@@ -45,7 +45,7 @@ SApplyResult SRestoreTakeColumnAction::apply( SProject *project )
         // index moves regardless of this result; refusing for any other reason
         // would leave the next redo deleting whatever now sits at the stored
         // index, which is the QBX-149 failure class.
-        TW_LOGW( "cut", "restore-take-column: no lane at the stored path" );
+        TW_LOGW( "cut", "restore-pinned-clip: no lane at the stored path" );
         return {false, nullptr};
     }
 
@@ -75,7 +75,7 @@ SApplyResult SRestoreTakeColumnAction::apply( SProject *project )
     const int landed = lane->indexOfChild( link );
     if( landed < 0 ) {
         delete link;
-        TW_LOGW( "cut", "restore-take-column: the re-linked clip did not land "
+        TW_LOGW( "cut", "restore-pinned-clip: the re-linked clip did not land "
                         "in the lane" );
         return {false, nullptr};
     }
@@ -101,13 +101,13 @@ SApplyResult SRestoreTakeColumnAction::apply( SProject *project )
     return {true, nullptr};
 }
 
-void SRestoreTakeColumnAction::writeXml( QDomElement & /*elem*/ ) const
+void SRestorePinnedClipAction::writeXml( QDomElement & /*elem*/ ) const
 {
     // Live-only action -- never serialized. It carries pointers to a live
     // action and a live SObject. Intentionally empty.
 }
 
-bool SRestoreTakeColumnAction::readXml( const QDomElement & /*elem*/,
+bool SRestorePinnedClipAction::readXml( const QDomElement & /*elem*/,
                                         int /*version*/ )
 {
     // Live-only action -- never deserialized.

@@ -127,7 +127,7 @@ SApplyResult SPlaceRecordingAction::apply( SProject *project )
 
     // HELD, NOT STACK-LOCAL -- see the note on `plan_`. A child's inverse may
     // BORROW the child (`remove-sample` pins a take column and its
-    // `restore-take-column` reads the pin back through the child), so the
+    // `restore-pinned-clip` reads the pin back through the child), so the
     // children have to outlive the inverse this returns, and
     // `SActionUndoCommand` keeps this action for exactly that long.
     delete plan_;                       // a redo re-plans from scratch

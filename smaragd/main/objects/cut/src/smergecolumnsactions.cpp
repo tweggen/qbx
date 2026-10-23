@@ -658,7 +658,7 @@ SApplyResult SUnmergeColumnsAction::apply( SProject *project )
 void SUnmergeColumnsAction::writeXml( QDomElement & ) const
 {
     // LIVE-ONLY: it carries a pointer to a live action and live SObjects, which
-    // no XML can express (SRestoreTakeColumnAction, same reason).
+    // no XML can express (SRestorePinnedClipAction, same reason).
 }
 
 bool SUnmergeColumnsAction::readXml( const QDomElement &, int )
