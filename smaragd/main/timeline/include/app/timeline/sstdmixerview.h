@@ -695,6 +695,9 @@ public:
     /// has no head, which is what a hidden lane means.
     bool tkSetFaderDb( STrack *t, double db );
     bool tkSendFaderKey( STrack *t, const QString &key );
+    /// QBX-206: ONE HELD drag of that track's fader; see
+    /// SSMVMixerControl::tkDragFaderDb.
+    bool tkDragFaderDb( STrack *t, double db, int steps );
     // Grip-drag `t`'s head and drop it on a LANE ROW: `nestOnto` drops on the
     // middle of that row (nest into it), otherwise on its top boundary (insert
     // above it; `targetRow` == rowCount() means "past the last lane"). Rows,

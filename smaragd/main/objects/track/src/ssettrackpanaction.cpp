@@ -66,14 +66,18 @@ SApplyResult SSetTrackPanAction::apply( SProject *project )
 
 QString SSetTrackPanAction::mergeKey() const
 {
+    // Plus the GESTURE token, for the reason set-track-volume's key gives
+    // (QBX-206): one knob drag is one undo step, two drags are two.
     return QStringLiteral( "set-track-pan:%1" )
-               .arg( qualifiedToString( pathRoot_, trackPath_ ) );
+               .arg( qualifiedToString( pathRoot_, trackPath_ ) )
+           + gestureKeySuffix();
 }
 
 bool SSetTrackPanAction::mergeWith( const SAction *later )
 {
     const SSetTrackPanAction *o = dynamic_cast<const SSetTrackPanAction *>( later );
-    if( !o || o->trackPath_ != trackPath_ || o->pathRoot_ != pathRoot_ ) return false;
+    if( !o || o->trackPath_ != trackPath_ || o->pathRoot_ != pathRoot_
+        || !sameGesture( o ) ) return false;
     newPan_ = o->newPan_;
     return true;
 }

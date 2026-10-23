@@ -6,9 +6,18 @@ quint64 SActionQueue::enqueue(SAction *action)
     QMutexLocker lock(&mtx_);
 
     // Check if the tail action can absorb this one via mergeWith.
+    //
+    // AN EMPTY KEY MEANS "NEVER MERGE", here as on the undo stack (QBX-206).
+    // The two sites used to disagree: SActionUndoCommand::id() returns -1 for
+    // an empty key, while this comparison is an equality and TWO EMPTY KEYS
+    // ARE EQUAL -- so an action that overrode mergeWith() but no mergeKey()
+    // would coalesce in the queue and never on the stack. Nothing does that
+    // today, and the reason is a second, unrelated default (SAction::mergeWith
+    // returns false), which is not a thing to rely on.
     if (!queue_.isEmpty()) {
         Entry &tail = queue_.back();
-        if (tail.action->mergeKey() == action->mergeKey() &&
+        const QString key = action->mergeKey();
+        if (!key.isEmpty() && tail.action->mergeKey() == key &&
             tail.action->mergeWith(action)) {
             // Merged: the newcomer is absorbed, tail's id stays valid for the caller.
             delete action;

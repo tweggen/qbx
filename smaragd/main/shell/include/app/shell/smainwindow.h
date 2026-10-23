@@ -188,6 +188,8 @@ public:
     /// lane has no head (hidden, or inside a collapsed folder).
     bool setHeadFaderDb( const QString &trackPath, double db );
     bool sendFaderKey( const QString &trackPath, const QString &key );
+    /// QBX-206: ONE HELD fader drag on that lane's head, `steps` ticks long.
+    bool dragFader( const QString &trackPath, double db, int steps );
 
     // TEST ENTRY POINT: a real click (press+release, no move) into a track's
     // LANE — the clip-drawing area, not the head — at `time`. Runs the same

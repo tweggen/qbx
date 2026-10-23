@@ -236,6 +236,17 @@ public:
     /// valueChanged chain. False when there is no fader or the tick is
     /// unchanged (setValue would emit nothing and assert nothing).
     bool tkSetFaderDb( double db );
+    /**
+     * TEST ENTRY POINT for ONE HELD FADER DRAG (QBX-206) -- what tkSetFaderDb
+     * above cannot express. It holds the handle down, streams `steps`
+     * intermediate values and lets go, so the whole burst carries ONE gesture
+     * token and must land as ONE undo entry, while a SECOND call must land as
+     * a second. Nothing else in the testkit can tell those two claims apart:
+     * setValue() alone emits no sliderPressed, so every tick would look like
+     * its own gesture and a gate built on it would pass whatever the wiring
+     * does. False when there is no fader or the target tick is the current one.
+     */
+    bool tkDragFaderDb( double db, int steps );
     bool tkSendFaderKey( const QString &key );
 
 private slots:
@@ -318,6 +329,12 @@ private:
     double lastReadDb_ = 1e30;
     // The same for the pan read display.
     double lastReadPan_ = 1e30;
+    // THE CURRENT DRAG, per control (QBX-206) -- SMixerStrip carries the same
+    // pair for the same reason. One press/release pair is one undo step; 0
+    // means no drag, and SAction::setGesture() ignores it, so a wheel notch or
+    // a Home/End keystroke keeps its own unique token.
+    quint64 volumeGesture_ = 0;
+    quint64 panGesture_ = 0;
 
     // Does this track carry an INSTRUMENT in slot 0? The one question the "I"
     // button's visibility turns on; asked of the model every time the density

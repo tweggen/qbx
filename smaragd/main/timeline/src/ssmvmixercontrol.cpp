@@ -121,8 +121,10 @@ void SSMVMixerControl::applyVolume_( double newVolume )
                    smv_.contentView() ? smv_.contentView()->localLocatorPos()
                                       : SApplication::app().getGlobalLocatorPos() ) )
             return;
-        stimeline::submitActive(
-            new SSetTrackVolumeAction( trackPath, newVolume ) );
+        SSetTrackVolumeAction *act =
+            new SSetTrackVolumeAction( trackPath, newVolume );
+        act->setGesture( volumeGesture_ );
+        stimeline::submitActive( act );
     } else {
         tk_.setVolume( newVolume );
         // Direct mutation doesn't go through actions, so invalidate caches manually
@@ -159,7 +161,9 @@ void SSMVMixerControl::applyPan_( double newPan )
                    smv_.contentView() ? smv_.contentView()->localLocatorPos()
                                       : SApplication::app().getGlobalLocatorPos() ) )
             return;
-        stimeline::submitActive( new SSetTrackPanAction( trackPath, newPan ) );
+        SSetTrackPanAction *act = new SSetTrackPanAction( trackPath, newPan );
+        act->setGesture( panGesture_ );
+        stimeline::submitActive( act );
     } else {
         tk_.setPan( newPan );
         if( SProject *p = SApplication::app().getCurrentProject() )
@@ -776,6 +780,11 @@ SSMVMixerControl::SSMVMixerControl(
         if( applyingReadValue_ ) return;
         applyPan_( sTickToPan( tick ) );
     } );
+    // ONE DRAG IS ONE UNDO STEP (QBX-206).
+    connect( qPan_, &QSlider::sliderPressed, this,
+             [this]{ panGesture_ = SAction::newGesture(); } );
+    connect( qPan_, &QSlider::sliderReleased, this,
+             [this]{ panGesture_ = 0; } );
 
     qPanLabel_ = new QLabel( this );
     qPanLabel_->setAlignment( Qt::AlignHCenter );
@@ -993,8 +1002,14 @@ SSMVMixerControl::SSMVMixerControl(
     QObject::connect( qAuto_, SIGNAL( customContextMenuRequested( const QPoint& ) ),
                       this, SLOT( showAutomationModeMenu() ) );
     // A write pass ends when the CONTROL is released (Touch commits there;
-    // Latch and Write hold to the transport stop) - proposal 37 P6.
-    QObject::connect( qVolume_, &QSlider::sliderReleased, this, []() {
+    // Latch and Write hold to the transport stop) - proposal 37 P6. The UNDO
+    // STACK needs the very same boundary (QBX-206), so the gesture token is
+    // minted and cleared on the same pair.
+    QObject::connect( qVolume_, &QSlider::sliderPressed, this, [this]() {
+        volumeGesture_ = SAction::newGesture();
+    } );
+    QObject::connect( qVolume_, &QSlider::sliderReleased, this, [this]() {
+        volumeGesture_ = 0;
         SApplication::app().automationRecorder().releaseControl();
     } );
     QObject::connect( &tk_, SIGNAL( editGroupChanged( int ) ),
@@ -1462,6 +1477,30 @@ bool SSMVMixerControl::tkClickToggle( const QString &which, bool on )
 // THE CURVE DOES NOT ROUND-TRIP (the fader is an integer control:
 // sDbToFader(0.0) is tick -191 and sFaderToDb of that is +0.0625 dB), so a
 // caller asserts a BAND around the dB it asked for, never an exact value.
+bool SSMVMixerControl::tkDragFaderDb( double db, int steps )
+{
+    if( !qVolume_ ) return false;
+    const int to = dbToSlider( db );
+    const int from = qVolume_->value();
+    if( to == from ) return false;          // tkSetFaderDb's reason, same answer
+    if( steps < 1 ) steps = 1;
+
+    // setSliderDown() is QAbstractSlider's OWN public spelling of "the handle
+    // is held", and is what Qt's mousePressEvent/mouseReleaseEvent call
+    // internally -- so sliderPressed and sliderReleased are emitted exactly as
+    // a real drag emits them, and the gesture bookkeeping under test is the
+    // production one. Deliberately NOT a synthetic QMouseEvent at the handle's
+    // rectangle: a head built off screen is never mapped, so its children's
+    // geometry is whatever the layout last guessed, and a press would land
+    // somewhere else (or nowhere) for reasons that have nothing to do with
+    // what this gates.
+    qVolume_->setSliderDown( true );
+    for( int i = 1; i <= steps; ++i )
+        qVolume_->setValue( from + ( ( to - from ) * i ) / steps );
+    qVolume_->setSliderDown( false );
+    return true;
+}
+
 bool SSMVMixerControl::tkSetFaderDb( double db )
 {
     if( !qVolume_ ) return false;

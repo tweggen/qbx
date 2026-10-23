@@ -2014,6 +2014,15 @@ bool SStdMixerView::tkSendFaderKey( STrack *t, const QString &key )
     return false;      // no head for that track (it is inside a collapsed folder)
 }
 
+bool SStdMixerView::tkDragFaderDb( STrack *t, double db, int steps )
+{
+    if( !t ) return false;
+    for( SSMVMixerControl *mc : *controlArray_ ) {
+        if( mc && &mc->getTrack() == t ) return mc->tkDragFaderDb( db, steps );
+    }
+    return false;      // same reason as tkSendFaderKey's
+}
+
 bool SStdMixerView::tkSetFaderDb( STrack *t, double db )
 {
     if( !t ) return false;

@@ -120,11 +120,14 @@ QString SSetPluginParamAction::mergeKey() const
     // slot 0 param 0 of track {0} exists in every arrangement, so without it
     // two different plugins' drags merge into one undo entry that then
     // restores the wrong one.
+    // And the GESTURE (QBX-206), so two separate drags of one slider are two
+    // undo steps rather than one.
     return QStringLiteral( "set-plugin-param:%1:%2:%3:%4" )
         .arg( pathRoot_ )
         .arg( trackPath_ )
         .arg( slotIndex_ )
-        .arg( paramId_ );
+        .arg( paramId_ )
+           + gestureKeySuffix();
 }
 
 bool SSetPluginParamAction::mergeWith( const SAction *later )
@@ -132,7 +135,7 @@ bool SSetPluginParamAction::mergeWith( const SAction *later )
     const SSetPluginParamAction *o =
         dynamic_cast<const SSetPluginParamAction *>( later );
     if( !o || o->slotIndex_ != slotIndex_ || o->paramId_ != paramId_ ||
-        o->trackPath_ != trackPath_ ) {
+        o->trackPath_ != trackPath_ || !sameGesture( o ) ) {
         return false;
     }
     // Absorb the newer target value; our own value stays the baseline the

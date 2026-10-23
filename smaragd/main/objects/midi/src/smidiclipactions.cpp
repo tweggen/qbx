@@ -267,7 +267,11 @@ SApplyResult SSetTempoAction::apply( SProject *project )
 bool SSetTempoAction::mergeWith( const SAction *later )
 {
     const SSetTempoAction *o = dynamic_cast<const SSetTempoAction *>( later );
-    if( !o ) return false;
+    // The gesture backstop beside the key's own (QBX-206): nothing streams
+    // tempo today -- the control is a modal QInputDialog -- so in practice
+    // this refuses every merge, which is the correct answer for a control
+    // that commits one value at a time.
+    if( !o || !sameGesture( o ) ) return false;
     bpm_ = o->bpm_;
     return true;
 }

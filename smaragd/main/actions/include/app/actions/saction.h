@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QDomElement>
 
+#include <atomic>
+
 class SProject;
 class SAction;
 
@@ -80,6 +82,42 @@ public:
     virtual QString mergeKey() const { return QString(); }
     virtual bool mergeWith(const SAction * /*later*/) { return false; }
 
+    // THE GESTURE TOKEN (QBX-206; QBX-203 built the first one, for notes).
+    //
+    // A merge key says WHICH control an action touched. It cannot say WHICH
+    // GESTURE touched it, and the two merge layers do not agree about that:
+    // SActionQueue::enqueue merges only with the PENDING tail, so it is
+    // bounded by the drain, but QUndoStack::push folds a new command into the
+    // top one whenever SActionUndoCommand::id() matches, with NO time or
+    // gesture boundary at all. A key built from a path alone therefore merged
+    // every edit that control ever received, for the lifetime of the stack:
+    // two separate fader drags became ONE undo step, and because the stack was
+    // then one entry short, the undo AFTER them took back the `add-track`
+    // before them (measured in control_edit_undo_steps.qxa).
+    //
+    // UNIQUE BY DEFAULT, which is the safe direction: an action nobody stamped
+    // merges with nothing. It is also why no discrete control needs wiring --
+    // a dialog, a combo box, a wheel notch, a double-click reset or a scripted
+    // verb is one committed value and therefore one undo step, which is what
+    // each of them already meant. Only a control that STREAMS through one
+    // gesture has anything to say: it mints a token on press and stamps every
+    // action it submits until release.
+    static quint64 newGesture()
+    {
+        static std::atomic<quint64> next{ 0 };
+        return ++next;              // never 0, so 0 can mean "no gesture"
+    }
+    quint64 gesture() const { return gesture_; }
+    // Where a `.qxa`'s own `gesture="n"` numbers live (QBX-206). A script
+    // needs to be able to say "these two elements are one gesture", and its
+    // small integers must never collide with a token newGesture() handed a
+    // real drag -- so they are offset into a range the counter cannot reach.
+    static constexpr quint64 SCRIPT_GESTURE_BASE = 1ull << 56;
+    // 0 is IGNORED on purpose, so a control may stamp unconditionally with
+    // whatever it is holding and a slider nobody pressed keeps its unique
+    // default instead of being lumped in with the last gesture.
+    void setGesture( quint64 g ) { if( g ) gesture_ = g; }
+
     // Opt-in: this action, once APPLIED, marks the undo stack CLEAN — the file
     // on disk now matches what is in memory. `save-project` is the only
     // override today. It is a hook here rather than a `name() == "save-
@@ -93,7 +131,18 @@ public:
     virtual bool marksProjectClean() const { return false; }
 
 protected:
+    // The two halves of the gesture boundary, for an implementation that has a
+    // mergeKey(). BOTH are required: QBX-203 measured that reverting either
+    // one alone leaves every gate passing, because each fully prevents the
+    // merge on its own. A single-site regression must not be able to restore
+    // the old behaviour silently.
+    QString gestureKeySuffix() const
+    { return QStringLiteral( ":g%1" ).arg( gesture_ ); }
+    bool sameGesture( const SAction *other ) const
+    { return other && other->gesture_ == gesture_; }
+
     QString pathRoot_;      // see pathRoot(); empty == the master root
+    quint64 gesture_ = newGesture();   // see newGesture(); unique by default
 };
 
 

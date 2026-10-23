@@ -3544,6 +3544,16 @@ bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
     return v->tkSendFaderKey( track, key );
 }
 
+// QBX-206's twin of the above: one HELD drag rather than one keystroke.
+bool SMainWindow::dragFader( const QString &trackPath, double db, int steps )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    STrack *track = trackAtPath_( trackPath );
+    if( !track ) return false;
+    return v->tkDragFaderDb( track, db, steps );
+}
+
 bool SMainWindow::setHeadFaderDb( const QString &trackPath, double db )
 {
     SStdMixerView *v = ensureArranger_();

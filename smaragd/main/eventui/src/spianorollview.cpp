@@ -815,7 +815,7 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
     // one gesture in this view that submits a STREAM of absolute states, so it
     // is the one that needs a token: refreshed only on a press that is not a
     // repeat, so every repeat of a hold shares it and the next press does not.
-    if( !ev->isAutoRepeat() ) nudgeGesture_ = SSetNotesAction::newGestureId();
+    if( !ev->isAutoRepeat() ) nudgeGesture_ = SAction::newGesture();
 
     switch( ev->key() ) {
     case Qt::Key_Left:   nudgeSelection( -( g > 0 ? g : 240 ), 0 ); break;

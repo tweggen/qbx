@@ -37,23 +37,32 @@
     <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
 
     <!-- The gain change comes AFTER that freeze. This is the whole case. -->
-    <set-track-volume trackIndex="0" volume="-6.0206"/>
+    <set-track-volume trackIndex="0" volume="-6.0206" gesture="1"/>
 
     <assert-meter trackIndex="0" position="168000" minRms="0.150" maxRms="0.255"/>
 
     <!-- And back up again, so the direction is not what makes it work. -->
-    <set-track-volume trackIndex="0" volume="0"/>
+    <set-track-volume trackIndex="0" volume="0" gesture="1"/>
 
     <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>
 
     <!-- An undo must be audible to the meter too. NOTE WHAT IT UNDOES: the two
-         set-track-volume actions above have the same mergeKey (the lane path),
-         so the action system COALESCED them into one undo step whose inverse
-         carries the volume from before the FIRST of them. One undo therefore
-         lands on the project's original 0 dB, not on -6.02 dB - which is the
-         correct merge behaviour, not a bug, and is why nothing here asserts a
-         per-action undo. What is being gated is only that the inverse reaches
-         the audio at a position that has been frozen three times already. -->
+         set-track-volume actions above declare themselves ONE GESTURE
+         (`gesture="1"`), so the action system coalesces them into one undo
+         step whose inverse carries the volume from before the FIRST of them.
+         One undo therefore lands on the project's original 0 dB, not on
+         -6.02 dB, and nothing here asserts a per-action undo. What is being
+         gated is only that the inverse reaches the audio at a position that
+         has been frozen three times already.
+
+         THE `gesture` ATTRIBUTES ARE QBX-206 AND THEY ARE NOT COSMETIC. This
+         comment used to say the pair coalesced because "the same mergeKey (the
+         lane path)" made it so, and called that "the correct merge behaviour,
+         not a bug". It was the bug: a key built from the lane alone merged
+         across gestures as well as within one, so two separate fader drags
+         were one undo entry. A script has no press and no release, so it must
+         now SAY which elements belong to one gesture - and saying it here is
+         what keeps this case asserting what it was written to assert. -->
     <undo count="1"/>
 
     <assert-meter trackIndex="0" position="168000" minRms="0.300" maxRms="0.510"/>

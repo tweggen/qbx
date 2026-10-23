@@ -76,6 +76,7 @@ protected slots:
     // ticking at a static position and for a tail after the transport stops.
     void onMeterTick( offset_t pos, qint64 nowMs, bool live );
     // A write pass ends when the control is released.
+    void onSliderPressed();
     void onSliderReleased();
     // The model moved: re-read the sliders / rebuild them.
     void onParamsChanged();
@@ -101,6 +102,13 @@ private:
     // True while onParamsChanged() writes the sliders, so the resulting
     // valueChanged never turns an external change back into a new action.
     bool         applyingExternal_ = false;
+    // THE CURRENT DRAG (QBX-206). One token per press/release pair, so one
+    // slider drag is one undo step and two drags are two; 0 means no drag is
+    // in progress and SAction::setGesture() ignores it, which leaves a
+    // double-click reset or an external write its own unique token. ONE
+    // member for every row: a QSlider gesture is exclusive, so no two of
+    // these sliders can be held at once.
+    quint64      paramGesture_ = 0;
     // Proposal 37 P6: the slot's automation lane for `paramId`, or null.
     class SAutomationLane *laneFor( std::uint32_t paramId ) const;
     std::vector<ParamWidget> params_;
