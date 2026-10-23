@@ -150,7 +150,7 @@ private:
      * It used to be a stack local in `apply()`, and that is a crash with
      * `replace` (QBX-172). `SRemoveSampleAction` cannot rebuild a take column
      * from parameters, so it PINS the content and hands back an
-     * `SRestoreTakeColumnAction` that BORROWS it -- `owner_`, documented in
+     * `SRestorePinnedClipAction` that BORROWS it -- `owner_`, documented in
      * that header as "holds the pin; borrowed". A stack composite is destroyed
      * when `apply()` returns, which deletes the `remove-sample` child, drops
      * the pin, and leaves the inverse on the undo stack pointing at freed
@@ -166,7 +166,7 @@ private:
      * rebuilt from scratch on every apply (a redo re-plans against the lane
      * as the undo left it), and the previous one is deleted there.
      *
-     * The alternative -- giving `SRestoreTakeColumnAction` its own pin -- is
+     * The alternative -- giving `SRestorePinnedClipAction` its own pin -- is
      * the better long-term shape and is a change to two public contracts in
      * this module, so it is deliberately NOT folded into this ticket.
      */

@@ -202,7 +202,7 @@ private:
  *
  * LIVE-ONLY: it carries a pointer to a live action and live `SObject`s, which
  * no XML can express. `writeXml` is empty and `readXml` returns false, exactly
- * as `SRestoreTakeColumnAction` and `SRestoreContainerClipAction` are. The
+ * as `SRestorePinnedClipAction` and `SRestoreContainerClipAction` are. The
  * FORWARD stays serializable, just as `remove-track` does while
  * `restore-track` does not.
  */

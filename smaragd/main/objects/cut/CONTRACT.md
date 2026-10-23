@@ -1400,7 +1400,7 @@ already there for a take column before QBX-202 widened the reach.
 
 **THE PLAN IS HELD BY THE ACTION, never built on the stack.** A child's inverse
 may BORROW the child: `remove-sample` pins a take column and hands back an
-`SRestoreTakeColumnAction` whose only link back is `owner_`, documented in that
+`SRestorePinnedClipAction` whose only link back is `owner_`, documented in that
 header as "holds the pin; borrowed". A stack composite is destroyed when
 `apply()` returns, which deletes the child, drops the pin, and leaves the
 inverse on the undo stack pointing at freed memory — measured as a SIGBUS in

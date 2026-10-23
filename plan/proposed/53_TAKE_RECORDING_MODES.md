@@ -951,7 +951,9 @@ Rules the interface carries:
   > (QBX-172).** Not foreseen here; found as a SIGBUS the first time `replace`
   > removed a take column. A child's inverse may BORROW the child:
   > `remove-sample` cannot rebuild a column from parameters, so it PINS the
-  > content and returns an `SRestoreTakeColumnAction` whose only link back is
+  > content and returns an `SRestoreTakeColumnAction` (renamed
+  > `SRestorePinnedClipAction` in QBX-205, once QBX-202 had widened it past
+  > take columns) whose only link back is
   > `owner_`, its own header calling it "holds the pin; borrowed". A stack
   > composite dies when `apply()` returns, deleting the child and dropping the
   > pin while the inverse sits on the undo stack pointing at freed memory.

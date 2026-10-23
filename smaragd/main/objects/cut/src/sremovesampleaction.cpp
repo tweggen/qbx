@@ -3,7 +3,7 @@
 #include "app/objects/cut/saddsampleaction.h"
 #include "app/objects/cut/srestorecontainerclipaction.h"
 #include "app/model/sobject.h"
-#include "app/objects/cut/srestoretakecolumnaction.h"
+#include "app/objects/cut/srestorepinnedclipaction.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/sproject.h"
@@ -270,7 +270,7 @@ SApplyResult SRemoveSampleAction::apply(SProject *project)
     // Checked before the two rebuild-from-parameters branches because it is
     // strictly more faithful than either.
     if( canPin ) {
-        return {true, new SRestoreTakeColumnAction( this, trackPath_, timePos_,
+        return {true, new SRestorePinnedClipAction( this, trackPath_, timePos_,
                                                     clipIndex_ )};
     }
 
