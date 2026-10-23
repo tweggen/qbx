@@ -584,6 +584,12 @@ public:
                    const QString &lane, double toValue,
                    Qt::KeyboardModifiers mods = Qt::NoModifier );
     int  scrollEventEditorKeys( const QString &clipPath, int topKey );
+    //   eventEditorKey        — REAL key presses on the piano roll, with
+    //                           auto-repeat, which is the only way a case can
+    //                           tell one HELD arrow (one undo step) from two
+    //                           separate presses (two) — QBX-203.
+    bool eventEditorKey( const QString &clipPath, const QString &keyName,
+                         int repeats );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
     //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
     //   into a clip (proposal 21 L2): a note-on / note-off pair on the computer

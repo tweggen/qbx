@@ -723,6 +723,39 @@ void SPianoRollView::commitDrag()
     update();
 }
 
+bool SPianoRollView::tkPressKey( const QString &keyName, int repeats )
+{
+    int                   qtKey = 0;
+    Qt::KeyboardModifiers mods  = Qt::NoModifier;
+    if(      keyName == QLatin1String( "left" ) )   qtKey = Qt::Key_Left;
+    else if( keyName == QLatin1String( "right" ) )  qtKey = Qt::Key_Right;
+    else if( keyName == QLatin1String( "up" ) )     qtKey = Qt::Key_Up;
+    else if( keyName == QLatin1String( "down" ) )   qtKey = Qt::Key_Down;
+    else if( keyName == QLatin1String( "delete" ) ) qtKey = Qt::Key_Delete;
+    else if( keyName == QLatin1String( "select-all" ) ) {
+        qtKey = Qt::Key_A;
+        // The same modifier hasPrimaryMod() tests for, so the select-all
+        // branch is entered rather than the default ignore().
+        mods  = Qt::ControlModifier;
+    }
+    else {
+        qWarning() << "tkPressKey: unknown key name:" << keyName;
+        return false;
+    }
+
+    // THE FIRST PRESS IS NOT AN AUTO-REPEAT, every following one is -- which
+    // is exactly what a held key delivers, and what the nudge gesture token
+    // keys off.
+    QKeyEvent first( QEvent::KeyPress, qtKey, mods );
+    QApplication::sendEvent( this, &first );
+    for( int i = 0; i < repeats; ++i ) {
+        QKeyEvent again( QEvent::KeyPress, qtKey, mods, QString(),
+                         /*autorep=*/true );
+        QApplication::sendEvent( this, &again );
+    }
+    return true;
+}
+
 void SPianoRollView::selectOnly( const QString &id )
 {
     selected_.clear();
@@ -743,7 +776,7 @@ void SPianoRollView::nudgeSelection( qint64 dTicks, int dKey )
     }
     std::sort( notes.begin(), notes.end() );
     selected_ = moved;
-    commitNotes( r, notes );
+    commitNotes( r, notes, nudgeGesture_ );
 }
 
 void SPianoRollView::keyPressEvent( QKeyEvent *ev )
@@ -777,6 +810,12 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
         ev->accept();
         return;
     }
+
+    // ONE HOLD OF AN ARROW KEY IS ONE UNDO STEP (QBX-203). Auto-repeat is the
+    // one gesture in this view that submits a STREAM of absolute states, so it
+    // is the one that needs a token: refreshed only on a press that is not a
+    // repeat, so every repeat of a hold shares it and the next press does not.
+    if( !ev->isAutoRepeat() ) nudgeGesture_ = SSetNotesAction::newGestureId();
 
     switch( ev->key() ) {
     case Qt::Key_Left:   nudgeSelection( -( g > 0 ? g : 240 ), 0 ); break;

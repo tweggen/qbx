@@ -125,7 +125,13 @@ protected:
      * Commit an absolute new NOTE state as ONE `set-notes` (rule 2). Non-note
      * events are untouched by the verb, so drawing never destroys CCs.
      */
-    void commitNotes( const Resolved &r, const std::vector<SEvent> &notes );
+    // `gesture` is SSetNotesAction's merge token: 0 (the default) makes this
+    // edit its own undo step, which is what every surface that commits ONCE
+    // wants. A surface that submits a stream within one gesture -- the
+    // auto-repeating arrow keys -- passes the same token each time so the
+    // hold collapses into one step (QBX-203).
+    void commitNotes( const Resolved &r, const std::vector<SEvent> &notes,
+                      quint64 gesture = 0 );
 
     QList<int>      clipPath_;
     SEventTimeAxis *axis_ = nullptr;

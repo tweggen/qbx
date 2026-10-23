@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-203. ONE UNDO TAKES BACK ONE EDIT GESTURE, and redo puts it back.
+
+  120 BPM, PPQ 960, 48 kHz -> 25 frames per tick: tick 960 = frame 24000,
+  1920 = 48000, 2880 = 72000. Every drop below is on a quarter-note boundary,
+  because drag-note's drop is pixel-quantised and then grid-snapped.
+-->
+<SActionScript version="1" name="midi_event_edit_undo_steps">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Notes"/>
+    <add-note clip="0,0" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="480" key="72" velocity="100" channel="0"/>
+    <assert-event-editor clip="0,0" contains="notes=2"/>
+
+    <!-- GESTURE A: move key 60 from tick 0 to tick 960. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="960" toKey="60"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="24000"/>
+
+    <!-- GESTURE B: a SECOND, separate gesture, on the other note. -->
+    <drag-note clip="0,0" tick="1920" key="72" toTick="2880" toKey="72"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="72000"/>
+
+    <!-- ONE UNDO TAKES BACK GESTURE B ONLY. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="48000"/>
+    <!-- ...AND GESTURE A SURVIVES IT. This is the assertion the ticket is
+         about: "it appears the whole change I did would be undone". -->
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="24000"/>
+
+    <!-- ...AND REDO PUTS B BACK. The ticket's second half: "and would not be
+         redone". -->
+    <redo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="72000"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="24000"/>
+
+    <!-- A SECOND UNDO THEN TAKES BACK GESTURE A, and no more. -->
+    <undo count="2"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="48000"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+
+    <!-- ================= THE KEYBOARD, which is the half the merge exists
+         FOR ================================================================
+
+         The arrow keys are the one gesture in this editor that submits a
+         STREAM of absolute states: a held key auto-repeats and nudges once
+         per repeat. Collapsing a hold into one undo step is right, and it is
+         why `set-notes` has a merge key at all. The defect was that the key
+         was the CLIP, so the collapsing never stopped.
+
+         The nudge step is the editor's own grid, which this case deliberately
+         does not hard-code: every assertion below is "moved" or "exactly
+         back", so it holds whatever the grid is. -->
+    <event-editor-key clip="0,0" key="select-all"/>
+    <assert-event-editor clip="0,0" contains="selection=2"/>
+
+    <!-- ONE HOLD: one press plus three auto-repeats. -->
+    <event-editor-key clip="0,0" key="right" repeat="3"/>
+    <assert-midi-events clip="0,0" kind="note" count="0" key="60" at="0"/>
+
+    <!-- ...IS ONE UNDO STEP. Four separate steps would leave the first three
+         repeats applied and key 60 away from 0. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="48000"/>
+
+    <!-- ...AND TWO SEPARATE PRESSES ARE TWO STEPS, which is the ticket's own
+         sentence for the keyboard path. Asserted without naming the grid: one
+         undo leaves one press applied, the second takes it back. -->
+    <event-editor-key clip="0,0" key="select-all"/>
+    <event-editor-key clip="0,0" key="right"/>
+    <event-editor-key clip="0,0" key="right"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="0" key="60" at="0"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

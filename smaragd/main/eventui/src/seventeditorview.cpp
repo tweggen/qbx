@@ -165,13 +165,19 @@ std::vector<SEvent> SEventEditorView::notesOf( const Resolved &r ) const
 }
 
 void SEventEditorView::commitNotes( const Resolved &r,
-                                    const std::vector<SEvent> &notes )
+                                    const std::vector<SEvent> &notes,
+                                    quint64 gesture )
 {
     if( !r.valid() ) return;
     // ONE action per gesture (rule 2). set-notes is absolute: the previous note
     // state IS the inverse, so undo is exact and the CCs underneath survive.
+    //
+    // ...and ONE UNDO STEP per gesture, which rule 2 did not get on its own:
+    // the action's merge key was the clip, so the undo stack folded every
+    // gesture on a clip into one entry (QBX-203). A caller that commits once
+    // passes no token and stands alone.
     SApplication::app().submitAction(
-        new SSetNotesAction( clipPath_, notes, -1, true ) );
+        new SSetNotesAction( clipPath_, notes, -1, true, gesture ) );
 }
 
 // ---------------------------------------------------------------------------

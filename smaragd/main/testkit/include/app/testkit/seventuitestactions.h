@@ -86,6 +86,34 @@ private:
  * The gesture submits its own `set-notes` on release; `<undo count="1"/>` after
  * it reverses the drag.
  */
+/**
+ * `event-editor-key` - REAL key presses on the piano roll (QBX-203).
+ *
+ * The keyboard twin of `drag-note`, and the only verb that can express an
+ * AUTO-REPEAT: `repeat="n"` sends one ordinary press followed by n repeats,
+ * so a case can assert that one HELD arrow costs ONE undo step while two
+ * separate presses cost two. Nothing else in the testkit reaches
+ * `SPianoRollView::keyPressEvent` at all, so the arrow nudge and the
+ * editor's own Delete had no coverage before this.
+ */
+class SEventEditorKeyAction : public SAction
+{
+public:
+    SEventEditorKeyAction() = default;
+
+    QString name() const override
+        { return QStringLiteral( "event-editor-key" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString clip_;
+    QString key_;        // left | right | up | down | delete | select-all
+    int     repeats_ = 0;
+};
+
 class SDragNoteAction : public SAction
 {
 public:

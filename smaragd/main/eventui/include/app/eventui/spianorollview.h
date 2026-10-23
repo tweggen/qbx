@@ -92,6 +92,24 @@ public:
      */
     int tkScrollKeys( int topKey );
 
+    /**
+     * TEST ENTRY POINT for the KEYBOARD, which nothing else could reach
+     * (QBX-203). It sends REAL QKeyEvents through this widget's own event
+     * handling, so a case exercises `keyPressEvent` itself -- the nudge, the
+     * delete, the select-all, and the auto-repeat bookkeeping that decides
+     * how many UNDO STEPS a hold costs.
+     *
+     * `repeats` is how many AUTO-REPEAT presses follow the first one, with
+     * `autorep` set on those events exactly as the window system sets it on a
+     * held key. That is the whole reason this seam exists: one hold must be
+     * one undo step and two separate presses must be two, and no mouse verb
+     * can express the difference.
+     *
+     * `keyName` is "left", "right", "up", "down", "delete" or "select-all".
+     * Returns false for anything else.
+     */
+    bool tkPressKey( const QString &keyName, int repeats = 0 );
+
 protected:
     void paintEvent( QPaintEvent * ) override;
     void mousePressEvent( QMouseEvent * ) override;
@@ -184,6 +202,12 @@ private:
     void commitDrag();
     void selectOnly( const QString &id );
     void nudgeSelection( qint64 dTicks, int dKey );
+
+    // THE CURRENT NUDGE GESTURE (QBX-203). Refreshed on an arrow press that is
+    // not an auto-repeat, so one HOLD is one undo step while two separate
+    // presses are two. Every other edit in this view commits once and passes
+    // nothing.
+    quint64 nudgeGesture_ = 0;
 
     QSet<QString> selected_;
     QList<int>    ccLanes_;

@@ -5187,6 +5187,21 @@ bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
                              toValue, mods );
 }
 
+bool SMainWindow::eventEditorKey( const QString &clipPath,
+                                  const QString &keyName, int repeats )
+{
+    if( !eventEditor_ ) return false;
+    // Same preamble as dragNote: the axis must exist before the view can
+    // resolve anything, and the arranger owns the zoom the editor mirrors.
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    SPianoRollView *roll = eventEditor_->pianoRoll();
+    if( !roll ) return false;
+    return roll->tkPressKey( keyName, repeats );
+}
+
 int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )
 {
     if( !eventEditor_ ) return -1;

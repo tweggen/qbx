@@ -2,6 +2,8 @@
 
 #include <QDebug>
 #include <QDomElement>
+
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 
@@ -252,10 +254,21 @@ static const bool s_reg_remove_note = (
 
 SSetNotesAction::SSetNotesAction( const QList<int> &clipPath,
                                   std::vector<SEvent> notes, int take,
-                                  bool broadcast )
+                                  bool broadcast, quint64 gesture )
     : clipPath_( clipPath ), notes_( std::move( notes ) ), take_( take ),
-      broadcast_( broadcast )
+      broadcast_( broadcast ),
+      gesture_( gesture ? gesture : newGestureId() )
 {
+}
+
+quint64 SSetNotesAction::newGestureId()
+{
+    // Monotonic and never 0, so 0 can mean "give me one of my own". Atomic
+    // because the project LOADER builds actions off the GUI thread, and a
+    // duplicated token would merge two unrelated edits into one undo step --
+    // which is the very defect this exists to prevent.
+    static std::atomic<quint64> next{ 0 };
+    return ++next;
 }
 
 QStringList SSetNotesAction::knownAttributes() const
@@ -269,7 +282,8 @@ SApplyResult SSetNotesAction::apply( SProject *project )
         SApplyResult out{ false, nullptr };
         if( expandBroadcast( project, clipPath_,
                 [&]( const QList<int> &p ) -> SAction * {
-                    return new SSetNotesAction( p, notes_, take_, false );
+                    return new SSetNotesAction( p, notes_, take_, false,
+                                                gesture_ );
                 }, out ) )
             return out;
     }
@@ -308,14 +322,34 @@ QString SSetNotesAction::mergeKey() const
 {
     // Root-qualified for the reason set-plugin-param's key is: clip {0,0}
     // exists in every root (proposal 09 D21).
+    //
+    // AND GESTURE-QUALIFIED (QBX-203). Without the token this key was the
+    // CLIP, so QUndoStack::push merged every set-notes on a clip into the
+    // command on top of the stack -- with no gesture and no time boundary, in
+    // a layer the queue's own tail merge knows nothing about. Two separate
+    // piano-roll drags became one undo entry, so one Ctrl+Z took back the
+    // whole editing session on that clip and a subsequent edit cleared the
+    // redo it would have needed: "it appears the whole change I did would be
+    // undone and would not be redone".
+    //
+    // The queue's tail merge is the BOUNDED one and is what actually
+    // implements "a drag is one undo step" -- it only ever absorbs into an
+    // action still waiting to be applied.
     return QStringLiteral( "set-notes:" ) + qualifiedToString( pathRoot_, clipPath_ )
-         + ":" + QString::number( take_ );
+         + ":" + QString::number( take_ )
+         + ":" + QString::number( gesture_ );
 }
 
 bool SSetNotesAction::mergeWith( const SAction *later )
 {
     const SSetNotesAction *o = dynamic_cast<const SSetNotesAction *>( later );
     if( !o ) return false;
+    // A GUARD HERE CANNOT BE FORGOTTEN, A KEY CAN -- the same reason
+    // SActionUndoCommand::mergeWith re-checks pathRoot() although every key
+    // is supposed to carry it. Both merge sites compare keys before calling
+    // this, so the test is a backstop against a key that stops carrying the
+    // token.
+    if( o->gesture_ != gesture_ ) return false;
     notes_ = o->notes_;   // the LATER absolute state wins
     return true;
 }
