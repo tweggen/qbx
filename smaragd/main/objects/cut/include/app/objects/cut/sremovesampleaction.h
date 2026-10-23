@@ -2,6 +2,8 @@
 #define SREMOVESAMPLEACTION_H
 
 #include "app/actions/saction.h"
+#include "app/model/slink.h"
+#include "tw/core/twfraction.h"
 #include "tw/graph/tw303aenv.h"
 #include <QList>
 #include <QString>
@@ -39,7 +41,7 @@ public:
     void writeXml(QDomElement &elem) const override;
     bool readXml(const QDomElement &elem, int version) override;
 
-    // --- the pin, for content nothing else can rebuild (QBX-146 step a) ----
+    // --- the pin, which is the DEFAULT inverse (QBX-146 step a, QBX-202) ---
     //
     // A clip whose content is an STakeStack cannot be reconstructed from
     // parameters: a column carries N takes with their own windows, fades,
@@ -52,6 +54,16 @@ public:
     // a removed track: addRef() before the detach, the inverse re-links the
     // very same object and releases. Identity preserves every field for free,
     // including ones nobody has thought of yet.
+    //
+    // IT PINS EVERY CONTENT IT IS NOT ASKED TO REBUILD (QBX-202). Step (a)
+    // restricted the pin to a take column, which left every OTHER
+    // un-rebuildable shape refused -- and the commonest of those is an
+    // ordinary MIDI clip, whose content is an SMidiSequence: not an
+    // SExternFile, not a path container, not a column. Deleting a recorded
+    // MIDI clip therefore did nothing at all but log, which is QBX-202 as the
+    // author met it. The pin needs to know nothing about what it holds, so
+    // there was never a fidelity reason to narrow it; the one shape that must
+    // stay refused is a LIVE recording, and that is OWNERSHIP, not fidelity.
     SObject *heldObject() const { return heldObject_; }
     void     releaseHeld();      // drop the pin, after the clip is re-attached
     // Release a pin left by a PREVIOUS apply. Called first on every apply:
@@ -59,6 +71,30 @@ public:
     // add-sample re-applies it against a NEW clip and would otherwise leak one
     // pin per redo.
     void     dropStalePin();
+
+    /**
+     * THE DELETED LINK'S OWN FIELDS, which the pin does NOT carry (QBX-202).
+     *
+     * The pin preserves the CONTENT by identity, but the SLink is destroyed
+     * and the inverse builds a new one -- so everything stored on the
+     * placement rather than on the object is born at its default instead:
+     * `timebase_`, `startTicks_` and `eventChannelOverride_`. A fresh link
+     * reads its timebase from SLink::defaultTimebaseFor(), so a MIDI clip
+     * switched to the TIME timebase came back on beats, and a placement
+     * channel remap came back as-authored.
+     *
+     * It is the same class of loss the pin exists to avoid, one level up, and
+     * it was already there for a take column before this ticket widened the
+     * reach. Captured on the forward's apply and read back by the inverse
+     * through the same borrowed back-pointer the pin uses, so a redo that
+     * re-captures is what the next undo restores.
+     */
+    struct PinnedLink {
+        SLink::Timebase timebase = SLink::Timebase::Time;
+        Fraction        startTicks{ 0 };
+        int             eventChannelOverride = -1;
+    };
+    const PinnedLink &pinnedLink() const { return pinnedLink_; }
 
 private:
     QList<int> trackPath_;
@@ -68,6 +104,7 @@ private:
 
     SObject *heldObject_ = nullptr;   // the deleted clip's object, kept alive
     bool     holdsRef_   = false;     // ...by this pin
+    PinnedLink pinnedLink_;           // ...and what the LINK itself carried
 };
 
 #endif // SREMOVESAMPLEACTION_H

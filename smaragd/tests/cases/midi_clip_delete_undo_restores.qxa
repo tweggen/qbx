@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-202. Deleting a MIDI clip WORKS, and undo brings back that very clip.
+
+  THE DEFECT WAS A REFUSAL AIMED AT SOMETHING ELSE. QBX-146 stopped
+  SRemoveSampleAction from deleting a clip it could build no inverse for -
+  the conservative half of that fix, and the right call: before it, the delete
+  succeeded, pushed nothing on the undo stack, and the next Ctrl+Z popped an
+  unrelated command, so "undo appears to work while the content stays gone".
+  Only three shapes had an inverse: file-backed (re-add the sample),
+  container-backed (rebuild the cut over the same track) and a take column
+  (re-link the pinned object). Everything else was refused.
+
+  A MIDI clip is none of the three. Its content is an SMidiSequence, which is
+  not an SExternFile and not a path container, and a single clip is not a take
+  column - so `remove-sample` refused it, and the Delete key on a recorded
+  MIDI clip did nothing but write a warning. The refusal's own message named a
+  live SRecordingContent as what reaches it, which by then was no longer true.
+
+  WHAT MAKES THE FIX SAFE RATHER THAN A RELAXED GUARD. The pin path does not
+  rebuild anything: it addRef()s the object, deletes the link, and the inverse
+  re-links THE SAME OBJECT, so every field survives by identity - the notes,
+  their lengths, the per-clip transpose and velocity scale, the channel
+  override, the link's timebase. Nothing can be forgotten by a parameter list
+  because there is no parameter list. That is why the pin is tried before the
+  two rebuild branches, and why widening it to every content EXCEPT a live
+  recording is the fix rather than a workaround.
+
+  A LIVE RECORDING STAYS REFUSED, for ownership and not for fidelity:
+  SAudioRecorder::Armed holds the growing SCut and its SLink as borrowed raw
+  pointers and deletes them at stop, so removing that clip is a use-after-free
+  in the recorder. live_recording_delete_refused.qxa is that half, and it is
+  what stops this widening from reaching the one shape that must not move.
+  The MIDI recorder has no such exposure by construction - it buffers messages
+  and submits `place-midi-recording` once, at the stop, so no growing MIDI
+  clip is ever in the model to delete.
+
+  NOT GATED HERE: the third link field, eventChannelOverride_. It is carried
+  with the other two and for the same reason, but nothing can observe it on a
+  shape that reaches the pin. `set-clip-event-channel` refuses a placement that
+  is not an SCut, and a MIDI clip's placement object is an SMidiCut; the only
+  shape that can hold an override AND take the pin path is a WRAPPED take
+  column, and no verb reports the value back - it is observable only through
+  the lane's exported event feed, which an audio column has none of. The carry
+  is one line mirroring merge-columns' carryLaneLinkAttrs(); a gate for it
+  wants a verb that reports a placement's override.
+
+  Frames per tick: 120 BPM, PPQ 960, 48 kHz -> 25 frames per tick, so
+  3840 ticks = 96000 frames and tick 960 = frame 24000.
+-->
+<SActionScript version="1" name="midi_clip_delete_undo_restores">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Notes"/>
+
+    <add-note clip="0,0" tick="0" dur="1920" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="960" dur="480" key="64" velocity="80" channel="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+
+    <!-- PER-CLIP MODIFIERS, so that a restore which rebuilt a lookalike from
+         captured parameters would be visibly wrong rather than plausibly
+         right. These live on the SMidiCut window, not in the sequence, and
+         they are exactly the kind of field a parameter list forgets. -->
+    <set-midi-cut clip="0,0" transpose="12" velocityScale="0.5" channel="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="0"
+                        velocity="50" channel="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="76" at="24000"
+                        velocity="40" channel="1"/>
+    <!-- Notes are stored WITH their length: 1920 ticks = 48000 frames. -->
+    <assert-midi-events clip="0,0" contains="dur=48000"/>
+
+    <!-- AND ONE FIELD THAT LIVES ON THE LINK RATHER THAN ON THE OBJECT, which
+         is the half the pin's identity does NOT cover: the inverse builds a
+         new SLink, and a new link over event content is born on BEATS
+         (SLink::defaultTimebaseFor). So a clip deliberately switched to TIME
+         is the discriminator - it comes back on beats unless the forward
+         captured the link's own fields and the inverse applied them. Beats
+         would have been restored by accident. -->
+    <set-link-timebase clip="0,0" timebase="time"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        timebase="time"/>
+
+    <!-- THE DELETE. This is what the ticket reported as impossible: before
+         the fix it is refused, the clip is still there, and the assertion
+         below fails. -->
+    <remove-sample trackPath="0" clipIndex="0" timePos="0"/>
+
+    <!-- ...and the refusal is not merely absent: the clip is GONE. An
+         unresolvable path is what assert-clip-window rejects on, which is how
+         a case asserts an absence with it. -->
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <undo count="1"/>
+
+    <!-- RESTORED BY IDENTITY. Both notes, both lengths, and both per-clip
+         modifiers - a rebuilt clip would come back at transpose 0 and
+         velocity scale 1, i.e. key 60 at velocity 100 on channel 0. -->
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="0"
+                        velocity="50" channel="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="76" at="24000"
+                        velocity="40" channel="1"/>
+    <assert-midi-events clip="0,0" contains="dur=48000"/>
+    <!-- The window came back too, at its own position and length - and on
+         the TIMEBASE IT WAS GIVEN, not the one a fresh link would default to.
+         -->
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"
+                        timebase="time"/>
+
+    <!-- And the inverse of the inverse holds. -->
+    <redo count="1"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <!-- One more undo, so the case does not end on a destroyed clip: a pin
+         released by the undo stack's teardown is the path that collects the
+         content, and it is worth exercising with the clip restored. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

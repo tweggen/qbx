@@ -53,6 +53,23 @@ SApplyResult SRestoreTakeColumnAction::apply( SProject *project )
     // childEvent fires on a fully-constructed link.
     SLink *link = new SLink( *held, nullptr );
     link->setStartTime( timePos_ );
+
+    // THE LINK'S OWN FIELDS, which the pin does not carry (QBX-202). The
+    // content returns by identity, but this link is new: without these it is
+    // born on SLink::defaultTimebaseFor()'s timebase and as-authored, so a
+    // MIDI clip switched to the TIME timebase came back on beats and a
+    // placement channel remap came back as none. Same three fields, same
+    // order and the same reason as merge-columns' carryLaneLinkAttrs().
+    //
+    // BEFORE setParent: STrack::trackChildWasAdded resolves the new child's
+    // event feed through the link it is handed, so an override applied after
+    // the attach would be read as -1 exactly once -- at the moment that
+    // decides what the lane plays.
+    const SRemoveSampleAction::PinnedLink &la = owner_->pinnedLink();
+    link->setTimebase( la.timebase );
+    link->setStartTicks( la.startTicks );
+    link->setEventChannelOverride( la.eventChannelOverride );
+
     link->setParent( lane );
 
     const int landed = lane->indexOfChild( link );

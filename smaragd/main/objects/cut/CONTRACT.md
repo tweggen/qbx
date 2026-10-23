@@ -1363,6 +1363,41 @@ to split or delete it, and no gate has ever exercised one. The refusal is
 announced, costs the pass only that lane, and is what
 `record_lane_skipped_reported` (QBX-164) is waiting for.
 
+**`remove-sample` DELETES ANY CLIP BUT A LIVE RECORDING, and the pin is the
+DEFAULT inverse** (QBX-146 step a, widened by QBX-202). The two
+rebuild-from-parameters branches keep their priority where they apply —
+file-backed content hands back `add-sample` with the whole window,
+container-backed hands back `restore-container-clip` — and every other content
+is PINNED with `addRef()` and re-linked by identity. Step (a) reached only a
+take column, which left the commonest un-rebuildable shape in the app refused:
+a MIDI clip, whose content is an `SMidiSequence` and so is neither an
+`SExternFile`, nor a path container, nor a column. Deleting a recorded MIDI
+clip therefore did nothing but write the refusal, which is how the author met
+it. There was never a fidelity argument for the narrow reach — the pin rebuilds
+nothing and needs to know nothing about what it holds — so the conservative
+thing is the ORDER, not the reach.
+
+What stays refused is a LIVE recording, and that is OWNERSHIP, not fidelity:
+`SAudioRecorder::Armed` holds the growing `SCut` and its `SLink` as borrowed
+raw pointers and deletes them at stop, so the delete is a use-after-free in the
+recorder before undo is even reached. `isLiveRecording()` is the predicate,
+which `SCut` forwards to its content, so this module never names
+`SRecordingContent`'s type. The MIDI recorder has no such exposure by
+construction: it buffers its messages and submits `place-midi-recording` once,
+at the stop, so no growing MIDI clip is ever in the model to delete.
+
+**THE PIN CARRIES THE CONTENT BY IDENTITY, AND THE LINK'S OWN FIELDS BY HAND.**
+`SLink` holds three things that live on the placement rather than the object —
+`timebase_`, the exact `startTicks_` and `eventChannelOverride_` — and the
+inverse builds a NEW link, so without carrying them a clip switched to the
+TIME timebase comes back on beats (`SLink::defaultTimebaseFor` makes Beats the
+default for event content) and a placement channel remap comes back as
+as-authored. They are captured on the forward's apply and applied BEFORE
+`setParent`, because `STrack::trackChildWasAdded` resolves the new child's
+event feed through the link it is handed. Same three fields, same order and
+the same reason as `merge-columns`' `carryLaneLinkAttrs()`; the loss was
+already there for a take column before QBX-202 widened the reach.
+
 **THE PLAN IS HELD BY THE ACTION, never built on the stack.** A child's inverse
 may BORROW the child: `remove-sample` pins a take column and hands back an
 `SRestoreTakeColumnAction` whose only link back is `owner_`, documented in that
