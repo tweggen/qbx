@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-217. "ADD LINK" GOES THROUGH A VERB, so it is undoable, it refuses what
+  its sibling refuses, and what it makes is genuinely SHARED.
+
+  It used to build its placement by hand - `new SLink( *shared, NULL )` then
+  `setParent()` - and that one shortcut cost three things, all three measured
+  on 59ca0dfa before the fix:
+
+    1. NO UNDO ENTRY. With a rename in front of the command, one undo took
+       back the RENAME and left the link standing:
+           assert-track-name FAILED: expected "Marker" but got "GrumpyNarwhal"
+       That is the QBX-209 framing - not "cannot be undone" but "destroys the
+       edit before it".
+    2. NO LANE CHECK. `duplicate-clip` refuses a source that is a lane in one
+       line; this did not. Aimed at `$master` child 0 - the CONDUCTOR lane,
+       not a clip - the command appended a second placement of Conductor, and
+       `$master,1` resolved as a track named "Conductor" where nothing had
+       resolved before.
+    3. A LEAK on the null-track path, the `SLink` being built before the
+       destination was known. Gone by construction: nothing is built until the
+       verb runs, so there is nothing for a case to see and nothing here
+       claims otherwise.
+
+  WHAT MAKES IT DIFFERENT FROM `duplicate-clip`, and why there is a second
+  verb rather than a flag: a duplicate copies the window, a link is one more
+  PLACEMENT of the same object. Section 2 is the whole of that claim - an edit
+  through one placement shows in the other, which is the only thing "shared"
+  can mean to a user. A TAKE COLUMN is still deep-copied (proposal 42 M1),
+  because two placements of one `STakeStack` share its `activeTake_` and
+  comping either would comp both; section 3 pins that the sharing gesture does
+  NOT override the column rule.
+
+  NOT GATED HERE, deliberately, and said rather than implied:
+
+    - the SLOT's own `isLane()` guard. The menu item is greyed through the
+      same predicate, and `tkTriggerMenu` refuses a disabled action BEFORE the
+      handler runs (QBX-209's sabotage S4 established this), so from a script
+      the handler's branch is unreachable. It stays in the code because this
+      is a production handler and its sibling verb guards the same thing.
+    - proposal 45 D6 on this MENU PATH. The destination is always the clicked
+      clip's own lane, which carries a clip by construction, so no menu click
+      can aim it at a system lane. The VERB can be aimed anywhere, and that
+      refusal is gated where its siblings are: `master_refuses_clips`.
+
+  120 BPM, 4/4, 48 kHz. `test_sawtooth.wav` is 192000 frames, so a clip at 0
+  ends at 192000 and the command places its link at
+  `oldLink->getStartTime() + the object's duration` = 192000.
+-->
+<SActionScript version="1" name="add_link_menu">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+
+    <!-- =================================================================
+         1. ONE UNDO REMOVES THE LINK AND NOTHING ELSE.
+
+            The rename in front is what makes this bite: without it the case
+            cannot tell "undid the link" from "undid the edit before it", and
+            before the fix it was the second.
+         ================================================================= -->
+    <set-track-name trackPath="0" name="Marker"/>
+
+    <assert-arranger-menu trackPath="0" at="1000" clip="0"
+                          contains="add-link=1"/>
+    <arranger-menu trackPath="0" at="1000" clip="0" item="add-link"/>
+
+    <!-- Immediately after the clicked clip, which is what this command has
+         always done. -->
+    <assert-clip-window clip="0,1" startTime="192000" duration="192000"/>
+
+    <undo count="1"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-track-name trackPath="0" name="Marker"/>
+
+    <redo count="1"/>
+    <assert-clip-window clip="0,1" startTime="192000" duration="192000"/>
+    <assert-track-name trackPath="0" name="Marker"/>
+
+    <!-- =================================================================
+         2. IT IS A LINK, NOT A COPY - proved by an edit showing through.
+
+            One object sits under both placements, so trimming through the
+            first changes what the second reports. A duplicate would leave
+            the second at 192000, which is what makes this the assertion that
+            separates the two verbs.
+         ================================================================= -->
+    <resize-clip clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="0,1" startTime="192000" duration="96000"/>
+
+    <!-- ...and undoing the trim restores both, for the same reason. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" duration="192000"/>
+    <assert-clip-window clip="0,1" duration="192000"/>
+
+    <!-- Back to one clip on the lane for the next section. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- =================================================================
+         3. A TAKE COLUMN IS DEEP-COPIED EVEN BY THE SHARING GESTURE
+            (proposal 42 M1). `placements` is the column's own refCount, so a
+            wrongly SHARED column would report 2 on the original and the two
+            placements would comp as one.
+         ================================================================= -->
+    <!-- `activate` defaults to 1, so the take just added is the ACTIVE one -
+         which is why the assertions below expect take 1 and not take 0. The
+         first draft of this section expected 0, and both columns reported 1
+         for that reason rather than for any coupling between them; the same
+         expectation fails identically on `duplicate-clip`, which is how it
+         was caught. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="48000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"
+                        activeTake="1"/>
+
+    <arranger-menu trackPath="0" at="1000" clip="0" item="add-link"/>
+
+    <!-- TWO columns, each placed ONCE: the link deep-copied the column. A
+         wrongly SHARED column would report placements=2 on the original. -->
+    <assert-take-column clip="0,0" shape="direct" takes="2" placements="1"/>
+    <assert-take-column clip="0,1" shape="direct" takes="2" placements="1"/>
+
+    <!-- ...and they are INDEPENDENT, which is the point of the copy: comping
+         one must not comp the other. Moving the copy back to take 0 leaves
+         the original on take 1. -->
+    <select-take clip="0,1" take="0"/>
+    <assert-take-column clip="0,1" activeTake="0"/>
+    <assert-take-column clip="0,0" activeTake="1"/>
+
+    <undo count="2"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <!-- =================================================================
+         4. A LANE IS NOT A CLIP. The menu is aimed at `$master` child 0,
+            which is the CONDUCTOR lane - the state the testkit seam can
+            reach and a mouse cannot, because `STrack::getTopMostSLinkAt`
+            skips child tracks. Before the fix this appended a second
+            placement of Conductor; now the item is greyed and the trigger is
+            refused.
+         ================================================================= -->
+    <assert-track-name trackPath="$master,0" name="Conductor"/>
+    <assert-track-name trackPath="$master,1" expectReject="true"/>
+
+    <assert-arranger-menu trackPath="$master" at="1000" clip="0"
+                          contains="add-link=0"/>
+    <arranger-menu trackPath="$master" at="1000" clip="0" item="add-link"
+                   expectReject="true"/>
+
+    <!-- Nothing was appended: `$master,1` still resolves to nothing. -->
+    <assert-track-name trackPath="$master,1" expectReject="true"/>
+
+    <!-- ...AND THE VERB REFUSES A LANE SOURCE ON ITS OWN, which is a separate
+         claim from the greying above and needs its own assertion: the greyed
+         item means no script can reach the HANDLER, but `link-clip` is a
+         public scripting surface and can be handed `$master,0` directly. This
+         is the assertion that makes the verb's `isLane()` refusal real; the
+         slot's copy of it stays unreachable and uncaught, as the header
+         says. -->
+    <link-clip source="$master,0" destTrack="0" startTime="0"
+               expectReject="true"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

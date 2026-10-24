@@ -20,13 +20,24 @@
   the case asserts. Take 0 is active; the map selects take 1 in both asserted
   windows. The numbers come from comp_map_audible.qxa.
 
-  WHAT THIS CASE DOES NOT DRIVE: the "Add &link" context-menu command
-  (SStdMixerView::ctAddLink), the third caller of cloneColumn. It has NO
-  scripted driver — it is reachable only from the popup menu, and it builds
-  its link directly rather than submitting an action, so it is not on the undo
-  stack either. It is covered by construction, sharing the one cloneColumn this
-  case does gate, and that is the whole of the claim. Said here rather than
-  implied.
+  WHAT THIS CASE DOES NOT DRIVE, AS CORRECTED BY QBX-217: the "Add &link"
+  context-menu command (SStdMixerView::ctAddLink), the third caller of
+  cloneColumn. Every clause of what stood here is now false, so it is replaced
+  rather than trimmed:
+
+    - "it has NO scripted driver" — QBX-207's `arranger-menu` seam gave it
+      one;
+    - "it builds its link directly rather than submitting an action" — it
+      submits `link-clip` (QBX-217);
+    - "so it is not on the undo stack either" — it is, and
+      `add_link_menu.qxa` gates one undo removing the link and leaving the
+      edit before it alone.
+
+  So the command is no longer covered only "by construction" through the one
+  cloneColumn this case gates: `add_link_menu.qxa` section 3 drives it over a
+  take column directly and asserts `placements=1` on both columns, which is
+  the deep copy this case's cloneColumn claim is about, read from the other
+  side.
 
   ON main THIS FAILS at the comp assertion on the duplicate, and at both of
   the duplicate's audio windows.
