@@ -711,6 +711,36 @@ void SStdMixerView::ctInsertSample()
     if( !oldTrack ) {
         return;
     }
+    // QBX-209: THE LANE IS ASKED BEFORE THE CHOOSER, not after it. A system
+    // lane carries no clips (proposal 45 D6), and `add-sample` below refuses
+    // one anyway -- but refusing there would mean the user picks a file out of
+    // a dialog and then watches nothing happen. The menu item is greyed for
+    // the same reason and through the SAME predicate, so the two cannot
+    // disagree; this is the keyboard path's half of that (Ctrl+Return has no
+    // menu to grey).
+    if( !oldTrack->acceptsClips() ) {
+        qWarning() << "Insert sample: the lane"
+                   << oldTrack->getSName()
+                   << "carries no clips (proposal 45 D6).";
+        return;
+    }
+    // QBX-209: THE CHOOSER'S ANSWER MAY BE QUEUED (tkQueueSampleFile), which
+    // is the only way a script can reach this item at all -- `exec()` on a
+    // modal dialog headless is a hang, not a refusal. One-shot: taken here,
+    // so a second insert needs a second queued answer.
+    if( !tkSampleFile_.isEmpty() ) {
+        const QString queued = tkSampleFile_;
+        tkSampleFile_.clear();
+        insertSampleFile_( oldTrack, queued );
+        return;
+    }
+    if( SApplication::app().isTestCaseMode() ) {
+        // A chooser that cannot be shown selects nothing -- the same rule a
+        // modal confirmation follows under isTestCaseMode(). Before QBX-209
+        // this fell through to exec() and hung the runner.
+        qWarning( "ctInsertSample: no file queued in test-case mode." );
+        return;
+    }
     // OK, we have the track. Insert the sample here.
     QFileDialog dialog(this, "Insert sample",
                        SSettings::instance().lastDir( "sample", QDir::currentPath() ),
@@ -734,23 +764,61 @@ void SStdMixerView::ctInsertSample()
         return;
     }
     SSettings::instance().setLastDir( "sample", QFileInfo( s ).absolutePath() );
-//    qWarning( "User selected \"%s\" in file requester.\n", (const char *) s );
-    SLink *lk = SApplication::app().getCurrentProject()->linkToFile( s );
-    if( !lk ) {
-        qWarning() << QString("Unable to open file \"%1\".\n").arg(s);
-        return;
-    }
-    // The cut makes its own content link; the temporary from linkToFile() is
-    // ours to delete — AFTER the cut exists, so the wave's refcount never
-    // touches zero in between.
-    SCut *soCut = new SCut( SApplication::app().getCurrentProject(),
-                            lk->getSObject() );
-    delete lk;
-    SLink *cutLink = new SLink( *soCut, NULL );
-    cutLink->setStartTime( qContent_->getLastClickOffset() );
-    cutLink->setParent(oldTrack); // was oldTrack->insertChild( cutLink );
-    // FIXME: Only update the track.
-    qContent_->update();
+    insertSampleFile_( oldTrack, s );
+}
+
+// The half of "Insert sample" that is left once the file is known, shared by
+// the chooser and by the queued answer a script supplies.
+//
+// QBX-209: IT SUBMITS `add-sample` RATHER THAN BUILDING THE MODEL. What stood
+// here until then was
+//
+//     SCut *soCut = new SCut( project, lk->getSObject() );
+//     SLink *cutLink = new SLink( *soCut, NULL );
+//     cutLink->setStartTime( qContent_->getLastClickOffset() );
+//     cutLink->setParent( oldTrack );
+//
+// with no action anywhere in the function, and both of its consequences were
+// MEASURED before this change rather than argued:
+//
+//  * NO UNDO ENTRY AT ALL. Not merely "the insert cannot be undone": the first
+//    Ctrl+Z after inserting a sample took back whatever the user did BEFORE
+//    it, and left the clip in place. Measured with a rename in front of the
+//    insert -- one undo, and the rename was gone while the clip stayed.
+//  * NO D6 REFUSAL. `setParent()` does not refuse: `SObject::childEvent()`
+//    asks `qobject_cast<SLink*>` and nothing else, and `acceptsClips()` is
+//    read nowhere in the model. The whole policy lives in
+//    `splacements::placementLaneAt()`, so this path parked a clip on the
+//    MASTER -- measured at `$master,1`, the index after the master's own child
+//    tracks -- while `add-sample` on the same lane was refused.
+//
+// `add-sample` carries both: SRemoveSampleAction is its inverse, and it
+// resolves its destination through `placementLaneAt`. It also takes the file
+// PATH and does its own `linkToFile`, so the SCut/SLink work above is simply
+// its apply().
+void SStdMixerView::insertSampleFile_( STrack *track, const QString &filePath )
+{
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) return;
+
+    SObject *root = splacements::rootContainer( project );
+    if( !root ) return;
+
+    // pathOf() returns {} for "the root itself" as well as "not found", but a
+    // track can never BE the root, so empty means not found (ctNewMidiClip and
+    // ctRemoveSample carry the same note).
+    const QList<int> trackPath = strackpath::pathOf( root, track );
+    if( trackPath.isEmpty() ) return;
+
+    // THE CLICK POSITION IS NOT SNAPPED, and that is pre-existing behaviour
+    // this change deliberately leaves alone: the file DROP beside it
+    // (dropEvent) and "New MIDI clip" above it both call alignTime(), so this
+    // item is the odd one out. Changing it is a behaviour change for the user
+    // and not what QBX-209 is about, so the new case PINS the raw offset --
+    // whoever changes it next will see the assertion and be making a decision
+    // rather than a side effect.
+    stimeline::submitActive( new SAddSampleAction(
+        trackPath, filePath, qContent_->getLastClickOffset() ) );
 }
 
 void SStdMixerView::ctAddLink()
@@ -862,11 +930,11 @@ void SStdMixerView::ctDeleteSample()
 
 // QBX-207: a TWO-BAR MIDI clip on the clicked lane, at the clicked position.
 //
-// Through the `insert-midi-clip` VERB, which matters and is the one way this
-// differs from ctInsertSample() directly above: that slot builds its SCut and
-// SLink by hand and calls setParent(), so inserting a sample is not undoable
-// and leaves no history entry. A new clip created from a menu is an edit like
-// any other, so it goes through an action.
+// Through the `insert-midi-clip` VERB. A new clip created from a menu is an
+// edit like any other, so it goes through an action. This comment used to name
+// ctInsertSample() directly above as the counter-example -- it built its SCut
+// and SLink by hand and left no history entry; QBX-209 made it submit
+// `add-sample`, so the two now agree.
 //
 // TWO BARS comes from the tempo map, which is the only thing that knows what a
 // bar is -- never a frame count, because `insert-midi-clip`'s duration is in
@@ -1516,7 +1584,32 @@ void SMVActualView::ctGlobalShow()
         qGlobalPopup_->addSeparator();
     }
     if( lastClickTrack_ ) {
-        qGlobalPopup_->addAction( smv_.actInsertSample_ );
+        // QBX-209: "Insert sample", BUILT PER SHOW rather than adding the
+        // persistent smv_.actInsertSample_ -- because this item now greys on
+        // a lane that carries no clips, and greying the persistent action
+        // would leave its Ctrl+Return shortcut dead everywhere after one
+        // right-click on the master. Same reason, and the same shape, as the
+        // per-show "New track" item further down: the text and the shortcut
+        // are READ from the persistent action so there is one spelling of
+        // each, and the shortcut is WidgetShortcut, i.e. display only.
+        {
+            const QString label = smv_.actInsertSample_->text();
+            QAction *aIns = qGlobalPopup_->addAction(
+                label, &smv_, SLOT( ctInsertSample() ) );
+            aIns->setObjectName( QStringLiteral( "insert-sample" ) );
+            aIns->setShortcut( smv_.actInsertSample_->shortcut() );
+            aIns->setShortcutContext( Qt::WidgetShortcut );
+            // The SAME acceptsClips() predicate `splacements::placementLaneAt`
+            // refuses on, so the greyed item and the `add-sample` the slot
+            // submits can never disagree about which lanes take a clip; and
+            // the reason is in the item's own text rather than in a log line
+            // the user never sees.
+            if( !lastClickTrack_->acceptsClips() ) {
+                aIns->setEnabled( false );
+                aIns->setText( label + QStringLiteral(
+                    "  (this lane carries no clips)" ) );
+            }
+        }
         // QBX-207. A NEW, EMPTY MIDI CLIP, two bars long, here on this lane.
         //
         // Asked through `SObject::acceptsClips()` -- the SAME predicate

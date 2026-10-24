@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-209. "Insert sample" on the arranger's context menu (also Ctrl+Return)
+  places the chosen file through the `add-sample` VERB, so it is undoable and
+  it obeys the system-lane policy.
+
+  WHAT IT DID BEFORE, and both halves were measured rather than argued:
+
+    SCut *soCut = new SCut( project, lk->getSObject() );
+    SLink *cutLink = new SLink( *soCut, NULL );
+    cutLink->setStartTime( qContent_->getLastClickOffset() );
+    cutLink->setParent( oldTrack );
+
+  no action anywhere in the function. So (1) one Ctrl+Z after an insert took
+  back whatever the user did BEFORE it and left the clip standing, and (2) the
+  clip could be parked on the MASTER, which `add-sample` refuses - setParent()
+  does not consult acceptsClips(), and nothing in the model does. Block 2
+  below is the one that would have caught the second, more serious half.
+
+  WHY A `queue-sample-file` VERB EXISTS. This is the only item on that menu
+  whose handler opens a MODAL QFileDialog, and exec() headless is a hang, not
+  a refusal - which is why the item had no gate at all before. The verb queues
+  the answer the chooser would have given; everything after the chooser is
+  production code, so a broken menu item still fails this case.
+-->
+<SActionScript version="1" name="insert_sample_menu">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- ========= 1. THE MENU OFFERS IT, ENABLED ======================== -->
+    <assert-arranger-menu trackPath="0" at="96000" contains="insert-sample=1"/>
+
+    <!-- ========= 2. CLICKING IT PLACES THE FILE ======================= -->
+    <!-- 96137 is deliberately OFF the bar grid. "Insert sample" does not snap
+         and never did, while the file DROP beside it and "New MIDI clip"
+         above it both call alignTime(); this assertion PINS the raw offset so
+         that whoever changes it next is making a decision rather than a side
+         effect. test_sawtooth.wav is 192000 frames. -->
+    <queue-sample-file path="../test_sawtooth.wav"/>
+    <arranger-menu trackPath="0" at="96137" item="insert-sample"/>
+    <assert-clip-window clip="0,0" startTime="96137" duration="192000"/>
+
+    <!-- ========= 3. IT IS UNDOABLE, AND IT UNDOES ITSELF ============== -->
+    <!-- The rename in front of the insert is what makes this bite. With no
+         undo entry of its own the insert was invisible to the stack, so this
+         ONE undo took back the RENAME and the clip survived - measured on the
+         unfixed build: the name came back "GrumpyNarwhal" and the clip was
+         still at 96137. Asserting only "the clip is gone" would not have
+         told those two apart. -->
+    <set-track-name trackPath="0" name="Marker"/>
+    <queue-sample-file path="../test_sawtooth.wav"/>
+    <arranger-menu trackPath="0" at="288000" item="insert-sample"/>
+    <assert-clip-window clip="0,1" startTime="288000"/>
+    <undo count="1"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-track-name trackPath="0" name="Marker"/>
+    <redo count="1"/>
+    <assert-clip-window clip="0,1" startTime="288000" duration="192000"/>
+
+    <!-- ========= 4. A SYSTEM LANE IS GREYED, NOT SILENT =============== -->
+    <!-- The half that was wholly missing. The master carries no clips
+         (proposal 45 D6) and the item says so by being disabled, asked
+         through the SAME acceptsClips() predicate placementLaneAt refuses on.
+         Both halves are asserted because "missing" and "greyed" are different
+         bugs and a refusal alone cannot tell them apart. -->
+    <assert-arranger-menu trackPath="$master" contains="insert-sample=0"/>
+    <queue-sample-file path="../test_sawtooth.wav"/>
+    <arranger-menu trackPath="$master" at="48000" item="insert-sample"
+                   expectReject="true"/>
+    <!-- $master,0 is the master's own child TRACK; an appended clip would be
+         at index 1, which is exactly where the unfixed build put one. -->
+    <assert-clip-window clip="$master,1" expectReject="true"/>
+
+    <!-- ========= 5. THE QUEUED ANSWER IS ONE SHOT ==================== -->
+    <!-- The header claims a case cannot queue once and have a later trigger
+         quietly reuse the answer. This is what says so: ONE queued answer,
+         TWO triggers on the same lane, and the second places nothing. The
+         second trigger is not itself refused - the item was enabled and the
+         user did click it - so only the clip assertion rejects.
+
+         It also shows the trigger block 4 refused spent nothing, since the
+         answer queued there is the one being used here. What it does NOT say
+         is WHERE that refusal happened: the menu refuses a greyed item before
+         the handler runs, so nothing the handler would have done is
+         observable from a script. Same reason the handler's own acceptsClips()
+         check is not gated; see the CONTRACT. -->
+    <add-track index="-1"/>
+    <arranger-menu trackPath="1" at="0" item="insert-sample"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <arranger-menu trackPath="1" at="384000" item="insert-sample"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

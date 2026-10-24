@@ -131,6 +131,38 @@ private:
 };
 
 /**
+ * `queue-sample-file` - THE ANSWER THE FILE CHOOSER WOULD HAVE GIVEN
+ * (QBX-209).
+ *
+ * "Insert sample" is the one item on the arranger menu whose handler opens a
+ * MODAL QFileDialog, so `arranger-menu item="insert-sample"` alone cannot
+ * reach it: `exec()` headless is a hang, not a refusal. This queues the path
+ * the chooser would have returned, and the next `arranger-menu` (or Ctrl+
+ * Return) takes it and runs the REAL slot with it.
+ *
+ * ONE-SHOT, so two inserts need two calls -- a case cannot queue once and
+ * have a later trigger quietly reuse the answer.
+ *
+ * It queues a CHOICE, it does not place anything: it submits no action, is not
+ * undoable, and on its own it changes nothing a later assertion can see. A
+ * verb that placed the sample itself would pass while the menu item was broken
+ * (testkit CONTRACT inv. 5), which is the whole reason the gesture goes
+ * through the menu.
+ */
+class SQueueSampleFileAction : public SAction {
+public:
+    QString name() const override
+    { return QStringLiteral( "queue-sample-file" ); }
+    QStringList knownAttributes() const override { return { "path" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString path_;
+};
+
+/**
  * `assert-arranger-menu` - WHAT THAT MENU OFFERS (QBX-207), the read-only
  * twin of `arranger-menu` over the same builder.
  *
