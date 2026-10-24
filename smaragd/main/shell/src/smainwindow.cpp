@@ -751,6 +751,14 @@ void SMainWindow::linkEventEditorAxis()
     SMVActualView *content = v->contentView();
     if( !content ) return;
 
+    // Already following THIS arranger: nothing to (re)seed. Every test seam
+    // calls this before driving the editor, and a re-seed there would throw
+    // away a scroll the editor made on its own (its scroll bar, an
+    // auto-scrolling drag, a Shift+wheel pan) - which the app never does,
+    // since in production only a NEW arranger reaches this line (QBX-216).
+    if( axisLinkedTo_ == content && axisZoomConn_ && axisScrollConn_ ) return;
+    axisLinkedTo_ = content;
+
     QObject::disconnect( axisZoomConn_ );
     QObject::disconnect( axisScrollConn_ );
 
@@ -5410,6 +5418,30 @@ bool SMainWindow::eventEditorDoubleClick( const QString &clipPath,
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkDoubleClick( tick, key );
+}
+
+bool SMainWindow::scrollEventEditorTime( const QString &clipPath,
+                                         const QString &to )
+{
+    if( !eventEditor_ ) return false;
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    return eventEditor_->tkScrollTime( to );
+}
+
+bool SMainWindow::dragNotePastEdge( const QString &clipPath, qint64 tick,
+                                    int key, const QString &edge, int steps )
+{
+    if( !eventEditor_ ) return false;
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    SPianoRollView *roll = eventEditor_->pianoRoll();
+    if( !roll ) return false;
+    return roll->tkDragPastEdge( tick, key, edge, steps );
 }
 
 int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )

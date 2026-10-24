@@ -84,6 +84,21 @@ public:
     virtual int noteCount() const = 0;
     virtual int selectionCount() const = 0;
 
+    /**
+     * The horizontal span, in this widget's pixels, over which the view draws
+     * TIME - what the dock's scroll bar pages over (QBX-216). The base answer
+     * is the whole width; a view with a key column or a vertical scroll bar
+     * narrows it.
+     */
+    virtual int timeLeft() const { return 0; }
+    virtual int timeRight() const { return width(); }
+
+    /**
+     * The bound clip's placement on the TIMELINE, in frames: [start, end).
+     * False when nothing is bound. What the scroll bar's range must cover.
+     */
+    bool clipFrames( offset_t *start, offset_t *end ) const;
+
 protected:
     /**
      * A resolved clip. Built fresh at every use and NEVER stored in a member

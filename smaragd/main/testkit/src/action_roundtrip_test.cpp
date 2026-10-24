@@ -428,6 +428,11 @@ const Fixture kFixtures[] = {
     // `tick` and `key` are non-default (0 and 60) for the same reason.
     { "event-editor-double-click",
       "<event-editor-double-click clip='1,0' tick='1920' key='64'/>" },
+    // Non-default values throughout, for the reason the rows above give.
+    { "scroll-event-editor-time",
+      "<scroll-event-editor-time clip='1,0' to='end'/>" },
+    { "drag-note-past-edge",
+      "<drag-note-past-edge clip='1,0' tick='960' key='64' edge='top' steps='3'/>" },
     // `steps` is non-default deliberately, for the reason the row above gives:
     // 4 is the default, so a dropped attribute would read back identical.
     { "fader-drag",

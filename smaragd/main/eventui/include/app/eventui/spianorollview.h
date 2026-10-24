@@ -11,6 +11,7 @@
 #include "app/eventui/seventeditorview.h"
 
 class QScrollBar;
+class QTimer;
 class QWheelEvent;
 
 /**
@@ -56,6 +57,13 @@ public:
 
     /** Controller lanes shown under the velocity lane (CC numbers). */
     void addCcLane( int controller );
+
+    /** The note grid's time span: right of the keys, left of the key bar. */
+    int timeLeft() const override { return KEYS_W; }
+    int timeRight() const override;
+
+    /** True while a drag past an edge is scrolling the view (QBX-216). */
+    bool autoScrolling() const;
     void removeCcLane( int controller );
     const QList<int> &ccLanes() const { return ccLanes_; }
 
@@ -123,6 +131,19 @@ public:
      * test. Returns false when no clip is bound or the spot is off the grid.
      */
     bool tkDoubleClick( qint64 tick, int key );
+
+    /**
+     * TEST ENTRY POINT for AUTO-SCROLL (QBX-216). Presses at (tick, key) - on
+     * a note it is a move, on empty grid a marquee - moves PAST `edge`
+     * ("right", "left", "top" or "bottom") with real events, runs `steps`
+     * auto-scroll steps (what the timer would run, without waiting for it),
+     * and releases where the pointer is. The press must be on screen.
+     *
+     * Returns false unless the real move STARTED the auto-scroll timer - so a
+     * case cannot pass on the steps alone when the gesture never arms it -
+     * or when the press is off screen or nothing is bound.
+     */
+    bool tkDragPastEdge( qint64 tick, int key, const QString &edge, int steps );
 
 protected:
     void paintEvent( QPaintEvent * ) override;
@@ -215,6 +236,15 @@ private:
                                       QSet<QString> *touchedIds = nullptr ) const;
 
     void commitDrag();
+
+    // --- auto-scroll (QBX-216) ---------------------------------------------
+    bool isAutoScrollDrag() const;
+    /** Start the timer while a positional drag is past an edge, else stop. */
+    void updateAutoScroll();
+    /** One step: pan the axis / scroll the keys toward the pointer and move
+     *  the drag's press anchor with the content. True if anything moved. */
+    bool autoScrollStep();
+    QTimer *autoScroll_ = nullptr;
     void selectOnly( const QString &id );
     void nudgeSelection( qint64 dTicks, int dKey );
 
