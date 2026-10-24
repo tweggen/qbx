@@ -45,6 +45,24 @@ QHash<SPluginSlot *, QPointer<SPluginNativeEditor> > &registry()
     return r;
 }
 
+// The last size, in Qt's logical units, that each plugin (by pluginKey()) gave
+// an answer worth keeping for. QBX-219: a plugin may answer 0x0 on a later
+// attach of the SAME instance -- every iPlug2 build on this box does, from its
+// second set_parent() on -- and this is what the window falls back to. In
+// memory rather than SSettings because it must work for a window that was
+// never mapped (a headless open stores no geometry, see shown_).
+QHash<QString, QSize> &lastGoodSizes()
+{
+    static QHash<QString, QSize> s;
+    return s;
+}
+
+// What a window gets when the plugin has no size to give and nothing better is
+// known. Only reachable for a plugin that answers 0x0 on its very FIRST attach
+// on a box that has never stored a geometry for it.
+constexpr int kNoAnswerWidth  = 640;
+constexpr int kNoAnswerHeight = 480;
+
 audio::twPlugin *livePluginOf( SPluginSlot *slot )
 {
     if( !slot ) return nullptr;
@@ -258,6 +276,41 @@ audio::twEditorSize SPluginNativeEditor::nativeSizeFor( QSize host, qreal dpr )
 }
 
 // See the header for why a rejected scale is silence rather than 1.0.
+// See the header for why these two are public and static.
+QRect SPluginNativeEditor::restoredGeometry( const QRect &stored, bool resizable,
+                                             const QSize &current )
+{
+    if( !stored.isValid() ) return QRect();
+    // POSITION ALWAYS; SIZE ONLY IF THE PLUGIN CAN BE RESIZED. A fixed-size
+    // editor has one correct size -- the one it just told us in attachPlugin()
+    // -- and forcing a remembered one on it would clip its own drawing,
+    // silently, for the rest of the session. Every VST3 installed on this box
+    // reports canResize=no, so this is the common path rather than the exotic
+    // one. The clamp sees the size the window will REALLY have, so a fixed-size
+    // window is kept on screen at its own size, not at a remembered one.
+    const QSize sz = ( resizable || !current.isValid() || current.isEmpty() )
+                         ? stored.size() : current;
+    return clampOntoAScreen( QRect( stored.topLeft(), sz ) );
+}
+
+QSize SPluginNativeEditor::sizeWithoutAnAnswer( const QSize &lastGood,
+                                                const QSize &stored )
+{
+    if( lastGood.isValid() && !lastGood.isEmpty() ) return lastGood;
+    if( stored.isValid() && !stored.isEmpty() )     return stored;
+    return QSize( kNoAnswerWidth, kNoAnswerHeight );
+}
+
+QSize SPluginNativeEditor::windowSizeFor( SPluginSlot *slot )
+{
+    SPluginNativeEditor *w = registry().value( slot ).data();
+    if( !w ) return QSize();
+    // QWidget's own first-show rule (QWidgetPrivate::setVisible, Qt 6.11): a
+    // window nothing has resized is adjustSize()d from its hint; one that has
+    // been resized keeps its size.
+    return w->testAttribute( Qt::WA_Resized ) ? w->size() : w->sizeHint();
+}
+
 bool SPluginNativeEditor::isSendableScale( qreal scale )
 {
     // qIsFinite rejects both NaN and the infinities. A NaN would otherwise pass
@@ -285,19 +338,19 @@ void SPluginNativeEditor::restoreGeometryFromSettings()
     const QRect stored = SSettings::instance().pluginEditorGeometry( key );
     if( !stored.isValid() ) return;
 
-    const QRect r = clampOntoAScreen( stored );
+    const QRect r = restoredGeometry( stored, editor_ && editor_->caps().resizable,
+                                      size() );
     if( !r.isValid() ) return;
 
-    // POSITION ALWAYS; SIZE ONLY IF THE PLUGIN CAN BE RESIZED. A fixed-size
-    // editor has one correct size - the one it just told us in attachPlugin() -
-    // and forcing a remembered one on it would clip its own drawing, silently,
-    // for the rest of the session. Every VST3 installed on this box reports
-    // canResize=no, so this is the common path rather than the exotic one.
+    // ALWAYS setGeometry(), NEVER move() (QBX-219). What saveGeometryToSettings()
+    // stores is geometry(), the CLIENT rectangle; move() positions the FRAME.
+    // Restoring a client position as a frame position put the window one title
+    // bar lower -- 31 px on this box -- on every open, and every close saved the
+    // lower position, so a fixed-size editor walked down the screen one reopen
+    // at a time. setGeometry() takes the client rectangle, which is what was
+    // stored. Which SIZE goes with it is restoredGeometry()'s rule.
     applyingResize_ = true;
-    if( editor_ && editor_->caps().resizable )
-        setGeometry( r );
-    else
-        move( r.topLeft() );
+    setGeometry( r );
     applyingResize_ = false;
 }
 
@@ -465,14 +518,49 @@ bool SPluginNativeEditor::attachPlugin()
 
 void SPluginNativeEditor::resizeToPlugin( audio::twEditorSize native )
 {
-    if( !native.valid() ) return;
     // Nothing of ours has that size: the plugin owns its floating window and
     // sizes it itself. Resizing this hidden dialog would be a no-op with a
     // layout pass attached.
     if( floating_ ) return;
 
-    // THE ONE CONVERSION, and it happens exactly here and in resizeEvent()
-    // below. twEditorSize is the PLUGIN'S OWN units (twplugineditor.h): physical
+    // A PLUGIN WITH NO SIZE TO GIVE DOES NOT GET A 0x0 WINDOW (QBX-219). This
+    // used to be a bare `return`, which is harmless for a window that already
+    // has a size -- a later resize request that says nothing changes nothing,
+    // and that is still what happens -- and fatal for the FIRST sizing of a new
+    // window: the container was never fixed, its minimum stayed 0x0, the layout
+    // hint was 0x0 (see the QBX-119 note below for why the minimum IS the hint)
+    // and show() mapped a window of no area at all. The user saw nothing open.
+    //
+    // Measured on NassauAnalogue and NassauEQ, CLAP and VST3 alike: get_size()
+    // / getSize() answer 944x714 on the first attach of an instance and 0x0 on
+    // every attach after it, from the moment the plugin is given its parent.
+    // That is a plugin bug (iPlug2), and a host cannot make the plugin answer;
+    // what it can do is not believe the answer. The plugin's own view is
+    // created at ITS size whatever it reports, so a container of the last good
+    // size shows it whole.
+    QSize want;
+    if( native.valid() ) {
+        want = hostSizeFor( native, devicePixelRatioF() );
+        const QString key = pluginKey();
+        if( !key.isEmpty() && want.width() > 0 && want.height() > 0 )
+            lastGoodSizes().insert( key, want );
+    } else {
+        if( sized_ ) return;
+        const QString key = pluginKey();
+        const QRect stored = key.isEmpty() ? QRect()
+                                           : SSettings::instance().pluginEditorGeometry( key );
+        want = sizeWithoutAnAnswer( lastGoodSizes().value( key ), stored.size() );
+        TW_LOGW( "pluginui",
+                 "native editor '%s' reported a size of %dx%d; using %dx%d (the last "
+                 "size it gave, or the remembered window) rather than a window of no "
+                 "area",
+                 key.toUtf8().constData(), native.width, native.height,
+                 want.width(), want.height() );
+    }
+    sized_ = true;
+
+    // THE ONE CONVERSION (the hostSizeFor() above), and it happens exactly here
+    // and in resizeEvent() below. twEditorSize is the PLUGIN'S OWN units (twplugineditor.h): physical
     // pixels on Windows and X11, logical points on macOS. Qt widget geometry is
     // logical, so the first two divide by the device pixel ratio and macOS does
     // not convert at all.
@@ -484,8 +572,6 @@ void SPluginNativeEditor::resizeToPlugin( audio::twEditorSize native )
     // every native editor on a Retina Mac exactly half size with the plugin's
     // GUI cropped inside it.
     applyingResize_ = true;
-
-    const QSize want = hostSizeFor( native, devicePixelRatioF() );
 
     // SIZE FIRST WITH THE BOUNDS PINNED, THEN RELAX THEM. THE ORDER IS THE FIX
     // FOR QBX-119, and it used to be the other way round.

@@ -588,6 +588,36 @@ SApplyResult SPluginNativeEditorAction::apply( SProject *project )
             return { false, nullptr };
         }
     }
+
+    // QBX-219. A floor for the same reason minContainerAtLeast is one (the
+    // conversion divides by the device pixel ratio on Windows and X11).
+    if( !windowSizeAtLeast_.isEmpty() ) {
+        const QStringList wh = windowSizeAtLeast_.split( QLatin1Char( 'x' ) );
+        bool okW = false, okH = false;
+        const int wantW = wh.size() == 2 ? wh[0].toInt( &okW ) : 0;
+        const int wantH = wh.size() == 2 ? wh[1].toInt( &okH ) : 0;
+        if( !okW || !okH ) {
+            qWarning() << "plugin-native-editor: windowSizeAtLeast must read "
+                          "\"WxH\", got" << windowSizeAtLeast_;
+            return { false, nullptr };
+        }
+        const QSize got = SPluginNativeEditor::windowSizeFor( slot );
+        if( !got.isValid() ) {
+            qWarning() << "plugin-native-editor FAILED: windowSizeAtLeast asks "
+                          "about a window, and no editor is open for slot"
+                       << slotIndex_;
+            return { false, nullptr };
+        }
+        if( got.width() < wantW || got.height() < wantH ) {
+            qWarning() << "plugin-native-editor FAILED: the editor window would "
+                          "come up at" << got.width() << "x" << got.height()
+                       << "- at least" << wantW << "x" << wantH << "was required."
+                       << "A window sized from a plugin's 0x0 answer opens with "
+                          "no area at all, which the user sees as the editor "
+                          "never opening (QBX-219).";
+            return { false, nullptr };
+        }
+    }
     return { true, nullptr };
 }
 
@@ -600,6 +630,8 @@ void SPluginNativeEditorAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "expectOpen", expectOpen_ );
     if( !minContainerAtLeast_.isEmpty() )
         elem.setAttribute( "minContainerAtLeast", minContainerAtLeast_ );
+    if( !windowSizeAtLeast_.isEmpty() )
+        elem.setAttribute( "windowSizeAtLeast", windowSizeAtLeast_ );
 }
 
 bool SPluginNativeEditorAction::readXml( const QDomElement &elem, int )
@@ -610,6 +642,7 @@ bool SPluginNativeEditorAction::readXml( const QDomElement &elem, int )
     action_     = elem.attribute( "action", "open" );
     expectOpen_ = elem.attribute( "expectOpen", "1" ).toInt();
     minContainerAtLeast_ = elem.attribute( "minContainerAtLeast" );
+    windowSizeAtLeast_   = elem.attribute( "windowSizeAtLeast" );
     return true;
 }
 

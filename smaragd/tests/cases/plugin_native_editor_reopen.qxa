@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_native_editor_reopen">
+
+  <!-- QBX-219: "when I close a plugin window, I cannot open it again".
+
+       WHAT IT WAS. The window did open; it opened with NO AREA. Every iPlug2
+       plugin on the dev box (NassauAnalogue and NassauEQ, CLAP and VST3 alike)
+       answers get_size()/getSize() truthfully on the first attach of an
+       instance and with 0x0 on every attach after it. resizeToPlugin() met the
+       invalid size with a bare return, so the reopened window's container was
+       never sized, its minimum stayed 0x0, the dialog's size hint was 0x0, and
+       show() mapped a window of nothing. Nothing gated a second open at all:
+       every case before this one opened an editor once.
+
+       tw.test.clap.reopen is that plugin with no window system: it answers
+       320x240 on its first attach and 0x0, returning TRUE, on every attach
+       after it, and like the Nassau editors it cannot be resized.
+
+       WHAT IS ASSERTED. `windowSizeAtLeast` reads the size the window would
+       come up at, by QWidget's own first-show rule: its size() if anything
+       resized it, else the sizeHint() that adjustSize() would apply. The
+       unfixed code never resized a window it got 0x0 for, and its hint was
+       0x0, which is what was mapped. Readable with no window mapped. A FLOOR of 100x100, not the fixture's 320x240, because
+       the conversion divides by the device pixel ratio on Windows and X11
+       (320x240 is 160x120 at 2x); 100x100 holds at every ratio up to 2.4 and
+       fails on 0x0 at all of them.
+
+       Watched failing on the unfixed code: see the PR (the SECOND and THIRD
+       opens of the reopen fixture).
+
+       What this does NOT reach: the reopen DRIFT, the other half of QBX-219.
+       A fixed-size window came back one title bar lower on every reopen
+       because a stored client rectangle was restored with move(), which places
+       the frame. Only a mapped window has a frame, and the suite maps none, so
+       the rule is gated as a pure function in plugin_editor_geometry_test
+       (restoredGeometry), and that restoreGeometryFromSettings() applies it
+       with setGeometry() was checked by hand on a mapped window. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- 1. THE ORDINARY LIFECYCLE, on a plugin that answers honestly every
+         time: open, close, open again, through both open routes, and the
+         window asks for a real size every time. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gui"
+                   name="Smaragd Test GUI" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"
+                          windowSizeAtLeast="100x100" minContainerAtLeast="1x1"/>
+    <wait-ms ms="100"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"
+                          windowSizeAtLeast="100x100" minContainerAtLeast="1x1"/>
+    <wait-ms ms="100"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open-via-strip" expectOpen="1"
+                          windowSizeAtLeast="100x100"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+
+    <!-- 2. THE REPORTED BUG. The first open is truthful; the second is the
+         0x0 answer, and the window must still ask for a real size: the last
+         one this plugin gave. -->
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.reopen"
+                   name="Smaragd Test Reopen" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="open" expectOpen="1"
+                          windowSizeAtLeast="100x100"/>
+    <wait-ms ms="100"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="close" expectOpen="0"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="open" expectOpen="1"
+                          windowSizeAtLeast="100x100" minContainerAtLeast="1x1"/>
+    <wait-ms ms="100"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="close" expectOpen="0"/>
+    <!-- ...and a third time, so "the second open" is not a special case. -->
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="open" expectOpen="1"
+                          windowSizeAtLeast="100x100"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="close" expectOpen="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

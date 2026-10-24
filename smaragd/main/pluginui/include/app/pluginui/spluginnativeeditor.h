@@ -103,6 +103,15 @@ public:
     // the only reason a headless case can assert it at all.
     static QSize containerMinimumSizeFor( SPluginSlot *slot );
 
+    // The size this slot's open editor window comes up at when shown, or an
+    // invalid QSize when none is open. FOR THE TESTKIT (QBX-219), and it is
+    // QWidget's own first-show rule rather than a guess at it: a window nothing
+    // has resized is adjustSize()d from its sizeHint(), and one that has been
+    // resized keeps its size. Readable with no window ever mapped. A plugin that
+    // answered 0x0 on a reopen used to leave the window never resized with a
+    // hint of 0x0, and it opened with no area at all.
+    static QSize windowSizeFor( SPluginSlot *slot );
+
     // D2: re-open every editor a loaded project says was open. Called once,
     // after a load has finished and the UI exists.
     //
@@ -127,6 +136,26 @@ public:
     // when it exceeds the screen), and move the position only as far as it
     // takes to get the window inside an available screen.
     static QRect clampOntoAScreen( const QRect &want );
+
+    // The CLIENT rectangle a reopened window is given, from the client
+    // rectangle saveGeometryToSettings() stored (geometry(), never pos()).
+    // Position always; the stored size only for a resizable editor, `current`
+    // (the size the plugin just asked for) otherwise; clamped onto a screen.
+    //
+    // PUBLIC AND STATIC for the reason clampOntoAScreen() is, and because the
+    // bug it closes (QBX-219) is invisible headlessly: the result used to be
+    // applied with move(), which places the FRAME, so a fixed-size editor came
+    // back one title bar lower on every reopen. Only a mapped window has a
+    // frame, so the rule is gated here and the application of it -- always
+    // setGeometry() -- is what restoreGeometryFromSettings() does.
+    static QRect restoredGeometry( const QRect &stored, bool resizable,
+                                   const QSize &current );
+
+    // The size, in Qt's logical units, a window gets when its plugin answers
+    // an invalid size on the window's FIRST sizing (QBX-219): the last good
+    // size this plugin gave in this run, else the stored window size, else
+    // 640x480. Never empty. Pure and static so the order can be gated.
+    static QSize sizeWithoutAnAnswer( const QSize &lastGood, const QSize &stored );
 
     // THE ONE CONVERSION, both directions: the plugin's geometry units to Qt's
     // logical geometry and back. `dpr` is the container widget's
@@ -226,6 +255,10 @@ private:
     std::unique_ptr<audio::twPluginEditor> editor_;
     bool                             applyingResize_ = false;
     bool                             floating_       = false;
+    // Whether resizeToPlugin() has given the container a size yet. A plugin's
+    // invalid size is ignored once this is set (nothing changes) and replaced by
+    // sizeWithoutAnAnswer() while it is not (QBX-219).
+    bool                             sized_          = false;
     // Whether this window was ever actually mapped. A headless open
     // (showWindow = false) and a floating editor both have no geometry of ours
     // worth storing, and writing one would overwrite the user's real position

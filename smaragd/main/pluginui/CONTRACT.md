@@ -366,6 +366,45 @@ the collapsed container a real size and the resulting echo resize made the
 fixture report a knob move that displaced the Gain the case asserts. That is why
 QBX-118's 21-failure inventory does not list it.
 
+**A REOPENED EDITOR IS NEVER SHOWN AT 0x0, AND A FIXED-SIZE ONE DOES NOT
+WALK DOWN THE SCREEN** (QBX-219). Reported as "when I close a plugin window I
+cannot open it again". The window did open; it opened with no area. Every
+iPlug2 plugin on the dev box (NassauAnalogue, NassauEQ; CLAP and VST3 alike)
+answers `get_size()`/`getSize()` truthfully on the FIRST attach of an instance
+and with 0x0, returning true, on every attach after it, from the moment it is
+given its parent. That is a plugin bug. The host's share was believing it:
+`resizeToPlugin()` met an invalid size with a bare `return`, which is harmless
+for a window that already has a size and fatal for the first sizing of a new
+one. The container was never fixed, its minimum stayed 0x0, the hint was 0x0
+(the QBX-119 mechanism above), and `show()` mapped nothing.
+
+1. **An invalid size on a window's FIRST sizing is replaced, not obeyed**
+   (`sized_`, `sizeWithoutAnAnswer()`): the last good size this plugin key gave
+   in this run (`lastGoodSizes()`, in memory so a headless window counts too),
+   else the stored window size, else 640x480, with a warning naming the
+   plugin. Once a window has a size, an invalid one changes nothing, as before.
+   The plugin's own view is created at ITS size whatever it reports, so a
+   container of the last good size shows it whole (measured on all three).
+2. **The stored geometry is restored with `setGeometry()`, never `move()`.**
+   `saveGeometryToSettings()` stores `geometry()`, the CLIENT rectangle;
+   `move()` places the FRAME. A fixed-size editor therefore came back one title
+   bar (31 px) lower on every reopen and saved the lower spot on every close.
+   `restoredGeometry()` is the rule (position always; the stored size only if
+   resizable; clamped at the size the window will really have).
+
+Gated: `qxa.plugin_native_editor_reopen` over `tw.test.clap.reopen`, a
+windowless fixture that answers 0x0 after its first attach and cannot be
+resized. Its `windowSizeAtLeast` reads `windowSizeFor()`: Qt's own first-show
+rule (`QWidgetPrivate::setVisible`, Qt 6.11), `size()` for a window something
+resized, else the `sizeHint()` that `adjustSize()` applies. Watched failing
+with the old `return` restored: the second and third opens report 0x0. The case
+also walks open/close/open/`open-via-strip` on `tw.test.clap.gui`; before it
+nothing in the suite opened an editor twice. The DRIFT is not reachable
+headlessly: a window the suite never maps has no frame. `restoredGeometry()` is
+gated in `plugin_editor_geometry_test`, and the reopen position was checked by
+hand on mapped NassauAnalogue/NassauEQ windows (client position identical
+across reopens).
+
 **A floating editor is a real outcome, not an error path** (decision D1, CLAP
 only). When `attach()` refuses, `attachFloating()` is offered before the generic
 fallback: the plugin owns a top-level window of its own and this `QDialog` is

@@ -11,7 +11,7 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * FIVE entry points:
+ * SEVEN entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
@@ -19,6 +19,7 @@
  *   tw.test.clap.arp          note in / note out      (37 P2)
  *   tw.test.clap.gui          gain + a WINDOWLESS clap.gui          (33 M6)
  *   tw.test.clap.restart      gui + request_restart on every reset
+ *   tw.test.clap.reopen       gui that answers 0x0 after its first attach (QBX-219)
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -139,6 +140,7 @@
 #define TW_TESTCLAP_ARP_ID  "tw.test.clap.arp"
 #define TW_TESTCLAP_GUI_ID  "tw.test.clap.gui"
 #define TW_TESTCLAP_RESTART_ID "tw.test.clap.restart"
+#define TW_TESTCLAP_REOPEN_ID  "tw.test.clap.reopen"
 
 /* Which behaviour this instance has. tw.test.clap.gui and
  * tw.test.clap.restart share GAIN's, and are told apart by hasGui /
@@ -282,6 +284,30 @@ static const clap_plugin_descriptor_t s_desc_restart = {
    .features     = s_features,
 };
 
+/* tw.test.clap.reopen (QBX-219) - the GUI fixture that, like every iPlug2
+ * plugin measured on the dev box (NassauAnalogue and NassauEQ, CLAP and VST3
+ * alike), answers get_size() with 944x714-style truth on the FIRST attach of an
+ * instance and with 0x0 on every attach after it, from set_parent() on. The
+ * host used to believe the 0x0 and show the reopened window with no area at
+ * all: "close a plugin window and it never opens again".
+ *
+ * It is also NOT RESIZABLE (can_resize false), as those editors are, because
+ * that is the path whose restored position used to drift. Its show() turns no
+ * knob, for the same reason tw.test.clap.restart's does not: the case built on
+ * it measures windows, and a parameter edit would be a second thing in it. */
+static const clap_plugin_descriptor_t s_desc_reopen = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_REOPEN_ID,
+   .name         = "Smaragd Test Reopen",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: windowless GUI that reports 0x0 after its first attach",
+   .features     = s_features,
+};
+
 static const clap_plugin_descriptor_t s_desc_arp = {
    .clap_version = CLAP_VERSION_INIT,
    .id           = TW_TESTCLAP_ARP_ID,
@@ -341,6 +367,10 @@ typedef struct {
    /* tw.test.clap.restart: ask the host to restart us from activate() and
     * reset(), whether or not anything changed. See the descriptor. */
    int      restartsOnReset;
+   /* tw.test.clap.reopen: get_size() answers 0x0 once set_parent() has been
+    * called more than once on this instance. See the descriptor. */
+   int      zeroOnReattach;
+   int      guiAttaches;
    int      guiCreated;
    int      guiFloating;
    int      guiShown;
@@ -1297,6 +1327,14 @@ static bool tc_gui_get_size( const clap_plugin_t *p, uint32_t *w, uint32_t *h )
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
    if( !self->guiCreated || !w || !h )
       return false;
+   /* TRUE with a zero, not false: that is what the iPlug2 editors do - they
+    * report their editor size, and it has become 0 - and it is the harder case
+    * for a host, which cannot tell it from an answer by its return value. */
+   if( self->zeroOnReattach && self->guiParented && self->guiAttaches >= 2 ) {
+      *w = 0;
+      *h = 0;
+      return true;
+   }
    *w = self->guiW;
    *h = self->guiH;
    return true;
@@ -1304,8 +1342,8 @@ static bool tc_gui_get_size( const clap_plugin_t *p, uint32_t *w, uint32_t *h )
 
 static bool tc_gui_can_resize( const clap_plugin_t *p )
 {
-   (void)p;
-   return true;
+   const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   return !self->zeroOnReattach;
 }
 
 static bool tc_gui_get_resize_hints( const clap_plugin_t *p, clap_gui_resize_hints_t *hints )
@@ -1354,6 +1392,7 @@ static bool tc_gui_set_parent( const clap_plugin_t *p, const clap_window_t *win 
    /* No SetParent, no XReparentWindow: there is no window. Recording that the
     * host got this far is the assertion. */
    self->guiParented = 1;
+   ++self->guiAttaches;
    return true;
 }
 
@@ -1382,7 +1421,7 @@ static bool tc_gui_show( const clap_plugin_t *p )
    /* tw.test.clap.restart opens a window and turns NO knob: its case measures
     * how the host answers a restart, and a parameter edit invalidates the
     * render path on its own. */
-   if( self->restartsOnReset )
+   if( self->restartsOnReset || self->zeroOnReattach )
       return true;
 
    /* Stand in for the user turning the Gain knob. The value is applied
@@ -1456,7 +1495,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 6;
+   return 7;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1469,6 +1508,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 3 ) return &s_desc_arp;
    if( index == 4 ) return &s_desc_gui;
    if( index == 5 ) return &s_desc_restart;
+   if( index == 6 ) return &s_desc_reopen;
    return NULL;
 }
 
@@ -1493,6 +1533,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    /* And RESTART is GUI plus one habit, for the same reason again. */
    else if( !strcmp( id, TW_TESTCLAP_RESTART_ID ) )
                                                  { kind = TW_KIND_GAIN; desc = &s_desc_restart; }
+   /* And REOPEN is GUI with a size that goes missing. */
+   else if( !strcmp( id, TW_TESTCLAP_REOPEN_ID ) )
+                                                 { kind = TW_KIND_GAIN; desc = &s_desc_reopen; }
    else                                          { return NULL; }
 
    tw_testclap_t *self = (tw_testclap_t *)calloc( 1, sizeof( tw_testclap_t ) );
@@ -1509,7 +1552,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->sampleRate = 48000.0;
    self->active     = 0;
    self->restartsOnReset = !strcmp( id, TW_TESTCLAP_RESTART_ID );
-   self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID ) || self->restartsOnReset;
+   self->zeroOnReattach = !strcmp( id, TW_TESTCLAP_REOPEN_ID );
+   self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID ) || self->restartsOnReset ||
+                      self->zeroOnReattach;
    self->guiScale   = 1.0;
 
    self->base.desc            = desc;
