@@ -197,4 +197,41 @@ private:
     int count_ = 1;
 };
 
+// `assert-transport-readout` (QBX-215): matches the transport toolbar's
+// position / time-selection readout, `pos=<shown>|sel=<shown>|mode=<bars|time>`,
+// read off the labels themselves after every input is re-read. `contains` is a
+// contiguous substring, `absent` must not occur.
+class SAssertTransportReadoutAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral("assert-transport-readout"); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString contains_;
+    QString absent_;
+};
+
+// `drag-range` (QBX-215): a REAL drag in the active arranger's ruler band from
+// `from` to `to` (FRAMES), through the arranger's own range handlers - grid
+// snapping included. A press inside an existing range moves or resizes it,
+// exactly as a hand's would. `phase` = "all" (default) | "press-move" (stop
+// before the release, so a case can look at the range MID-drag) | "release"
+// (only the release, at `to`).
+class SDragRangeAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral("drag-range"); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    qulonglong from_ = 0;
+    qulonglong to_   = 0;
+    QString    phase_ = QStringLiteral("all");
+};
+
 #endif // STRANSPORTTESTACTIONS_H

@@ -3211,6 +3211,7 @@ void SMVActualView::beginRangeDrag( int x )
     rangeValid_ = true;
     rangeDrag_ = RangeCreate;
     update();
+    emit rangeChanged();
 }
 
 void SMVActualView::updateRangeDrag( int x )
@@ -3226,11 +3227,13 @@ void SMVActualView::updateRangeDrag( int x )
         if( ns < 0 ) { ne -= ns; ns = 0; }
         rangeStart_ = (offset_t) ns; rangeEnd_ = (offset_t) ne;
         update();
+        emit rangeChanged();
         return;
     }
     if( rangeDrag_ == RangeMoveStart ) rangeStart_ = t;
     else                               rangeEnd_   = t;   // RangeCreate or RangeMoveEnd
     update();
+    emit rangeChanged();
 }
 
 void SMVActualView::endRangeDrag( int x )
@@ -3246,6 +3249,7 @@ void SMVActualView::endRangeDrag( int x )
     rangeDrag_ = RangeNone;
     saveRangeToProject();
     update();
+    emit rangeChanged();
 }
 
 void SMVActualView::saveRangeToProject()
@@ -3452,6 +3456,7 @@ void SMVActualView::ctRangeClear()
     rangeDrag_ = RangeNone;
     saveRangeToProject();
     update();
+    emit rangeChanged();
 }
 
 void SMVActualView::ctCreateAssetFromTrack()
@@ -5811,6 +5816,36 @@ bool SStdMixerView::doubleClickClip( int rowIdx, int clipIdx )
     send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
     send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    return true;
+}
+
+bool SStdMixerView::dragRange( offset_t from, offset_t to, int phase )
+{
+    if( !qContent_ ) return false;
+    const int x0 = qContent_->getXPosOfOffset( from );
+    const int x1 = qContent_->getXPosOfOffset( to );
+    const int y  = SMV_TIME_RULER_HEIGHT / 2;   // inside the ruler band
+    if( x0 < 0 || x1 < 0 ) return false;
+    // Never shown in test mode: grow the canvas so both ends are inside it
+    // (clickLane's reasoning).
+    const int needW = qMax( x0, x1 ) + 64;
+    if( qContent_->width() < needW || qContent_->height() < 2 * SMV_TIME_RULER_HEIGHT )
+        qContent_->resize( qMax( qContent_->width(), needW ),
+                           qMax( qContent_->height(), 2 * SMV_TIME_RULER_HEIGHT ) );
+
+    auto send = [&]( QEvent::Type type, int x, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        const QPointF local( x, y );
+        QMouseEvent ev( type, local, qContent_->mapToGlobal( local ), button,
+                        buttons, Qt::NoModifier );
+        QApplication::sendEvent( qContent_, &ev );
+    };
+    if( phase != DragRangeRelease ) {
+        send( QEvent::MouseButtonPress, x0, Qt::LeftButton, Qt::LeftButton );
+        send( QEvent::MouseMove,        x1, Qt::NoButton,   Qt::LeftButton );
+    }
+    if( phase != DragRangePressMove )
+        send( QEvent::MouseButtonRelease, x1, Qt::LeftButton, Qt::NoButton );
     return true;
 }
 

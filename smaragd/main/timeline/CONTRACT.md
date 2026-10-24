@@ -2001,3 +2001,13 @@ queued `isTestCaseMode()` takes the "nothing selected" branch instead of
 showing the dialog — the same rule a modal confirmation follows when it cannot
 be shown. Before QBX-209 a script that reached this item hung the runner, which
 is a second reason the item had no gate.
+
+## `rangeChanged` and the `dragRange` seam (QBX-215)
+
+`SMVActualView::rangeChanged()` fires on every change to the time-range
+selection: a create, every step of a drag (so a listener follows it live), the
+release and a clear. The transport readout (`main/shell/CONTRACT.md` inv. 68)
+is its listener. `SStdMixerView::dragRange(from, to, phase)` drives the real
+ruler-band press / move / release; a press inside an existing range moves or
+resizes that one, as a hand's would, and grid snapping applies.
+

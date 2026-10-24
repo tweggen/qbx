@@ -356,3 +356,113 @@ static const bool s_reg_pressstop = (
         []{ return new SPressStopAction; }
     ), true
 );
+
+// ------------------------------------------------- assert-transport-readout
+
+QStringList SAssertTransportReadoutAction::knownAttributes() const
+{
+    return {QStringLiteral("contains"), QStringLiteral("absent")};
+}
+
+SApplyResult SAssertTransportReadoutAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = nullptr;
+    for (QWidget *w : QApplication::topLevelWidgets()) {
+        if ((win = qobject_cast<SMainWindow *>(w))) break;
+    }
+    if (!win) {
+        qWarning() << "assert-transport-readout: no main window";
+        return {false, nullptr};
+    }
+    const QString got = win->describeTransportReadout();
+    if (!contains_.isEmpty() && !got.contains(contains_)) {
+        qWarning().noquote() << "assert-transport-readout FAILED: readout reports"
+                             << ("\"" + got + "\"") << "which lacks"
+                             << ("\"" + contains_ + "\"");
+        return {false, nullptr};
+    }
+    if (!absent_.isEmpty() && got.contains(absent_)) {
+        qWarning().noquote() << "assert-transport-readout FAILED: readout reports"
+                             << ("\"" + got + "\"") << "which contains"
+                             << ("\"" + absent_ + "\"");
+        return {false, nullptr};
+    }
+    qDebug().noquote() << "assert-transport-readout: OK -" << ("\"" + got + "\"");
+    return {true, nullptr};
+}
+
+void SAssertTransportReadoutAction::writeXml(QDomElement &elem) const
+{
+    if (!contains_.isEmpty()) elem.setAttribute("contains", contains_);
+    if (!absent_.isEmpty())   elem.setAttribute("absent", absent_);
+}
+
+bool SAssertTransportReadoutAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    contains_ = elem.attribute("contains");
+    absent_   = elem.attribute("absent");
+    return true;
+}
+
+static const bool s_reg_asserttransportreadout = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-transport-readout"),
+        []{ return new SAssertTransportReadoutAction; }
+    ), true
+);
+
+// --------------------------------------------------------------- drag-range
+
+QStringList SDragRangeAction::knownAttributes() const
+{
+    return {QStringLiteral("from"), QStringLiteral("to"), QStringLiteral("phase")};
+}
+
+SApplyResult SDragRangeAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = nullptr;
+    for (QWidget *w : QApplication::topLevelWidgets()) {
+        if ((win = qobject_cast<SMainWindow *>(w))) break;
+    }
+    if (!win) {
+        qWarning() << "drag-range: no main window";
+        return {false, nullptr};
+    }
+    const int phase = phase_ == QLatin1String("press-move") ? 1
+                    : phase_ == QLatin1String("release")    ? 2 : 0;
+    if (!win->dragRange((offset_t) from_, (offset_t) to_, phase)) {
+        qWarning() << "drag-range: no arranger to drag in";
+        return {false, nullptr};
+    }
+    // Not undoable: the range is view state persisted as a property, like the
+    // zoom; the gesture has never been an undo step.
+    return {true, nullptr};
+}
+
+void SDragRangeAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("from", QString::number(from_));
+    elem.setAttribute("to", QString::number(to_));
+    if (phase_ != QLatin1String("all")) elem.setAttribute("phase", phase_);
+}
+
+bool SDragRangeAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    from_ = elem.attribute("from", "0").toULongLong();
+    to_   = elem.attribute("to", "0").toULongLong();
+    phase_ = elem.attribute("phase", "all");
+    if (phase_ != QLatin1String("all") && phase_ != QLatin1String("press-move")
+        && phase_ != QLatin1String("release")) {
+        qWarning() << "drag-range: phase must be all, press-move or release, got"
+                   << phase_;
+        return false;
+    }
+    return true;
+}
+
+static const bool s_reg_dragrange = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("drag-range"),
+        []{ return new SDragRangeAction; }
+    ), true
+);

@@ -47,6 +47,7 @@
 #include "app/shell/saudiorecorder.h"
 #include "app/timeline/sgridtoolbar.h"
 #include "app/shell/smainwindow.h"
+#include "app/shell/stransportreadout.h"
 #include "app/shell/sviewtabs.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
@@ -172,6 +173,7 @@ void SMainWindow::destroyDocksToolbars()
     detachClipProperties();
     detachEventEditor();
     detachMixerPane();
+    detachTransportReadout();
 }
 
 void SMainWindow::attachTrackDetail()
@@ -611,6 +613,121 @@ void SMainWindow::attachEventEditor()
     eventEditor_->refresh();
 }
 
+void SMainWindow::attachTransportReadout()
+{
+    if( viewTabs_ && !readoutTabsConn_ )
+        readoutTabsConn_ = connect( viewTabs_, &SViewTabs::activeRootChanged,
+                                    this, [this]( SObject * ) {
+                                        retargetTransportReadout(); } );
+    retargetTransportReadout();
+}
+
+void SMainWindow::detachTransportReadout()
+{
+    QObject::disconnect( readoutPropConn_ );
+    QObject::disconnect( readoutArrConn_ );
+    QObject::disconnect( readoutRateConn_ );
+    QObject::disconnect( readoutRangeConn_ );
+    readoutPropConn_ = readoutArrConn_ = readoutRateConn_ = readoutRangeConn_
+        = QMetaObject::Connection();
+    readoutProject_ = nullptr;
+    readoutArranger_ = nullptr;
+    refreshTransportReadout();
+}
+
+void SMainWindow::retargetTransportReadout()
+{
+    // Re-points the readout's SIGNALS at the current project and the ACTIVE
+    // arranger, and refreshes only when one of them changed. Everything else
+    // reaches the labels through those signals, which is what makes a
+    // describe of the labels a test of the wiring and not of a refresh.
+    bool changed = false;
+
+    SProject *project = SApplication::app().getCurrentProject();
+    if( project != readoutProject_ ) {
+        QObject::disconnect( readoutPropConn_ );
+        QObject::disconnect( readoutArrConn_ );
+        QObject::disconnect( readoutRateConn_ );
+        readoutPropConn_ = readoutArrConn_ = readoutRateConn_
+            = QMetaObject::Connection();
+        readoutProject_ = project;
+        if( project ) {
+            // The ruler mode is a property, and every write of the tempo map
+            // announces itself as bpmTempoChanged. NOT arrangementChanged:
+            // that fires after EVERY applied action, which is a refresh per
+            // edit for nothing - and it would hide a missing locator or range
+            // connection from every scripted case, since each verb ends in it.
+            readoutPropConn_ = connect( project, &SProject::propertyChanged, this,
+                                        [this]( const QString &, const QVariant & ) {
+                                            refreshTransportReadout(); } );
+            readoutArrConn_ = connect( project, &SProject::bpmTempoChanged, this,
+                                       [this]( double ) { refreshTransportReadout(); } );
+            readoutRateConn_ = connect( project, &SProject::sampleRateChanged, this,
+                                        [this]( int ) { refreshTransportReadout(); } );
+        }
+        changed = true;
+    }
+
+    // The ACTIVE arranger's range: each arranger view holds its own, and the
+    // one on screen may be a default it made up and never stored, so the
+    // project's range properties are not the answer (QBX-215).
+    SStdMixerView *v = viewTabs_
+        ? dynamic_cast<SStdMixerView *>( viewTabs_->activeEditor() ) : nullptr;
+    SMVActualView *content = v ? v->contentView() : nullptr;
+    if( content != readoutArranger_ ) {
+        QObject::disconnect( readoutRangeConn_ );
+        readoutRangeConn_ = QMetaObject::Connection();
+        readoutArranger_ = content;
+        if( content )
+            readoutRangeConn_ = connect( content, &SMVActualView::rangeChanged,
+                                         this, &SMainWindow::refreshTransportReadout );
+        changed = true;
+    }
+
+    if( changed ) refreshTransportReadout();
+}
+
+void SMainWindow::refreshTransportReadout()
+{
+    if( !transportReadout_ ) return;
+    // The APPLICATION's project, not currentProject_: a scripted run sets the
+    // project on SApplication directly and never through this window, and
+    // the readout must show the project the engine plays either way.
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) {
+        transportReadout_->setState( 0, false, 0, 0, twTempoMap(), 48000, true );
+        return;
+    }
+    SMVActualView *c = readoutArranger_;
+    const bool bars = project->prop( SProjectProps::RulerMode,
+                                     QStringLiteral( "bars" ) ).toString()
+                      != QLatin1String( "time" );
+    transportReadout_->setState(
+        SApplication::app().getGlobalLocatorPos(),
+        c && c->hasRange(), c ? c->getRangeStart() : 0,
+        c ? c->getRangeEnd() : 0,
+        project->tempoMap(), project->getSRate(), bars );
+}
+
+QString SMainWindow::describeTransportReadout()
+{
+    if( !transportReadout_ ) return QString();
+    // Retarget only - NO forced refresh. A scripted run never goes through
+    // the attach sites, so this is where its readout first finds the project
+    // and the arranger; after that, what the labels say is what the signals
+    // put there.
+    ensureArranger_();
+    retargetTransportReadout();
+    return transportReadout_->describe();
+}
+
+bool SMainWindow::dragRange( offset_t from, offset_t to, int phase )
+{
+    SStdMixerView *v = ensureArranger_();
+    retargetTransportReadout();
+    return v && v->dragRange( from, to, phase );
+}
+
 void SMainWindow::detachEventEditor()
 {
     QObject::disconnect( eventEditorConn_ );
@@ -893,6 +1010,7 @@ void SMainWindow::fileNew()
     attachMixerPane();
     attachClipProperties();
     attachEventEditor();
+    attachTransportReadout();
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
@@ -965,6 +1083,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     attachMixerPane();
     attachClipProperties();
     attachEventEditor();
+    attachTransportReadout();
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
@@ -1836,6 +1955,20 @@ SMainWindow::SMainWindow()
     qTBTransport_->addAction( actPlay_ );
     qTBTransport_->addAction( actStop_ );
     qTBTransport_->addAction( actRecord_ );
+
+    // Where the playhead is and what the time selection spans (QBX-215),
+    // right beside the controls that move the one and use the other. The
+    // locator signals drive the position live; the range, tempo and ruler
+    // mode are wired per project and per arranger (attachTransportReadout).
+    transportReadout_ = new STransportReadout( this );
+    transportReadout_->setObjectName( QStringLiteral( "transport_readout" ) );
+    qTBTransport_->addWidget( transportReadout_ );
+    QObject::connect( &SApplication::app(), &SApplication::globalLocatorMoved,
+                      this, [this]( offset_t, offset_t ) {
+                          refreshTransportReadout(); } );
+    QObject::connect( &SApplication::app(), &SApplication::locatorAdvanced,
+                      this, [this]( offset_t, offset_t ) {
+                          refreshTransportReadout(); } );
 
     // Tempo (BPM) box next to the transport controls. Disabled until a project
     // is current; kept in sync both ways by syncPaletteToProject.
@@ -3276,6 +3409,7 @@ void SMainWindow::adoptCurrentProject()
     attachMixerPane();
     attachClipProperties();
     attachEventEditor();
+    attachTransportReadout();
 
     // A script that itself did `load-project` already stamped this via
     // SLoadProjectAction::apply() -> SProject::setProjectFilePath(); a
