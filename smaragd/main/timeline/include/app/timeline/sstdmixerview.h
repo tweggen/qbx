@@ -396,6 +396,15 @@ private:
     QAction *qRangeActClear_;
     bool rangeValid_;
     offset_t rangeStart_, rangeEnd_;   // the two ends (not necessarily ordered)
+    // The same two ends in CONTENT TICKS, exact, as of the last gesture that
+    // left them there (QBX-212): what a tempo change re-derives the frames
+    // from, so the range keeps its bars and an undone tempo edit is exact.
+    Fraction rangeStartTicks_, rangeEndTicks_;
+    /** A gesture released (or a load placed) the range: capture its ticks,
+     *  then emit rangeChanged. */
+    void rangeMoved();
+    /** bpmTempoChanged: re-derive the frames from the ticks. */
+    void onTempoChanged();
     int rangeDrag_;                    // RangeDrag
     // RangeMove snapshot: press time and original bounds, so a body-drag shifts
     // the whole selection by (now - press) while preserving its length.

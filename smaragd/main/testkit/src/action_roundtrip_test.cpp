@@ -419,6 +419,8 @@ const Fixture kFixtures[] = {
     // `repeat` is non-zero deliberately: 0 is the default, so a dropped
     // attribute would read back identical and hide itself.
     // Non-default values, so a dropped attribute cannot read back identical.
+    { "assert-property",
+      "<assert-property key='rangeStart' equals='725035'/>" },
     { "drag-range",
       "<drag-range from='192000' to='384000' phase='press-move'/>" },
     { "assert-transport-readout",
