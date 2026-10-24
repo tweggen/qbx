@@ -3589,6 +3589,14 @@ bool SMainWindow::triggerArrangerMenu( const QString &trackPath, offset_t at,
     return v->tkTriggerMenu( item );
 }
 
+bool SMainWindow::queueSampleFile( const QString &path )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    v->tkQueueSampleFile( path );
+    return true;
+}
+
 // QBX-206's twin of the above: one HELD drag rather than one keystroke.
 bool SMainWindow::dragFader( const QString &trackPath, double db, int steps )
 {

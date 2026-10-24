@@ -198,6 +198,9 @@ public:
     /// offer it, or offers it GREYED.
     bool triggerArrangerMenu( const QString &trackPath, offset_t at,
                               int clipIndex, const QString &item );
+    /// QBX-209: queue the answer "Insert sample"'s modal file chooser would
+    /// have given, so the next trigger of that item runs the real slot.
+    bool queueSampleFile( const QString &path );
 
     // TEST ENTRY POINT: a real click (press+release, no move) into a track's
     // LANE — the clip-drawing area, not the head — at `time`. Runs the same

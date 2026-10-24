@@ -720,6 +720,23 @@ public:
     void    tkAimMenu( STrack *track, offset_t at, SLink *clip );
     QString describeMenu() const;
     bool    tkTriggerMenu( const QString &item );
+    /**
+     * QBX-209: THE FILE CHOOSER'S ANSWER, queued.
+     *
+     * "Insert sample" is the one item on the arranger menu whose handler
+     * opens a MODAL QFileDialog, so unlike every other item it cannot simply
+     * be triggered from a script: `QDialog::exec()` headless is a hang, not a
+     * refusal. This queues what the chooser would have returned, so the REAL
+     * slot runs with a real file and everything after the chooser -- the lane
+     * it resolves, the position, the action it submits -- is production code.
+     *
+     * It is ONE-SHOT on purpose: a queued answer serves exactly one insert, so
+     * a case cannot queue once and have a second trigger silently reuse it.
+     * With nothing queued, test-case mode takes the "nothing selected" branch
+     * rather than showing the dialog -- the same rule a modal confirmation
+     * follows when it cannot be shown.
+     */
+    void tkQueueSampleFile( const QString &path ) { tkSampleFile_ = path; }
     /// QBX-206: ONE HELD drag of that track's fader; see
     /// SSMVMixerControl::tkDragFaderDb.
     bool tkDragFaderDb( STrack *t, double db, int steps );
@@ -1163,6 +1180,14 @@ private:
     // the right-click menu.
     QAction *actNewTrack_;       // Ctrl+T
     QAction *actInsertSample_;   // Ctrl+Return
+
+    // QBX-209: the queued answer for "Insert sample"'s file chooser, consumed
+    // by the first ctInsertSample() after it is set. See tkQueueSampleFile.
+    QString tkSampleFile_;
+
+    // "Insert sample" once the file is known -- the half shared by the chooser
+    // and by a queued answer.
+    void insertSampleFile_( STrack *track, const QString &filePath );
     QAction *actSplit_;          // S
     QAction *actRemoveSample_;   // Delete
     QAction *actPitchUp_;        // +   (one semitone)

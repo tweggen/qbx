@@ -260,6 +260,37 @@ bool SArrangerMenuAction::readXml( const QDomElement &elem, int /*version*/ )
     return true;
 }
 
+SApplyResult SQueueSampleFileAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "queue-sample-file: no main window";
+        return { false, nullptr };
+    }
+    if( !win->queueSampleFile( path_ ) ) {
+        qWarning() << "queue-sample-file: no arranger to queue" << path_ << "on";
+        return { false, nullptr };
+    }
+    // Nothing is placed and nothing is undoable -- the insert that consumes
+    // this answer is.
+    return { true, nullptr };
+}
+
+void SQueueSampleFileAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "path", path_ );
+}
+
+bool SQueueSampleFileAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    path_ = elem.attribute( "path" );
+    if( path_.isEmpty() ) {
+        qWarning() << "queue-sample-file: `path` is required";
+        return false;
+    }
+    return true;
+}
+
 SApplyResult SAssertArrangerMenuAction::apply( SProject * /*project*/ )
 {
     SMainWindow *win = mainWindow();
@@ -530,6 +561,12 @@ static const bool s_reg_assertarrangermenu =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "assert-arranger-menu" ),
           [] { return new SAssertArrangerMenuAction; } ),
+      true );
+
+static const bool s_reg_queuesamplefile =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "queue-sample-file" ),
+          [] { return new SQueueSampleFileAction; } ),
       true );
 
 static const bool s_reg_faderdrag =

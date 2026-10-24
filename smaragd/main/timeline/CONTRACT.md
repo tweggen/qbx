@@ -1866,18 +1866,76 @@ nobody could use.
 
 **AN ITEM'S KEY IS ITS `objectName()` WHEN IT HAS ONE, AND ITS LABEL
 OTHERWISE.** Only items a gate needs to address stably carry an objectName
-(`new-midi-clip` is the first), because a label is user-visible text that moves
-and several in this menu carry a parenthetical reason that varies with the
-project — "Clean up takes (3 tracks)". Naming all twenty at once would be a
-wide change in a menu that otherwise needed none; a later ticket names the one
-it needs.
+(`new-midi-clip` and, since QBX-209, `insert-sample`), because a label is
+user-visible text that moves and several in this menu carry a parenthetical
+reason that varies with the project — "Clean up takes (3 tracks)". Naming all
+twenty at once would be a wide change in a menu that otherwise needed none; a
+later ticket names the one it needs.
 
 **"NEW MIDI CLIP (2 BARS)" GOES THROUGH THE VERB.** `ctNewMidiClip()` submits
-`insert-midi-clip`, so a new clip is undoable — unlike `ctInsertSample()`
-directly beside it on the same menu, which builds its `SCut` and `SLink` by
-hand and calls `setParent()`, leaving no history entry. Two bars comes from
+`insert-midi-clip`, so a new clip is undoable. Two bars comes from
 `twTempoMap::barTicks()` in TICKS, never a frame count, so the clip keeps its
 two bars across a tempo edit; the position is the click snapped with
 `alignTime()`. The item's enabled state asks `SObject::acceptsClips()` — the
 SAME predicate `splacements::placementLaneAt` refuses on — so the greyed item
 and the action can never disagree about which lanes take a clip.
+
+**"INSERT SAMPLE" NOW GOES THROUGH ONE TOO (QBX-209).** It used to be the
+counter-example this section named: it built its `SCut` and `SLink` by hand and
+called `setParent()`, with no action anywhere in the function. Both
+consequences were MEASURED on the unfixed build before the change, and the
+second was worse than the first:
+
+* **No history entry at all.** Not "the insert cannot be undone" — the first
+  Ctrl+Z *after* an insert took back whatever the user did BEFORE it and left
+  the clip standing. Measured with a rename in front of the insert: one undo,
+  and the rename was gone while the clip stayed at its offset.
+* **No D6 refusal.** `setParent()` does not consult `acceptsClips()`, and
+  neither does anything else in the model: `SObject::childEvent()` asks
+  `qobject_cast<SLink*>` and stops there. The whole policy lives in
+  `splacements::placementLaneAt()`, so this path parked a clip on the MASTER —
+  measured at `$master,1`, the index after the master's own child tracks —
+  while `add-sample` on that same lane was refused.
+
+`ctInsertSample()` now submits `add-sample`, which carries the inverse
+(`SRemoveSampleAction`) and resolves its destination through `placementLaneAt`.
+Three further things about it are deliberate:
+
+* **The lane is asked BEFORE the chooser.** `add-sample` would refuse a system
+  lane anyway, but refusing there means the user picks a file out of a dialog
+  and then watches nothing happen. The item is greyed through the same
+  predicate, and the slot's own check is the keyboard path's half of that —
+  Ctrl+Return has no menu to grey.
+* **The item is BUILT PER SHOW**, not added as the persistent
+  `actInsertSample_`. Greying the persistent action would leave its
+  Ctrl+Return shortcut dead everywhere after one right-click on the master.
+  Same shape as the per-show "New track" item: the text and the shortcut are
+  read from the persistent action so there is one spelling of each, and the
+  shortcut is `WidgetShortcut`, i.e. display only.
+* **THE CLICK IS NOT SNAPPED**, and that is untouched pre-existing behaviour
+  rather than a decision this ticket took. The file DROP (`dropEvent`) and
+  "New MIDI clip" above it both call `alignTime()`, so this item is the odd
+  one out. `insert_sample_menu.qxa` PINS the raw offset with an off-grid click
+  at 96137, so whoever changes it next is making a decision rather than a side
+  effect.
+
+**NOT GATED: the slot's own `acceptsClips()` check, and WHERE the refusal
+happens.** With the menu greying in place, `arranger-menu` refuses the trigger
+before the slot runs, and with the greying removed `add-sample` refuses the
+placement — so a sabotage of the slot check alone changes no observable
+outcome. Measured: a sabotage clearing the queued chooser answer inside that
+refusal branch left the whole case passing, because the branch is never reached
+from a script. It exists for Ctrl+Return, which has no gesture seam; the clip
+is safe either way, only the dialog is not. The same measurement is why
+`insert_sample_menu.qxa` block 5 claims the answer is ONE-SHOT — one queue, two
+triggers, the second places nothing — and does not claim to pin which of the
+two refusals fired.
+
+**THE MODAL CHOOSER IS WHY `queue-sample-file` EXISTS.** "Insert sample" is the
+one item on this menu whose handler opens a `QFileDialog`, so unlike every
+other item it cannot simply be triggered: `exec()` headless is a hang. The verb
+queues the path the chooser would have returned, one-shot, and with nothing
+queued `isTestCaseMode()` takes the "nothing selected" branch instead of
+showing the dialog — the same rule a modal confirmation follows when it cannot
+be shown. Before QBX-209 a script that reached this item hung the runner, which
+is a second reason the item had no gate.

@@ -429,6 +429,10 @@ const Fixture kFixtures[] = {
     { "assert-arranger-menu",
       "<assert-arranger-menu trackPath='0' at='96000' clip='2'"
       " contains='new-midi-clip=1' absent='no-such-item'/>" },
+    // QBX-209: `path` is the only attribute and is required, so there is no
+    // default for a dropped one to read back as.
+    { "queue-sample-file",
+      "<queue-sample-file path='../test_sawtooth.wav'/>" },
     { "assert-event-editor",
       "<assert-event-editor clip='1,0' kind='pianoroll' contains='notes=2'"
       " absent='empty=1' grabPng='roll.png' grabWidth='640'"
