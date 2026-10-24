@@ -77,6 +77,10 @@ QVariant SOpt::def( const QString &key )
     // performance the user did not ask to have quantised must arrive as played.
     if( key == MidiRecordMode )     return QStringLiteral( "new-take" );
     if( key == MidiRecordQuantize ) return QStringLiteral( "off" );
+    // 100 ms is Cubase's own catch range, and it is comfortably under a beat
+    // (500 ms at 120 BPM) - so it catches an anticipated downbeat and never a
+    // note the performer meant to play earlier. QBX-213.
+    if( key == MidiRecordCatchRangeMs ) return 100;
     // Take recording (plan 53 Q11/Q12). `return` because a take almost always
     // wants another attempt from the same place; `landing` because seeing what
     // you just recorded is the point of recording it, while expanding lanes

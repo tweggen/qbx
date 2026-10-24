@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-213. A NOTE PLAYED TO THE COUNT-IN CLICK IS A NOTE PLAYED AFTER THE
+  RECORD BUTTON, and the take keeps it.
+
+  The performer presses record, hears N bars of click, and comes in on the
+  downbeat - a few tens of milliseconds early, because that is what playing to
+  a click is. Before this the first note was simply not in the take, and it
+  was lost TWICE OVER, which is why the symptom looked intermittent:
+
+    - on the FIRST take of a session there was no recorder sink at all while
+      the click ran (`SMidiInputHub::recorderSink()` is minted on first ask,
+      and the first ask was `SMidiRecorder::start()`, which a preamble defers
+      to the far end of the click), so the fan-out had nowhere to put the
+      message and NOTHING logged the loss;
+    - on every later take the sink existed, filled during the click, and
+      `start()`'s drain threw the messages away at TW_LOGD.
+
+  THE FIX IS WHERE THE DRAIN BELONGS, not what it does. The record gesture
+  begins at `SApplication::startRecording()`, so the recorder acquires its
+  sinks and drains them THERE - whatever is in the ring at the instant the
+  button goes down really is from before it - and what arrives during the
+  preamble is kept. That is the retrospective-capture buffer the hub was
+  already keeping the ring alive for.
+
+  THE CATCH RANGE bounds it: `midi/recordCatchRangeMs`, 0..1000, default 100,
+  which is Cubase's own number for the same preference. A caught note is
+  CLAMPED to the take's start and keeps its end, so it is SHORTENED, never
+  moved - the ticket's own words.
+
+  A NOTE IS CAUGHT ON TWO CONDITIONS, and section 1 and section 2 below gate
+  one each, in isolation:
+
+    - it began no earlier than the range, because beyond that it was a note
+      played during the click rather than at the top of the take, and mashing
+      it onto beat 1 is worse than dropping it;
+    - it is still SOUNDING when the take begins, because a note that began and
+      ended during the click was never an anticipation of the downbeat - both
+      its ends would clamp to the same frame and store a note of zero length
+      that the performer never played.
+
+  THIS CASE OWNS `midi/recordCatchRangeMs` and writes `transport/countInBars`
+  and `transport/preRollBars`, joining the count-in / pre-roll group that owns
+  those two between them. All three are put back at the end.
+
+  Env, on the CTest entry: RUN_SERIAL, SMARAGD_CAPTURE_SPEED=1. No audio input
+  backend - a MIDI-armed instrument track has no audio input at all, the same
+  reading the live_instrument cases take.
+
+  WHY THE TRACK CARRIES AN INSTRUMENT, and it is load-bearing rather than
+  decoration. Arming opens the input port only through a LIVE LANE, and an
+  armed MIDI track with nothing to play makes no live lane - while
+  `CaptureMidiInput::inject()` is a NO-OP on a CLOSED port, so an injection
+  into one vanishes without a word. SECTION 4 is what needs it: that section
+  plays a key BEFORE the record button, when nothing else has opened the
+  port. Sections 1 to 3 would survive without it, because `beginPreCapture()`
+  itself opens the port at the button - but an injection that silently goes
+  nowhere makes a case pass while measuring nothing, and the first draft of
+  the probe behind this ticket did exactly that.
+
+  THE CLOSED FORM. 120 BPM, 4/4, 48 kHz: bar = 96000 frames = 2 s, so a
+  TWO-bar count-in is 4000 ms of click. The locator is 96000 (bar 3), not 0,
+  so nothing here can be satisfied by a clamp at the start of the project.
+
+  WALL-CLOCK SENSITIVITY, stated rather than left to be discovered. Sections 1
+  and 3 place a message 600 ms before the end of the click, so they need the
+  count-in not to OVERRUN by more than 400 ms; it ends on delivered frames,
+  which can be late under load but never early. Section 2 injects 3000 ms
+  before the downbeat against a 100 ms range and section 4 needs no count-in
+  at all, so those two have margin in both directions and are the ones to
+  trust if they ever disagree with 1 and 3.
+-->
+<SActionScript version="1" name="midi_count_in_catch">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-tempo bpm="120"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine"/>
+
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <set-count-in bars="2"/>
+    <set-pre-roll bars="0"/>
+    <set-locator position="96000"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <!-- The live lane is what opens the port, and it is on because the track
+         is armed with an instrument and the transport is stopped (monitor
+         Auto, design D9). This assertion is the one that would fail first if
+         the injections below ever started vanishing. -->
+    <assert-input-meter trackPath="0" contains="live=on"/>
+
+    <!-- =================================================================
+         1. THE CAUGHT NOTE - and this is the FIRST take of the session, so
+            it is the half that used to fail for want of a sink rather than
+            for the drain. Both halves are one fix, but only this ordering
+            gates the first of them.
+         ================================================================= -->
+    <set-option key="midi/recordCatchRangeMs" value="1000"/>
+
+    <record-start/>
+    <!-- 3400 ms into a 4000 ms count-in: key 60 goes down ~600 ms EARLY,
+         inside the 1000 ms range, and is HELD past the downbeat - which is
+         what anticipating a downbeat is. It is released at 4400 ms, so about
+         400 ms of it belongs inside the take. -->
+    <wait-ms ms="3400"/>
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+
+    <!-- Key 62 goes down 100 ms later, INSIDE the same range, and is released
+         BEFORE the downbeat. It was a note played during the click, not an
+         anticipation of anything, and admitting it would store a note of zero
+         length at the take's start. It must be dropped - and dropped for the
+         sustain rule, not for the range, which is why it sits inside the
+         range on purpose. -->
+    <wait-ms ms="100"/>
+    <midi-in-event kind="noteon" key="62" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <midi-in-event kind="noteoff" key="62" channel="0"/>
+
+    <!-- ...and key 60 is let go 400 ms after the take began. -->
+    <wait-ms ms="700"/>
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+
+    <!-- key 64 is played well inside the take, as the control. -->
+    <wait-ms ms="600"/>
+    <midi-in-event kind="noteon" key="64" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <midi-in-event kind="noteoff" key="64" channel="0"/>
+    <wait-ms ms="300"/>
+    <record-stop/>
+
+    <!-- TWO notes: key 60, caught, and key 64, ordinary. `clamped=1` is key
+         60 being pulled to the take's start and `uncaught=1` is key 62 being
+         refused - and asserting BOTH counters is what tells the two rules
+         apart. Neither number is wall-clock dependent at the margins this
+         case leaves. -->
+    <assert-midi-recorded trackPath="0" clips="1" passes="1" notes="2"/>
+    <assert-midi-recorded trackPath="0" contains="clamped=1"/>
+    <assert-midi-recorded trackPath="0" contains="uncaught=1"/>
+
+    <!-- WHERE key 60 LANDED: at the take's own zero, exactly. No tolerance -
+         a clamp is an assignment, not a measurement. -->
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="2"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="60"
+                        at="0" tolerance="0" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="62"
+                        count="0"/>
+
+    <!-- ...and it was SHORTENED, not moved: released 400 ms after the take
+         began, which is 19200 frames at 48 kHz, and that is where the release
+         still is. This assertion is the whole ticket in one line - a note
+         that is merely moved would end 200 ms later than it starts, and a
+         note that is dropped would not be here at all. -->
+    <assert-midi-events scope="clip" clip="0,0" kind="noteoff" key="60"
+                        at="19200" tolerance="4800" count="1"/>
+
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="0"/>
+
+    <!-- =================================================================
+         2. THE UNCAUGHT NOTE, and the RANGE is what refuses it. The note is
+            held past the downbeat, so the sustain rule of section 1 would
+            admit it - it is 3000 ms early against a 100 ms range and that
+            alone is why it is dropped. Isolating the two rules is the point
+            of the two sections.
+         ================================================================= -->
+    <set-option key="midi/recordCatchRangeMs" value="100"/>
+    <set-locator position="96000"/>
+
+    <record-start/>
+    <!-- 1000 ms into the click: a performer noodling, not coming in. -->
+    <wait-ms ms="1000"/>
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <!-- ...still holding it 400 ms after the take began -->
+    <wait-ms ms="3400"/>
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+    <wait-ms ms="600"/>
+    <midi-in-event kind="noteon" key="64" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <midi-in-event kind="noteoff" key="64" channel="0"/>
+    <wait-ms ms="300"/>
+    <record-stop/>
+
+    <!-- ONE note, and the survivor is key 64. `uncaught=1` is the range doing
+         the refusing, which is what tells this apart from the DEFECT: before
+         the fix the count-in note was missing with `uncaught=0` and `pre=0`,
+         because nothing had captured it at all. A case that only counted
+         notes could not see that difference. -->
+    <assert-midi-recorded trackPath="0" clips="1" passes="1" notes="1"/>
+    <assert-midi-recorded trackPath="0" contains="uncaught=1"/>
+    <assert-midi-recorded trackPath="0" contains="clamped=0"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="64"
+                        count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="60"
+                        count="0"/>
+
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="0"/>
+
+    <!-- =================================================================
+         3. A CANCELLED PREAMBLE KEEPS NOTHING, and the KEY IS STILL DOWN when
+            it is cancelled - which is the only shape that gates this.
+
+            The first draft of this section injected a short note early in the
+            click and then checked that it was absent from the next take. It
+            passed with the cancel REMOVED, because that note was ~1.3 s
+            before the next take and the catch range refused it on its own:
+            the section was gating section 2's rule a second time, under
+            another name. So the note here is held ACROSS the cancel and
+            released inside the next take - inside the range and still
+            sounding at its start, so the range would admit it and only
+            dropping the buffer keeps it out.
+         ================================================================= -->
+    <set-option key="midi/recordCatchRangeMs" value="1000"/>
+    <set-locator position="96000"/>
+
+    <record-start/>
+    <!-- 3400 ms into the 4000 ms click, and the finger STAYS DOWN -->
+    <wait-ms ms="3400"/>
+    <midi-in-event kind="noteon" key="67" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <!-- STILL INSIDE THE COUNT-IN, so this CANCELS rather than stops: nothing
+         has been recorded, so there is nothing to commit and nothing to undo.
+         Until QBX-213 this verb refused outright - it asked
+         `isRecordingActive()`, which is false while the click runs - so the
+         cancel path in `SApplication::stopRecording()` had never been
+         reachable from a script at all. -->
+    <record-stop/>
+    <assert-midi-recorded trackPath="0" clips="0"/>
+
+    <!-- A real take, with the count-in off so this claim is about the
+         CANCELLED buffer and not about a second preamble. Key 67 is released
+         400 ms in - a note-off that pairs with nothing, because the note-on it
+         belonged to went with the cancelled preamble. -->
+    <set-count-in bars="0"/>
+    <set-locator position="96000"/>
+    <record-start/>
+    <wait-ms ms="400"/>
+    <midi-in-event kind="noteoff" key="67" channel="0"/>
+    <midi-in-event kind="noteon" key="72" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <midi-in-event kind="noteoff" key="72" channel="0"/>
+    <wait-ms ms="300"/>
+    <record-stop/>
+
+    <assert-midi-recorded trackPath="0" clips="1" notes="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="72"
+                        count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="67"
+                        count="0"/>
+
+    <undo/>
+    <assert-midi-recorded trackPath="0" clips="0"/>
+
+    <!-- =================================================================
+         4. WITH NO PREAMBLE, A KEY PRESSED BEFORE THE BUTTON IS STILL NOT IN
+            THE TAKE. This is the drain's original purpose, and QBX-213 did
+            not widen it: the count-in case is different only because there
+            the button is four seconds EARLIER than the recorder's start.
+            Without this section the fix could have become "keep everything",
+            and nothing would have noticed.
+         ================================================================= -->
+    <set-locator position="96000"/>
+    <!-- armed, stopped, monitoring: the port is open and the fan-out is
+         filling the recorder's ring right now, with no take in sight. -->
+    <midi-in-event kind="noteon" key="55" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <midi-in-event kind="noteoff" key="55" channel="0"/>
+    <wait-ms ms="300"/>
+
+    <record-start/>
+    <wait-ms ms="400"/>
+    <midi-in-event kind="noteon" key="76" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <midi-in-event kind="noteoff" key="76" channel="0"/>
+    <wait-ms ms="300"/>
+    <record-stop/>
+
+    <assert-midi-recorded trackPath="0" clips="1" notes="1"/>
+    <assert-midi-recorded trackPath="0" contains="pre=0"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="76"
+                        count="1"/>
+    <assert-midi-events scope="clip" clip="0,0" kind="noteon" key="55"
+                        count="0"/>
+
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- The three keys this case wrote, put back. -->
+    <set-count-in bars="0"/>
+    <set-pre-roll bars="0"/>
+    <set-option key="midi/recordCatchRangeMs" value="100"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

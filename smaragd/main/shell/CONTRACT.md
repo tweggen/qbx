@@ -721,8 +721,70 @@ than guessed at. The trim floor already distinguishes the two cases
     channel filter is applied when the buffer is read, not when it is filled.
     At a record start the ring is DRAINED, never `clear()`ed - `clear()` is only
     safe while the producer is known to be idle, and a performer's finger is not.
-    A retrospective `place-retro-midi` (design D8) would keep what was drained;
-    it is not implemented.
+
+    **THE DRAIN HAPPENS WHERE THE BUTTON IS, WHICH IS NOT ALWAYS WHERE THE TAKE
+    IS** (QBX-213). With a count-in or a pre-roll in front of it, the record
+    GESTURE is at `startRecording()` and the take is at the far end of the
+    preamble, so `SMidiRecorder::beginPreCapture()` acquires the sinks and
+    drains them THERE - whatever is in the ring at the instant the button goes
+    down really is from before it - and what arrives during the click is KEPT,
+    with `start()` harvesting it instead of draining. That buffer is what this
+    invariant's "mints one sink per port and keeps it for the process" was
+    always for; the two halves of design D8 had contradicted each other in
+    writing, the hub's header calling the ring "exactly the retrospective-
+    capture buffer L4 wants to keep" while `start()` threw it away saying the
+    retrospective path "is not implemented".
+
+    THE COST OF NOT DOING THIS was a note the performer played and the take did
+    not have, and it was lost TWO different ways, which is why the symptom
+    looked intermittent: on the FIRST take of a session no recorder sink
+    existed while the click ran (it is minted on first ask, and the first ask
+    was `start()`), so the fan-out had nowhere to put the message and NOTHING
+    logged the loss; on every later take the sink existed, filled, and the
+    drain discarded it at TW_LOGD. Measured both ways before the fix.
+
+    `beginPreCapture()` does NOT make the recorder active: `isActive()` stays
+    false, so `isRecordingActive()`, the monitor state (design D9) and the
+    transport edge are untouched until `startRecordingNow_()`. It is a buffer
+    filling, not a take running. A CANCELLED preamble drops the buffer
+    (`cancelPreCapture()`), or it would leak into the next take.
+
+28a. **A CAUGHT NOTE IS SHORTENED, NEVER MOVED, AND IT IS CAUGHT ON TWO
+    CONDITIONS** (QBX-213). `midi/recordCatchRangeMs` (0..1000, default 100 -
+    Cubase's own number for the same preference, and comfortably under a beat)
+    says how far before the take's start a note may have begun and still
+    belong to it. A caught note is clamped to the start and KEEPS ITS END.
+    Both conditions have to hold, and a gate exists for each in isolation
+    (`midi_count_in_catch` sections 1 and 2):
+
+    - it began no earlier than the range. Beyond that it was a note played
+      during the click rather than at the top of the take, and mashing it onto
+      beat 1 is worse than dropping it;
+    - it is still SOUNDING when the take begins (`endF > ps`). A note that
+      began AND ended during the click was never an anticipation of the
+      downbeat - both its ends would clamp to the same frame and store a note
+      of ZERO LENGTH the performer never played.
+
+    THE RANGE APPLIES ONLY TO WHAT THE PREAMBLE CAPTURED. A note captured
+    inside a running take keeps the older, unbounded clamp, because that one is
+    latency compensation rather than anticipation - a punch-in's lead-in has
+    always clamped to the in point, and QBX-213 did not widen that.
+
+    **A CONTROLLER IS NOT BOUNDED BY THE RANGE AT ALL**, and that asymmetry is
+    deliberate. A CC, a bend or a program change is the instrument's STATE, not
+    an event: a sustain pedal pressed during the count-in and still down at the
+    downbeat belongs to the take, and dropping it would record the take with
+    the pedal up while the performer's foot is on it. Notes are events, and an
+    event mashed onto beat 1 is audibly wrong.
+
+    `describe()` reports `pre=<n> uncaught=<n> catch=<frames>` beside
+    `clamped=<n>`, so a case can assert the MECHANISM and not just its result -
+    which is what separates "the range refused it" (`uncaught=1`) from the
+    defect this invariant records (`uncaught=0 pre=0`, nothing captured it).
+
+    A retrospective `place-retro-midi` (design D8) - keeping what was drained
+    at the button itself, with no preamble in front of it - is still not
+    implemented.
 
 29. **Loop passes are ARITHMETIC on wrap-counted frames**, exactly as they are
     for audio: `floor((f - loopIn) / loopLen)`, never wrap detection, because a
@@ -793,6 +855,9 @@ than guessed at. The trim floor already distinguishes the two cases
       IS, and is why a pre-rolled take lands a few thousand frames BEFORE the
       locator while a counted-in one lands exactly ON it.
     - They compose: the count-in counts, then the pre-roll rolls.
+    - **MIDI IS CAPTURED THROUGHOUT BOTH** (QBX-213, invariants 28 and 28a):
+      the performer is playing to the click, and the record gesture was the
+      button, not the recorder's own `start()` at the far end of the preamble.
 
     Neither is offered while the transport is ALREADY running: punching in while
     the tape rolls has no count-in in any DAW, and a pre-roll would mean seeking

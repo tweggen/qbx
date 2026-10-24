@@ -41,7 +41,17 @@ bool SRecordStartAction::readXml( const QDomElement &, int ) { return true; }
 
 SApplyResult SRecordStopAction::apply( SProject * )
 {
-    if( !SApplication::app().isRecordingActive() ) {
+    // A PREAMBLE IN FLIGHT COUNTS AS RECORDING FOR THIS VERB (QBX-213).
+    // `SApplication::stopRecording()` has honoured a stop during a count-in
+    // or a pre-roll since proposal 21 L5 - it CANCELS the preamble, because
+    // nothing has been recorded yet - but this guard asks
+    // `isRecordingActive()`, which is deliberately false while the click
+    // runs. So the cancel path was unreachable from a script and had never
+    // been gated by anything, which is how it came to be noticed: QBX-213
+    // gives the preamble a buffer to collect MIDI into, and the branch that
+    // DROPS that buffer on a cancel needed a case.
+    if( !SApplication::app().isRecordingActive()
+        && !SApplication::app().recordPreambleActive() ) {
         qWarning() << "record-stop: not recording";
         return { false, nullptr };
     }

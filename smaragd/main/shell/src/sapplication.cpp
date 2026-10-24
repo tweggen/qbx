@@ -1381,6 +1381,9 @@ void SApplication::cancelRecordPreamble()
     preamblePhase_ = 0;
     if( preambleTimer_ ) preambleTimer_->stop();
     if( liveMonitor_ ) liveMonitor_->endCountIn();
+    // Nothing was recorded, so what the preamble collected is dropped rather
+    // than carried into whatever take comes next (QBX-213).
+    if( midiRecorder_ ) midiRecorder_->cancelPreCapture();
 }
 
 // THE ENTRY POINT for a record start, and since proposal 21 L5 it has a
@@ -1423,6 +1426,18 @@ bool SApplication::startRecording()
                          &SApplication::pumpRecordPreamble );
             }
             preambleTimer_->start();
+            // THE MIDI RECORDER STARTS CAPTURING NOW, N BARS BEFORE ITS OWN
+            // start() (QBX-213). The record GESTURE is here; the take is at
+            // the far end of the preamble, and a note played to the count-in
+            // click falls in between. Before this it was lost twice over -
+            // never captured on the first take of a session (no recorder sink
+            // existed yet) and captured-then-drained on every later one - and
+            // the user saw their first note missing from the take.
+            //
+            // It does NOT make the recorder active: isRecordingActive(), the
+            // monitor state and the transport edge are all untouched until
+            // startRecordingNow_(). This is a buffer filling.
+            if( midiRecorder_ ) midiRecorder_->beginPreCapture();
             if( countIn > 0 ) {
                 preamblePhase_ = 1;
                 TW_LOGI( "shell", "[TRANSPORT] count-in: %d bar(s) = %lld frames "
