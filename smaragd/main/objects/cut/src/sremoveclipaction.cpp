@@ -12,9 +12,11 @@ using namespace strackpath;
 SRemoveClipAction::SRemoveClipAction( const QList<int> &clipPath,
                                       const QList<int> &sourceClipPath,
                                       const QList<int> &destTrackPath,
-                                      offset_t startTime )
+                                      offset_t startTime,
+                                      bool share )
     : clipPath_( clipPath ), sourceClipPath_( sourceClipPath ),
-      destTrackPath_( destTrackPath ), startTime_( startTime )
+      destTrackPath_( destTrackPath ), startTime_( startTime ),
+      share_( share )
 {
 }
 
@@ -39,8 +41,19 @@ SApplyResult SRemoveClipAction::apply( SProject *project )
     }
     delete link;   // the SCut becomes unreferenced -> deleteLater
 
-    // Inverse re-duplicates the original onto the same spot.
-    SAction *inverse = new SDuplicateClipAction( sourceClipPath_, destTrackPath_, startTime_ );
+    // Inverse re-creates the original onto the same spot, as the SAME GESTURE
+    // it was (QBX-217): a shared link as a shared link, a duplicate as a
+    // duplicate. The two are indistinguishable in the model once made, so the
+    // bit has to be carried rather than inferred.
+    //
+    // NOTE WHAT THIS DOES *NOT* DO: it is not how redo works. Redo re-applies
+    // the stored forward action, and this inverse is deleted by
+    // `SActionHistory::submit( …, skipHistory=true )` right after it is
+    // returned. See the header — it is correctness in depth for the day
+    // `remove-clip` is submitted forward, and it is deliberately not gated.
+    SAction *inverse = share_
+        ? (SAction *) new SLinkClipAction( sourceClipPath_, destTrackPath_, startTime_ )
+        : (SAction *) new SDuplicateClipAction( sourceClipPath_, destTrackPath_, startTime_ );
     return {true, inverse};
 }
 

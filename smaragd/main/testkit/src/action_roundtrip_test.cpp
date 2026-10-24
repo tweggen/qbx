@@ -981,6 +981,10 @@ const LaneRow kLaneRows[] = {
     { "place-asset",           Refuse, "AC5.1 placement" },
     { "move-clip",             Refuse, "AC5.1 placement (the DESTINATION)" },
     { "duplicate-clip",        Refuse, "AC5.1 placement (the DESTINATION)" },
+    // QBX-217: link-clip is duplicate-clip's sharing sibling and resolves its
+    // destination through the same placementLaneAt, so it refuses a system
+    // lane for the same reason and is gated in the same case.
+    { "link-clip",             Refuse, "AC5.1 placement (the DESTINATION)" },
     { "insert-midi-clip",      Refuse, "AC5.1 placement" },
     { "place-midi-recording",  Refuse, "AC5.1 placement" },
     { "import-midi-file",      Refuse, "AC5.1 placement (explicit-track branch)" },

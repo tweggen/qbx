@@ -821,32 +821,73 @@ void SStdMixerView::insertSampleFile_( STrack *track, const QString &filePath )
         trackPath, filePath, qContent_->getLastClickOffset() ) );
 }
 
+// "ADD LINK" GOES THROUGH A VERB (QBX-217), as "Insert sample" (QBX-209) and
+// "New MIDI clip" (QBX-207) do. It used to build the placement by hand, and
+// that one shortcut cost three things at once:
+//
+//   1. NO UNDO ENTRY. Nothing was submitted, so the history did not know the
+//      link existed and one Ctrl+Z destroyed the edit BEFORE it while leaving
+//      the link standing. Measured: with a rename in front, the undo took back
+//      the rename and `assert-clip-window` still found the link.
+//   2. NO LANE CHECK. `duplicate-clip` refuses a source that is a lane in one
+//      line; this did not, so handing it a lane link appended a second
+//      placement of a whole LANE. Measured on 59ca0dfa: aimed at `$master`
+//      child 0 -- the Conductor lane, not a clip -- `$master,1` became a
+//      second placement of Conductor, unremovable by undo. Not reachable with
+//      a mouse (`STrack::getTopMostSLinkAt` skips child tracks) but reachable
+//      through the testkit seam, and wrong either way.
+//   3. A LEAK. The `SLink` was constructed before `getLastClickTrack()` was
+//      consulted, so the null-track `return` dropped the only pointer to it.
+//      Gone by construction here: nothing is built until the verb runs.
+//
+// `link-clip` carries all three -- `SRemoveClipAction( share=true )` is its
+// inverse, it refuses a lane source, and it asks `placementLaneAt` for the
+// destination so proposal 45 D6 applies.
 void SStdMixerView::ctAddLink()
 {
     SLink *oldLink = qContent_->getLastClickSLink();
-    if( !oldLink ) {
+    STrack *oldTrack = qContent_->getLastClickTrack();
+    if( !oldLink || !oldTrack ) {
         qWarning( "ctAddLink called without object.\n" );
         return;
     }
-    // A TAKE COLUMN IS DEEP-COPIED, never linked (proposal 42 M1). "Add link"
-    // means SHARE, and two placements of one `STakeStack` share its
-    // `activeTake_` -- so comping either would comp both, which is
-    // indistinguishable from comping not working. Everything else keeps the
-    // sharing semantics the menu item names.
-    SObject *shared = &oldLink->getSObject();
-    if( STakeStack *column = dynamic_cast<STakeStack *>( shared ) ) {
-        if( STakeStack *dup = stakes::cloneColumn(
-                SApplication::app().getCurrentProject(), *column ) )
-            shared = dup;
-    }
-    SLink *newLink = new SLink( *shared, NULL );
-    newLink->setStartTime( oldLink->getStartTime()+oldLink->getSObject().getDuration() );
-    STrack *oldTrack = qContent_->getLastClickTrack();
-    if( !oldTrack ) {
+    // THE LANE CHECK IS ASKED HERE TOO, and it is deliberately not the only
+    // place: the menu item is greyed through the same predicate (ctGlobalShow),
+    // so the item and the action cannot disagree. NOT GATED, and for the reason
+    // QBX-209's sabotage S4 established -- `tkTriggerMenu` refuses a disabled
+    // action before the handler runs, so from a script this branch is
+    // unreachable once the greying is in place. It stays because this is a
+    // production handler with a keyboard route and its sibling verb guards the
+    // same thing.
+    if( oldLink->getSObject().isLane() ) {
+        qWarning() << "Add link: the clicked item is a lane, not a clip.";
         return;
     }
-    newLink->setParent(oldTrack); // was: oldTrack->insertChild( newLink );
-    qContent_->update();
+
+    SProject *project = SApplication::app().getCurrentProject();
+    if( !project ) return;
+
+    SObject *root = splacements::rootContainer( project );
+    if( !root ) return;
+
+    // pathOf() returns {} for "the root itself" as well as "not found", but a
+    // track can never BE the root, so empty means not found (ctNewMidiClip,
+    // insertSampleFile_ and ctRemoveSample carry the same note).
+    const QList<int> trackPath = strackpath::pathOf( root, oldTrack );
+    if( trackPath.isEmpty() ) return;
+    const int clipIdx = oldTrack->indexOfChild( oldLink );
+    if( clipIdx < 0 ) return;
+
+    QList<int> clipPath = trackPath;
+    clipPath.append( clipIdx );
+
+    // WHERE IT LANDS: immediately after the clicked clip, which is what this
+    // command has always done. The reach is the OBJECT's duration rather than
+    // the window's, also as before -- changing it is a behaviour change and not
+    // what QBX-217 is about, so the new case pins the position it produces.
+    stimeline::submitActive( new SLinkClipAction(
+        clipPath, trackPath,
+        oldLink->getStartTime() + oldLink->getSObject().getDuration() ) );
 }
 
 void SStdMixerView::ctRemoveSample()
@@ -1536,7 +1577,25 @@ void SMVActualView::ctGlobalShow()
                                   SLOT( ctShowClipProperties() ) );
         qGlobalPopup_->addSeparator();
         qGlobalPopup_->addAction( smv_.actSplit_ );
-        qGlobalPopup_->addAction( "Add &link", &smv_, SLOT( ctAddLink() ) );
+        // "ADD LINK" IS GREYED ON A LANE LINK (QBX-217), through the same
+        // question `link-clip` asks of its source -- so the item and the
+        // action cannot disagree, which is QBX-207's rule for this menu. A
+        // lane is not a clip, and linking one appended a second placement of
+        // a whole lane before this.
+        //
+        // The objectName is what a script addresses it by (`add-link`), and
+        // it exists for the reason `new-midi-clip` and `insert-sample` have
+        // one: a key that is the visible label changes when the label does.
+        {
+            QAction *aLink = qGlobalPopup_->addAction(
+                "Add &link", &smv_, SLOT( ctAddLink() ) );
+            aLink->setObjectName( QStringLiteral( "add-link" ) );
+            if( lastClickSLink_->getSObject().isLane() ) {
+                aLink->setEnabled( false );
+                aLink->setText( QStringLiteral(
+                    "Add &link  (not a clip)" ) );
+            }
+        }
 
         // --- proposal 41 M2: the arranger's surface for pack / unpack -----
         // Pack acts on the SELECTION (packing is a group operation), unpack

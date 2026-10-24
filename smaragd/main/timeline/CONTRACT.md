@@ -1866,7 +1866,8 @@ nobody could use.
 
 **AN ITEM'S KEY IS ITS `objectName()` WHEN IT HAS ONE, AND ITS LABEL
 OTHERWISE.** Only items a gate needs to address stably carry an objectName
-(`new-midi-clip` and, since QBX-209, `insert-sample`), because a label is
+(`new-midi-clip`, `insert-sample` since QBX-209 and `add-link` since
+QBX-217), because a label is
 user-visible text that moves and several in this menu carry a parenthetical
 reason that varies with the project — "Clean up takes (3 tracks)". Naming all
 twenty at once would be a wide change in a menu that otherwise needed none; a
@@ -1918,6 +1919,67 @@ Three further things about it are deliberate:
   one out. `insert_sample_menu.qxa` PINS the raw offset with an off-grid click
   at 96137, so whoever changes it next is making a decision rather than a side
   effect.
+
+
+**"ADD LINK" GOES THROUGH ONE AS WELL (QBX-217), AND IT COST THREE THINGS, NOT
+ONE.** `ctAddLink()` built `new SLink( *shared, NULL )` and called
+`setParent()`, and skipping the verb skipped everything the verb does:
+
+- **no undo entry.** Measured with a rename in front of the command: one undo
+  took back the rename (`assert-track-name FAILED: expected "Marker" but got
+  "GrumpyNarwhal"`) and left the link standing. The QBX-209 framing again — not
+  "cannot be undone" but "destroys the edit before it";
+- **no lane check.** `duplicate-clip` refuses a source that `isLane()` in one
+  line; this did not. Handed a LANE link it appended a second placement of a
+  whole lane: measured on `59ca0dfa`, aimed at `$master` child 0 — the
+  **Conductor** lane, not a clip — `$master,1` became a second placement of
+  Conductor where nothing had resolved before, with no undo entry to take it
+  back;
+- **a leak.** The `SLink` was constructed before `getLastClickTrack()` was
+  consulted, so the null-track `return` dropped the only pointer to it. Gone by
+  construction: nothing is built until the verb runs.
+
+The verb is `link-clip`, a sibling of `duplicate-clip` in the same file pair
+and differing in one bit — one more PLACEMENT of the same object rather than a
+copy of its window. `add_link_menu.qxa` proves the sharing the way a user would
+see it, by trimming one placement and reading the length off the other.
+
+**A REDO RE-SHARES BECAUSE OF THE FORWARD ACTION, NOT BECAUSE OF THE INVERSE'S
+INVERSE**, and the difference matters to anyone reading `SRemoveClipAction`'s
+`share` bit. `SActionUndoCommand::redo()` re-applies the stored FORWARD action;
+the inverse a class returns on the undo path is applied with
+`skipHistory=true`, which `delete`s it immediately. So `remove-clip`'s own
+inverse is discarded on the only path that builds it, and the `share` bit is
+correctness in depth rather than the thing that makes redo work — which a
+sabotage establishing it is NOT GATED is what revealed. The case asserts the
+share AFTER the redo (section 1 redoes, section 2 trims), so the behaviour is
+covered; the bit is not, and the header says so.
+
+**THE LANE STATE IS REACHABLE BY A SCRIPT AND NOT BY A MOUSE, which is a fact
+about the seam above and worth knowing before gating anything through it.**
+`STrack::getTopMostSLinkAt()` — the real right-click's hit test — skips child
+tracks explicitly ("they have their own lanes; this query is for the track's
+own clips"), so `lastClickSLink_` is never a lane link from a click.
+`tkAimMenu( track, at, clip )` takes the child index a script names and applies
+no such filter. A seam that can put a menu in a state the gesture cannot is a
+seam that can gate fiction; here the corruption it exposed was real and worth
+fixing, but the severity claim is "reachable through the testkit", not
+"reachable by a user".
+
+**NOT GATED: the slot's own `isLane()` check.** The item is greyed through the
+same predicate, and `tkTriggerMenu` refuses a disabled action BEFORE the
+handler runs — QBX-209's sabotage S4 established exactly this — so from a
+script the handler's branch is unreachable once the greying exists. It stays
+because this is a production handler whose sibling verb guards the same thing,
+and because the greying is a decision about what the user sees rather than a
+model guarantee.
+
+**NOT GATED EITHER: proposal 45 D6 on this menu path**, and this one is a
+property of the command rather than of the test. "Add link" always places onto
+the clicked clip's OWN lane, which carries a clip by construction, so no click
+can aim it at a system lane. The VERB can be aimed anywhere, and that refusal
+is gated where its siblings are — `master_refuses_clips`, whose header
+enumerates the family.
 
 **NOT GATED: the slot's own `acceptsClips()` check, and WHERE the refusal
 happens.** With the menu greying in place, `arranger-menu` refuses the trigger

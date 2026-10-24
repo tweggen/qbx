@@ -22,6 +22,7 @@
     place-clip                 splaceclipaction.cpp
     place-recording            splacerecordingaction.cpp
     duplicate-clip (dest)      sduplicateclipaction.cpp
+    link-clip (dest)           sduplicateclipaction.cpp   (QBX-217)
     add-take                   saddtakeaction.cpp
     insert-midi-clip           smidiclipactions.cpp
     place-midi-recording       smidirecordactions.cpp
@@ -65,6 +66,16 @@
 
     <!-- move-clip, whose DESTINATION is the master. -->
     <move-clip clip="0,0" destTrack="$master" startTime="0" expectReject="true"/>
+
+    <!-- link-clip (QBX-217), duplicate-clip's sharing sibling: a SECOND
+         placement of an existing clip, which is what the arranger's "Add
+         link" makes. It resolves its destination through the same
+         placementLaneAt, so the master refuses it for the same reason - and
+         sharing is exactly the case where a leak onto a system lane would be
+         hardest to see afterwards, the object still being alive and correct
+         at its other placement. -->
+    <link-clip source="0,0" destTrack="$master" startTime="0"
+               expectReject="true"/>
 
     <!-- AC5.5: NOTHING HALF-APPLIED. The user track still holds its clip at 0
          (so the move did not take it away), and the master holds no clip 0 at
