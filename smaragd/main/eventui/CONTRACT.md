@@ -300,3 +300,36 @@ Known debt:
     the case with the clip gone; the same sabotage with the old direct-send
     seam passes, which is how the defect went unseen. The forward from a
     toolbar child is hand-verification only (the seam presses keys on the view).
+
+20. **The editor scrolls horizontally: a scroll bar, and auto-scroll under a
+    drag (QBX-216).** `SEventEditorDock` puts a horizontal `QScrollBar` under
+    the view, inset by the keyboard column like the ruler. Its value IS the
+    shared `SEventTimeAxis`'s `leftPixels`, so it moves the ruler and every
+    band at once; linked, the arranger's next scroll overrides it exactly as
+    it overrides a Shift+wheel pan (the link stays one-way). The range covers
+    the bound clip's end plus a quarter page, and never less than where the
+    axis already is, so a linked arranger scrolled past the clip cannot make
+    the bar jump and drag the axis back. `syncHScroll()` re-derives it on
+    every `axisChanged`, bind, refresh, kind switch and resize.
+
+    **Auto-scroll:** while a MOVE, COPY, RESIZE or MARQUEE drag is past an
+    edge of the note grid (`timeLeft()`/`timeRight()` horizontally; above or
+    below the grid for everything but a resize), a 30 ms timer runs
+    `autoScrollStep()`: it pans the axis (or scrolls the key rows) toward the
+    pointer, faster the further out it is, and moves `drag_.press` WITH the
+    content. That last part is load-bearing: the press is in widget pixels,
+    so without it a move would not follow the scroll at all (its delta is
+    `tick(cur) - tick(press)`, and both shift together) and a marquee would
+    start in the wrong place. A velocity or CC drag never scrolls.
+
+    `SMainWindow::linkEventEditorAxis()` now re-seeds the axis only for a NEW
+    arranger content view. Every test seam calls it, and the old
+    unconditional re-seed threw away the editor's own scroll between two
+    actions, which the app never does.
+
+    Gated by `event_editor_hscroll.qxa` through `scroll-event-editor-time`
+    and `drag-note-past-edge`; seven sabotages bite (no pan, press anchor not
+    moved, a move that does not arm the timer, no key scroll, the bar not
+    wired to the axis, a range that ignores the clip, the re-seed on every
+    call). The 30 ms timer itself is the one piece the seam replaces with
+    direct steps; that it is ARMED by the real move is gated.

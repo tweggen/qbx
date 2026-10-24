@@ -11,6 +11,8 @@ class QComboBox;
 class QLabel;
 class QPushButton;
 class QKeyEvent;
+class QResizeEvent;
+class QScrollBar;
 class QShowEvent;
 class QVBoxLayout;
 
@@ -75,6 +77,14 @@ public:
      */
     void bindClip( const QList<int> &clipPath );
 
+    /**
+     * TEST ENTRY POINT for the horizontal scroll bar (QBX-216): drives the
+     * REAL QScrollBar's setValue() to "start", "end" or a pixel value, so
+     * its valueChanged connection is what moves the axis. False when no clip
+     * is bound (the bar is hidden then) or `to` does not parse.
+     */
+    bool tkScrollTime( const QString &to );
+
 public slots:
     /** Re-resolve the selection and rebind. Cheap and idempotent. */
     void refresh();
@@ -92,6 +102,7 @@ protected:
      * "open" gesture goes through).
      */
     void showEvent( QShowEvent *event ) override;
+    void resizeEvent( QResizeEvent *event ) override;
 
     /**
      * Delete and Backspace belong to the editor while the focus is anywhere
@@ -114,6 +125,14 @@ private:
     /** The first EVENT clip in the current selection, or an empty path. */
     QList<int> resolveSelectedEventClip() const;
     void applyGridToChildren();
+
+    // --- the horizontal scroll bar (QBX-216) --------------------------------
+    /** Re-derive the bar's range and value from the axis and the clip. */
+    void syncHScroll();
+    int  timeViewportWidth() const;
+    /** describe()'s scroll fields, appended after the view's own. */
+    QString describeHScroll() const;
+    QScrollBar *hScroll_ = nullptr;
 
     SEventTimeAxis  *axis_   = nullptr;
     SEventTimeRuler *ruler_  = nullptr;

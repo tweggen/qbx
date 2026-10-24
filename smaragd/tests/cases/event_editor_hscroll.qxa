@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-216. THE EVENT EDITOR SCROLLS HORIZONTALLY: a scroll bar over the shared
+  time axis, and an AUTO-SCROLL that follows a note or a marquee dragged past
+  an edge of the grid.
+
+  The fixture is a clip far longer than one screen: 32 bars at 120 BPM is
+  64 s, and the editor shows about 20 s at the arranger's default zoom. 120
+  BPM, PPQ 960, 48 kHz -> 25 frames per tick, so tick 96000 = frame 2400000
+  (50 s).
+
+  Every assertion is a platform-independent TRUTH rather than a pixel count:
+  a scroll bar's width differs by style, so the visible span differs by a
+  few pixels between platforms. The time windows below are wide enough to
+  absorb that (a pixel is about 1/30 s here) and far too narrow for a drag
+  that did NOT scroll - which lands about 13 s short of them. A window is
+  spelled at= plus tolerance=: in clip scope, startFrame/frameCount bound
+  only the collect() behind the note-off kinds and filter nothing for
+  kind="note" (the first draft used them, and passed a note 9 s outside).
+
+  The seams re-link the editor's axis to the arranger before every action;
+  linkEventEditorAxis() now re-seeds only for a NEW arranger, as the app
+  does, or each action would quietly undo the scroll the previous one made.
+-->
+<SActionScript version="1" name="event_editor_hscroll">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="122880" name="Long"/>
+    <add-note clip="0,0" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="96000" dur="480" key="62" velocity="100" channel="0"/>
+
+    <!-- ===== THE SCROLL BAR. It is there for a bound clip, starts at the
+         start, and the clip's end is off screen. -->
+    <scroll-event-editor-time clip="0,0" to="start"/>
+    <assert-event-editor clip="0,0" contains="|hBar=1|hSync=1|atStart=1|atEnd=0|clipStartVisible=1|clipEndVisible=0"/>
+
+    <!-- Its far end reaches the clip's end: the range covers the clip. -->
+    <scroll-event-editor-time clip="0,0" to="end"/>
+    <assert-event-editor clip="0,0" contains="|hBar=1|hSync=1|atStart=0|atEnd=1|clipStartVisible=0|clipEndVisible=1"/>
+
+    <!-- ...and back. -->
+    <scroll-event-editor-time clip="0,0" to="start"/>
+    <assert-event-editor clip="0,0" contains="|hSync=1|atStart=1|atEnd=0|clipStartVisible=1"/>
+
+    <!-- ===== AUTO-SCROLL, RIGHT: a note dragged past the right edge keeps
+         going while it is held there. 20 steps carry it about 13 s past
+         where the pointer is; without them it would land near 21 s. -->
+    <drag-note-past-edge clip="0,0" tick="0" key="60" edge="right" steps="20"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1" at="1680000" tolerance="240000"/>
+    <!-- The view went with it, and the bar followed the axis. -->
+    <assert-event-editor clip="0,0" contains="|hSync=1|atStart=0|atEnd=0|clipStartVisible=0"/>
+    <!-- One gesture, one undo step. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1" at="0"/>
+
+    <!-- ===== AUTO-SCROLL, LEFT, from the far end: the 50 s note dragged
+         past the left edge lands around 14 s; without the steps it would
+         stay near 44 s. -->
+    <scroll-event-editor-time clip="0,0" to="end"/>
+    <drag-note-past-edge clip="0,0" tick="96000" key="62" edge="left" steps="60"/>
+    <assert-midi-events clip="0,0" kind="note" key="62" count="1" at="720000" tolerance="720000"/>
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="62" count="1" at="2400000"/>
+
+    <!-- ===== AUTO-SCROLL, A MARQUEE: from empty grid at 2 s on key 62's
+         row, held past the right edge long enough to reach the 50 s note -
+         which was 30 s off screen when the press happened. The marquee's
+         anchor has to move WITH the content: the note at 3 s, just right of
+         the press, is inside the rectangle only if it does. An anchor left in
+         widget pixels would slide 30 s to the right with the scroll and
+         start the rectangle past it. -->
+    <add-note clip="0,0" tick="5760" dur="480" key="62" velocity="100" channel="0"/>
+    <scroll-event-editor-time clip="0,0" to="start"/>
+    <drag-note-past-edge clip="0,0" tick="3840" key="62" edge="right" steps="60"/>
+    <assert-event-editor clip="0,0" contains="|selection=2|"/>
+    <!-- ...and they are the two key-62 notes, not the one at 0. -->
+    <event-editor-key clip="0,0" key="delete"/>
+    <assert-midi-events clip="0,0" kind="note" key="62" count="0"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1" at="0"/>
+    <undo count="2"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+
+    <!-- ===== AUTO-SCROLL, TOP: pitch scrolls too. The editor opens with
+         key 84 at the top; five steps carry the rows five keys higher, so
+         the pointer 20 px above the grid is over key 93 - against key 87
+         without them. -->
+    <scroll-event-editor-time clip="0,0" to="start"/>
+    <assert-event-editor clip="0,0" contains="|topKey=84|"/>
+    <drag-note-past-edge clip="0,0" tick="0" key="60" edge="top" steps="5"/>
+    <assert-midi-events clip="0,0" kind="note" key="93" count="1" at="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

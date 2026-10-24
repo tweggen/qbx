@@ -1,5 +1,7 @@
 #include "app/eventui/seventeditordock.h"
 
+#include <algorithm>
+
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -9,6 +11,8 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -34,6 +38,10 @@ namespace {
 const char *const kGrids[] = {
     "1/1", "1/2", "1/4", "1/4t", "1/8", "1/8t", "1/16", "1/16t", "1/32", "1/32t"
 };
+
+// The keyboard column the ruler and the horizontal scroll bar are inset by,
+// so both line up with the note grid.
+constexpr int kViewInset = 40;
 
 // A short list of controllers worth a lane by default.
 struct CcEntry { int cc; const char *name; };
@@ -142,7 +150,7 @@ void SEventEditorDock::buildUi()
     // --- ruler ------------------------------------------------------------
     ruler_ = new SEventTimeRuler( this );
     ruler_->setTimeAxis( axis_ );
-    ruler_->setLeftInset( 40 );   // the piano roll's keyboard column
+    ruler_->setLeftInset( kViewInset );   // the piano roll's keyboard column
     outer->addWidget( ruler_ );
 
     // --- the view slot ----------------------------------------------------
@@ -155,6 +163,83 @@ void SEventEditorDock::buildUi()
     placeholder_->setEnabled( false );
     viewSlot_->addWidget( placeholder_ );
     outer->addWidget( slot, 1 );
+
+    // --- the horizontal scroll bar (QBX-216) ------------------------------
+    // Over the SHARED axis, so it moves the ruler, every band and (when the
+    // view is linked) is overridden by the arranger's next scroll exactly as
+    // a Shift+wheel pan is. Inset by the keyboard column so it lines up with
+    // the grid it scrolls.
+    QWidget *hRow = new QWidget( this );
+    QHBoxLayout *hLayout = new QHBoxLayout( hRow );
+    hLayout->setContentsMargins( kViewInset, 0, 0, 0 );
+    hLayout->setSpacing( 0 );
+    hScroll_ = new QScrollBar( Qt::Horizontal, hRow );
+    hLayout->addWidget( hScroll_ );
+    outer->addWidget( hRow );
+    connect( hScroll_, &QScrollBar::valueChanged, this,
+             [this]( int v ) { if( axis_ ) axis_->setLeftPixels( v ); } );
+    connect( axis_, &SEventTimeAxis::axisChanged,
+             this, &SEventEditorDock::syncHScroll );
+}
+
+int SEventEditorDock::timeViewportWidth() const
+{
+    if( view_ ) return std::max( 1, view_->timeRight() - view_->timeLeft() );
+    return std::max( 1, width() - kViewInset );
+}
+
+void SEventEditorDock::syncHScroll()
+{
+    if( !hScroll_ || !axis_ ) return;
+    offset_t cs = 0, ce = 0;
+    const bool bound = view_ && view_->clipFrames( &cs, &ce );
+    hScroll_->setVisible( bound );
+
+    // The range is in the axis's own ABSOLUTE pixels (leftPixels' unit). It
+    // covers the clip's end plus a quarter page of room, and never less than
+    // where the axis already is: a linked arranger may have scrolled further
+    // than the clip reaches, and a range that excluded it would make the bar
+    // jump - and push the axis back - the moment it is touched.
+    const int vp   = timeViewportWidth();
+    const int left = axis_->leftPixels();
+    const int endX = bound ? axis_->xOfFrame( ce ) + left + vp / 4 : 0;
+    const int maxV = std::max( { 0, endX - vp, left } );
+
+    const QSignalBlocker block( hScroll_ );   // a SYNC, not a gesture
+    hScroll_->setRange( 0, maxV );
+    hScroll_->setPageStep( vp );
+    hScroll_->setSingleStep( std::max( 1, vp / 10 ) );
+    hScroll_->setValue( left );
+}
+
+bool SEventEditorDock::tkScrollTime( const QString &to )
+{
+    if( !view_ || !hScroll_ ) return false;
+    // A never-shown dock has whatever size the layout last gave its view;
+    // give it a usable one so the page is somewhere real (tkDragNote's trick).
+    if( view_->width() < 640 || view_->height() < 360 )
+        view_->resize( std::max( view_->width(), 640 ),
+                       std::max( view_->height(), 360 ) );
+    syncHScroll();
+    if( hScroll_->isHidden() ) return false;   // nothing bound
+
+    // The REAL scroll bar, the same call a dragged handle makes, so its
+    // valueChanged connection is what moves the axis.
+    if(      to == QLatin1String( "start" ) ) hScroll_->setValue( hScroll_->minimum() );
+    else if( to == QLatin1String( "end" ) )   hScroll_->setValue( hScroll_->maximum() );
+    else {
+        bool ok = false;
+        const int v = to.toInt( &ok );
+        if( !ok ) return false;
+        hScroll_->setValue( v );
+    }
+    return true;
+}
+
+void SEventEditorDock::resizeEvent( QResizeEvent *event )
+{
+    QWidget::resizeEvent( event );
+    syncHScroll();
 }
 
 void SEventEditorDock::setKind( const QString &kind )
@@ -184,16 +269,40 @@ void SEventEditorDock::setKind( const QString &kind )
         const int idx = kindCombo_->findData( kind );
         if( idx >= 0 ) kindCombo_->setCurrentIndex( idx );
     }
+    syncHScroll();
 }
 
 QString SEventEditorDock::describe() const
 {
-    if( view_ ) return view_->describe();
+    if( view_ ) return view_->describe() + describeHScroll();
     // No registered kind at all: report the same shape a bound view would, so
     // a case can always match on `empty=`.
     return QStringLiteral( "kind=|notes=0|grid=%1|linked=%2|empty=1|selection=0" )
         .arg( gridCombo_ ? gridCombo_->currentText() : QStringLiteral( "1/16" ) )
         .arg( ( axis_ && axis_->linked() ) ? 1 : 0 );
+}
+
+QString SEventEditorDock::describeHScroll() const
+{
+    // APPENDED after the view's own fields (the order is the contract), and
+    // all of them platform-independent truths rather than pixel counts: a
+    // scroll bar's width differs by style, so a pixel would only hold on one.
+    if( !hScroll_ || !axis_ || !view_ ) return QString();
+    offset_t cs = 0, ce = 0;
+    const bool bound = view_->clipFrames( &cs, &ce );
+    const int vp = timeViewportWidth();
+    auto onScreen = [&]( offset_t f ) {
+        const int x = axis_->xOfFrame( f );
+        return bound && x >= 0 && x <= vp;
+    };
+    return QStringLiteral( "|hBar=%1|hSync=%2|atStart=%3|atEnd=%4"
+                           "|clipStartVisible=%5|clipEndVisible=%6" )
+        .arg( hScroll_->isHidden() ? 0 : 1 )
+        .arg( hScroll_->value() == axis_->leftPixels() ? 1 : 0 )
+        .arg( hScroll_->value() == hScroll_->minimum() ? 1 : 0 )
+        .arg( hScroll_->value() == hScroll_->maximum() ? 1 : 0 )
+        .arg( onScreen( cs ) ? 1 : 0 )
+        .arg( onScreen( ce ) ? 1 : 0 );
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +345,7 @@ void SEventEditorDock::bindClip( const QList<int> &clipPath )
     // the first PNG grab showed.
     if( placeholder_ ) placeholder_->setVisible( false );
     if( ruler_ ) ruler_->update();
+    syncHScroll();
 }
 
 void SEventEditorDock::refresh()
@@ -252,6 +362,7 @@ void SEventEditorDock::refresh()
     }
     if( placeholder_ ) placeholder_->setVisible( path.isEmpty() );
     if( ruler_ ) ruler_->update();
+    syncHScroll();
 
     updating_ = false;
 }

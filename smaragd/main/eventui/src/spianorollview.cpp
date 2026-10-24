@@ -12,6 +12,7 @@
 #include <QResizeEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include "app/eventui/seventtimeaxis.h"
@@ -109,6 +110,14 @@ SPianoRollView::SPianoRollView( QWidget *parent )
     // by scrolling rather than only by refresh()'s auto-centre-on-the-notes
     // (that still runs first and picks a sensible default, same as before).
     keyScroll_ = new QScrollBar( Qt::Vertical, this );
+
+    // Auto-scroll (QBX-216): while a drag sits past an edge of the grid, the
+    // visible area follows it. The timer is the real-time driver; every step
+    // is autoScrollStep(), which the test seam calls directly.
+    autoScroll_ = new QTimer( this );
+    autoScroll_->setInterval( 30 );
+    connect( autoScroll_, &QTimer::timeout, this,
+             [this]() { autoScrollStep(); } );
     connect( keyScroll_, &QScrollBar::valueChanged, this, [this]( int v ) {
         // Value 0 (the scrollbar's own top) shows the HIGHEST keys, so this
         // is an inversion rather than a direct assignment - see
@@ -131,6 +140,80 @@ SPianoRollView::~SPianoRollView() = default;
 // ---------------------------------------------------------------------------
 // Geometry
 // ---------------------------------------------------------------------------
+
+int SPianoRollView::timeRight() const
+{
+    // The vertical key scroll bar sits over the grid's right edge.
+    return width() - ( keyScroll_ ? keyScroll_->sizeHint().width() : 0 );
+}
+
+bool SPianoRollView::isAutoScrollDrag() const
+{
+    // The gestures that are ABOUT a position: a note or a marquee that should
+    // be able to reach what is not on screen yet. A velocity or CC drag is
+    // about a value, so it never scrolls.
+    return drag_.kind == DragKind::Move || drag_.kind == DragKind::Copy
+        || drag_.kind == DragKind::Resize || drag_.kind == DragKind::Marquee;
+}
+
+void SPianoRollView::updateAutoScroll()
+{
+    const bool outside = isAutoScrollDrag()
+        && ( drag_.cur.x() < timeLeft() || drag_.cur.x() >= timeRight()
+             || ( drag_.kind != DragKind::Resize
+                  && ( drag_.cur.y() < 0 || drag_.cur.y() >= gridHeight() ) ) );
+    if( outside ) { if( !autoScroll_->isActive() ) autoScroll_->start(); }
+    else          autoScroll_->stop();
+}
+
+bool SPianoRollView::autoScrollStep()
+{
+    if( !axis_ || !isAutoScrollDrag() ) return false;
+
+    // Faster the further past the edge the pointer is, within bounds that
+    // keep a slight overshoot controllable.
+    auto stepFor = []( int overshoot ) {
+        return std::max( 4, std::min( 80, overshoot / 2 ) );
+    };
+    bool moved = false;
+
+    int dx = 0;
+    if( drag_.cur.x() >= timeRight() )
+        dx = stepFor( drag_.cur.x() - timeRight() + 1 );
+    else if( drag_.cur.x() < timeLeft() )
+        dx = -stepFor( timeLeft() - drag_.cur.x() );
+    if( dx != 0 ) {
+        const int before = axis_->leftPixels();
+        axis_->setLeftPixels( before + dx );   // clamps at 0
+        const int applied = axis_->leftPixels() - before;
+        if( applied != 0 ) {
+            // The press point is in WIDGET pixels; the content under it moved
+            // left by `applied`, so it does too. Without this a marquee would
+            // stretch from the wrong place and a move would jump by the scroll.
+            drag_.press.rx() -= applied;
+            moved = true;
+        }
+    }
+
+    // Pitch, for every gesture except a resize (which only changes length).
+    if( drag_.kind != DragKind::Resize && keyScroll_ ) {
+        int dv = 0;   // scroll bar value 0 = the HIGHEST keys
+        if( drag_.cur.y() < 0 )                  dv = -1;
+        else if( drag_.cur.y() >= gridHeight() ) dv = 1;
+        if( dv != 0 ) {
+            const int beforeTop = topKey_;
+            keyScroll_->setValue( keyScroll_->value() + dv );
+            const int rows = topKey_ - beforeTop;
+            if( rows != 0 ) {
+                drag_.press.ry() += rows * keyHeight_;
+                moved = true;
+            }
+        }
+    }
+
+    if( moved ) update();
+    return moved;
+}
 
 int SPianoRollView::gridHeight() const
 {
@@ -553,12 +636,14 @@ void SPianoRollView::mouseMoveEvent( QMouseEvent *ev )
     else if( drag_.kind == DragKind::Cc && drag_.ccLane >= 0 )
         drag_.value = clampVel( 127.0 * ( ccTop( drag_.ccLane ) + CC_H
                                           - drag_.cur.y() ) / (double) CC_H );
+    updateAutoScroll();
     update();
     ev->accept();
 }
 
 void SPianoRollView::mouseReleaseEvent( QMouseEvent *ev )
 {
+    autoScroll_->stop();
     drag_.cur = ev->position().toPoint();
     if( drag_.kind == DragKind::Velocity )
         drag_.value = clampVel( 127.0 * ( velTop() + VEL_H - drag_.cur.y() )
@@ -659,6 +744,7 @@ std::vector<SEvent> SPianoRollView::previewNotes(
 
 void SPianoRollView::commitDrag()
 {
+    autoScroll_->stop();
     const DragKind kind = drag_.kind;
     if( kind == DragKind::None ) return;
 
@@ -1241,6 +1327,60 @@ bool SPianoRollView::tkDoubleClick( qint64 tick, int key )
     send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
     return true;
+}
+
+bool SPianoRollView::autoScrolling() const
+{
+    return autoScroll_ && autoScroll_->isActive();
+}
+
+bool SPianoRollView::tkDragPastEdge( qint64 tick, int key, const QString &edge,
+                                     int steps )
+{
+    const Resolved r = resolve();
+    if( !r.valid() || !axis_ || key < 0 || key > 127 ) return false;
+
+    // A never-shown widget has whatever size the layout last gave it; give it
+    // a usable one (tkDragNote's trick) so "the edge" is somewhere real.
+    if( width() < 640 || height() < 360 )
+        resize( std::max( width(), 640 ), std::max( height(), 360 ) );
+    layoutKeyScroll();
+
+    // The press: on the note's body when there is one at (tick, key), so it
+    // is a MOVE; otherwise on empty grid, so it is a MARQUEE.
+    int x = xOfTick( r, tick ) + KEYS_W + 1;
+    for( const SEvent &e : notesOf( r ) ) {
+        if( e.t != tick || e.key != key ) continue;
+        const int xs = xOfTick( r, e.t ) + KEYS_W;
+        const int xe = xOfTick( r, e.t + ( e.dur > 0 ? e.dur : 1 ) ) + KEYS_W;
+        x = std::min( xs + 1, ( xs + xe ) / 2 );   // clear of the end band
+        break;
+    }
+    const int y = yOfKey( key ) + keyHeight_ / 2;
+    if( x < timeLeft() || x >= timeRight() || y < 0 || y >= gridHeight() )
+        return false;   // the press has to be on screen, as a user's is
+
+    int ex = x, ey = y;
+    if(      edge == QLatin1String( "right" ) )  ex = timeRight() + 40;
+    else if( edge == QLatin1String( "left" ) )   ex = timeLeft() - 30;
+    else if( edge == QLatin1String( "top" ) )    ey = -20;
+    else if( edge == QLatin1String( "bottom" ) ) ey = gridHeight() + 20;
+    else return false;
+
+    auto send = [&]( QEvent::Type type, int px, int py, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        const QPointF local( px, py );
+        QMouseEvent ev( type, local, mapToGlobal( local ), button, buttons,
+                        Qt::NoModifier );
+        QApplication::sendEvent( this, &ev );
+    };
+    send( QEvent::MouseButtonPress, x, y, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseMove, ex, ey, Qt::NoButton, Qt::LeftButton );
+    const bool armed = autoScrolling();
+    if( armed )
+        for( int i = 0; i < steps; ++i ) autoScrollStep();
+    send( QEvent::MouseButtonRelease, ex, ey, Qt::LeftButton, Qt::NoButton );
+    return armed;
 }
 
 // The KIND REGISTRY entry (proposal 37 6.2). A static initializer, which is why

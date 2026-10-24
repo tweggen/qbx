@@ -141,6 +141,57 @@ private:
     int     key_  = 60;
 };
 
+/**
+ * `scroll-event-editor-time` - the event editor's REAL horizontal scroll bar
+ * (QBX-216). `to` is "start", "end" or a pixel value; the bar's own
+ * valueChanged is what moves the shared time axis. Assert the outcome with
+ * `assert-event-editor`'s `hSync=|atStart=|atEnd=|clipStartVisible=|
+ * clipEndVisible=` fields.
+ */
+class SScrollEventEditorTimeAction : public SAction
+{
+public:
+    SScrollEventEditorTimeAction() = default;
+
+    QString name() const override
+        { return QStringLiteral( "scroll-event-editor-time" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString clip_;
+    QString to_ = QStringLiteral( "start" );
+};
+
+/**
+ * `drag-note-past-edge` - AUTO-SCROLL (QBX-216). Presses at (`tick`, `key`) -
+ * on a note a MOVE, on empty grid a MARQUEE - moves past `edge` (right | left
+ * | top | bottom) with real events, runs `steps` auto-scroll steps and
+ * releases there. REJECTED unless the real move armed the auto-scroll timer,
+ * so the steps alone cannot pass a gesture that never scrolls.
+ */
+class SDragNotePastEdgeAction : public SAction
+{
+public:
+    SDragNotePastEdgeAction() = default;
+
+    QString name() const override
+        { return QStringLiteral( "drag-note-past-edge" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString clip_;
+    qint64  tick_ = 0;
+    int     key_  = 60;
+    QString edge_ = QStringLiteral( "right" );
+    int     steps_ = 10;
+};
+
 class SDragNoteAction : public SAction
 {
 public:

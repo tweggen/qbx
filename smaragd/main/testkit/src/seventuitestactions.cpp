@@ -229,6 +229,102 @@ bool SEventEditorDoubleClickAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// ------------------------------------------------- scroll-event-editor-time
+
+QStringList SScrollEventEditorTimeAction::knownAttributes() const
+{
+    return { "clip", "to" };
+}
+
+SApplyResult SScrollEventEditorTimeAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "scroll-event-editor-time: no main window";
+        return { false, nullptr };
+    }
+    if( !win->scrollEventEditorTime( clip_, to_ ) ) {
+        qWarning() << "scroll-event-editor-time: nothing to scroll for clip"
+                   << clip_ << "to" << to_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };   // view state only; nothing to undo
+}
+
+void SScrollEventEditorTimeAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "to", to_ );
+}
+
+bool SScrollEventEditorTimeAction::readXml( const QDomElement &elem, int )
+{
+    clip_ = elem.attribute( "clip" );
+    to_   = elem.attribute( "to", "start" );
+    bool isNumber = false;
+    to_.toInt( &isNumber );
+    if( !isNumber && to_ != QLatin1String( "start" )
+        && to_ != QLatin1String( "end" ) ) {
+        qWarning() << "scroll-event-editor-time: to must be start, end or a"
+                   << "pixel value, got" << to_;
+        return false;
+    }
+    return true;
+}
+
+// ------------------------------------------------------ drag-note-past-edge
+
+QStringList SDragNotePastEdgeAction::knownAttributes() const
+{
+    return { "clip", "tick", "key", "edge", "steps" };
+}
+
+SApplyResult SDragNotePastEdgeAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "drag-note-past-edge: no main window";
+        return { false, nullptr };
+    }
+    if( !win->dragNotePastEdge( clip_, tick_, key_, edge_, steps_ ) ) {
+        qWarning() << "drag-note-past-edge: the gesture at tick" << tick_
+                   << "key" << key_ << "did not arm auto-scroll past the"
+                   << edge_ << "edge (press off screen, or no clip)";
+        return { false, nullptr };
+    }
+    // Not undoable itself: the set-notes a move releases into is.
+    return { true, nullptr };
+}
+
+void SDragNotePastEdgeAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "tick", QString::number( tick_ ) );
+    elem.setAttribute( "key", key_ );
+    elem.setAttribute( "edge", edge_ );
+    elem.setAttribute( "steps", steps_ );
+}
+
+bool SDragNotePastEdgeAction::readXml( const QDomElement &elem, int )
+{
+    clip_  = elem.attribute( "clip" );
+    tick_  = elem.attribute( "tick", "0" ).toLongLong();
+    key_   = elem.attribute( "key", "60" ).toInt();
+    edge_  = elem.attribute( "edge", "right" );
+    steps_ = elem.attribute( "steps", "10" ).toInt();
+    static const QStringList kEdges = { "right", "left", "top", "bottom" };
+    if( !kEdges.contains( edge_ ) ) {
+        qWarning() << "drag-note-past-edge: unknown edge:" << edge_
+                   << "- expected one of" << kEdges.join( QLatin1Char( ',' ) );
+        return false;
+    }
+    if( key_ < 0 || key_ > 127 || steps_ < 0 ) {
+        qWarning() << "drag-note-past-edge: key must be 0-127 and steps >= 0";
+        return false;
+    }
+    return true;
+}
+
 SApplyResult SDragNoteAction::apply( SProject * )
 {
     SMainWindow *win = mainWindow();
@@ -510,6 +606,18 @@ static const bool s_reg_eventeditordoubleclick =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "event-editor-double-click" ),
           [] { return new SEventEditorDoubleClickAction; } ),
+      true );
+
+static const bool s_reg_scrolleventeditortime =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "scroll-event-editor-time" ),
+          [] { return new SScrollEventEditorTimeAction; } ),
+      true );
+
+static const bool s_reg_dragnotepastedge =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "drag-note-past-edge" ),
+          [] { return new SDragNotePastEdgeAction; } ),
       true );
 
 static const bool s_reg_scrolleventeditorkeys =

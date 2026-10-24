@@ -618,6 +618,16 @@ public:
     //                           mode any more).
     bool eventEditorDoubleClick( const QString &clipPath, qint64 tick,
                                  int key );
+    //   scrollEventEditorTime — drives the event editor's REAL horizontal
+    //                           scroll bar to "start", "end" or a pixel
+    //                           value (QBX-216).
+    //   dragNotePastEdge      — a press at (tick, key), a move PAST an edge
+    //                           of the grid and `steps` auto-scroll steps,
+    //                           then the release (QBX-216). False unless the
+    //                           real move armed the auto-scroll.
+    bool scrollEventEditorTime( const QString &clipPath, const QString &to );
+    bool dragNotePastEdge( const QString &clipPath, qint64 tick, int key,
+                           const QString &edge, int steps );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
     //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
     //   into a clip (proposal 21 L2): a note-on / note-off pair on the computer
@@ -1084,6 +1094,9 @@ private:
     // replaces them instead of stacking a second lambda on the same signal.
     QMetaObject::Connection axisZoomConn_;
     QMetaObject::Connection axisScrollConn_;
+    // The arranger view those two follow; linkEventEditorAxis() re-seeds only
+    // when it changes.
+    QPointer<SMVActualView> axisLinkedTo_;
     QDockWidget          *qDockVirtualKeys_ = nullptr;
     SVirtualKeyboardDock *virtualKeys_      = nullptr;
 

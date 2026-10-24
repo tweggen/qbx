@@ -98,6 +98,19 @@ SEventEditorView::Resolved SEventEditorView::resolve() const
     return r;
 }
 
+bool SEventEditorView::clipFrames( offset_t *start, offset_t *end ) const
+{
+    const Resolved r = resolve();
+    if( !r.valid() ) return false;
+    // The PLACEMENT's object, not the take: a take column's own extent is
+    // what the arranger draws, and the window shows that whole extent.
+    const offset_t s = r.link->hasStartTime() ? r.link->getStartTime() : 0;
+    const length_t d = r.link->getSObject().getDuration();
+    if( start ) *start = s;
+    if( end )   *end   = s + ( d > 0 ? (offset_t) d : 0 );
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Ticks <-> frames <-> pixels (rule 3)
 // ---------------------------------------------------------------------------
