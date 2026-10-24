@@ -226,3 +226,22 @@ has, and three of them change what should be built.
   for remains unobserved in the wild.
 - **No input path at all** — `asio_probe` is output-only; the input half is
   Phase 3.
+
+## An armed instrument through the live lane (QBX-214, manual)
+
+The live pump renders an ARMED track block-wise, and at ASIO's typical 256-frame
+block its lead is only 10.7 ms (playback inv. 16a). QBX-214 was that lead being
+shorter than the Windows scheduler tick: playback of a recorded instrument track
+"sounded garbage" while WAV tracks were clean. The headless measurement is
+playback_test QBX-214 T6; this is the check on a real driver.
+
+1. ASIO driver at **256 frames**, 48 kHz.
+2. An instrument track (e.g. NassauAnalogue) **armed, monitor = On**. With
+   monitor = Auto the track is live only while STOPPED or RECORDING — on plain
+   Play it gives way to the frozen lane and shows nothing either way — so with
+   Auto, listen during a record pass instead.
+3. Record a few notes, then play them back.
+4. Expect: clean playback, and in `%APPDATA%/Smaragd/smaragd.log` **no**
+   `[slot] instrument reposition to N (expected -1)` lines during steady
+   playback (one at Play is the start, and correct). Before the fix there were
+   about 60 a second, positions stepping by 768 or 1536 frames.

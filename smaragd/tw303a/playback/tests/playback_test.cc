@@ -19,6 +19,10 @@
 #include "tw/playback/twlivepump.h"
 #include "tw/playback/twlivering.h"
 #include "tw/devices/capture_backend.h"
+#include "tw/devices/midi_out_scheduler.h"
+#include "tw/devices/precise_waiter.h"
+#include "tw/plugins/twplugin.h"
+#include "tw/plugins/twpluginevents.h"
 #include "tw/events/tweventsource.h"
 #include "tw/mix/twmixer.h"
 #include "tw/mix/twrewire.h"
@@ -361,6 +365,68 @@ public:
     }
 private:
     float v_;
+};
+
+// QBX-214: a 0-in / 2-out generator that COUNTS what the pump costs it. Its
+// output is a constant per held note (the level is irrelevant here); what the
+// gates read are reset() calls and processed frames, which tell a catch-up
+// (the gap rendered, nothing reset) from a reposition (reset + chase +
+// pre-roll) without a CLAP fixture.
+class CountingGen : public audio::twPlugin {
+public:
+    CountingGen() { io_.audioInputs = 0; io_.audioOutputs = 2; }
+
+    const audio::twPluginIoLayout &ioLayout() const override { return io_; }
+    void prepare(std::uint32_t, std::uint32_t) override {}
+    void reset() override { notes_ = 0; resets_.fetch_add(1); }
+
+    void process(const float *const *in, float *const *out,
+                 std::uint32_t nframes) override
+    {
+        const audio::twEventList      none{};
+        audio::twEventOut             sink;
+        const audio::twProcessContext ctx{};
+        float *const *const    buses[1] = { out };
+        process(in, buses, nframes, none, sink, ctx);
+    }
+    void process(const float *const *, float *const *const *outBuses,
+                 std::uint32_t nframes, const audio::twEventList &events,
+                 audio::twEventOut &, const audio::twProcessContext &) override
+    {
+        frames_.fetch_add((std::int64_t)nframes);
+        for (std::uint32_t k = 0; k < events.count; ++k) {
+            if (events.events[k].kind == twEventKind::NoteOn)  ++notes_;
+            if (events.events[k].kind == twEventKind::NoteOff && notes_ > 0) --notes_;
+        }
+        float *const *out = outBuses ? outBuses[0] : nullptr;
+        if (out)
+            for (std::uint32_t c = 0; c < 2; ++c)
+                if (out[c]) std::fill(out[c], out[c] + nframes, notes_ > 0 ? 0.5f : 0.0f);
+    }
+
+    std::size_t       paramCount() const override { return 0; }
+    audio::twPluginParamInfo paramInfo(std::size_t) const override { return {}; }
+    double            getParam(std::uint32_t) const override { return 0.0; }
+    void              setParam(std::uint32_t, double) override {}
+    std::vector<std::uint8_t> saveState() const override { return {}; }
+    bool loadState(const std::vector<std::uint8_t> &) override { return true; }
+    audio::twPluginCapabilities capabilities() const override
+    {
+        audio::twPluginCapabilities c;
+        c.acceptsNotes = true;
+        c.isInstrument = true;
+        c.notePortsIn  = 1;
+        return c;
+    }
+
+    int          resets() const { return resets_.load(); }
+    std::int64_t frames() const { return frames_.load(); }
+
+private:
+    audio::twPluginIoLayout          io_{};
+    int                       notes_ = 0;
+    std::atomic<int>          resets_{ 0 };
+    std::atomic<std::int64_t> frames_{ 0 };
 };
 
 // One note, as a twEventSource. Enough to tell "this source reached the
@@ -2500,11 +2566,12 @@ int main()
         runBlocks(500);
 
         const std::uint64_t reposSteady = pump.repositions();
+        const std::uint64_t catchSteady = pump.catchUps();
         printf("     steady: %llu blocks, %llu summed frames, %llu silent, "
-               "maxPending=%u, repositions=%llu\n",
+               "maxPending=%u, repositions=%llu, catchUps=%llu\n",
                500ULL, (unsigned long long)summedFrames,
                (unsigned long long)silentFrames, (unsigned)maxPending,
-               (unsigned long long)reposSteady);
+               (unsigned long long)reposSteady, (unsigned long long)catchSteady);
 
         CHECK(bad == 0,
               "L1a T2: every frame the stream delivered is the RIGHT frame "
@@ -2520,6 +2587,14 @@ int main()
         // machine that is also running a test suite.
         CHECK(silentFrames * 20 < summedFrames,
               "L1a T2: starvation stays under 5% of frames on an idle box "
+              "(reported above; a loose bound on purpose)");
+        // QBX-214: a late wake-up is now a CATCH-UP, not a reposition, so the
+        // assertion above no longer sees one. This line keeps T2 able to: it is
+        // reported above and bounded as loosely as the starvation, because a
+        // 1 ms pretend RT on a loaded box is exactly what makes a pump late
+        // (QBX-204's symptom, which the catch-up masks rather than explains).
+        CHECK(catchSteady * 20 < 500ULL,
+              "L1a T2: the pump is late (a catch-up) in under 5% of blocks "
               "(reported above; a loose bound on purpose)");
 
         // ONE SEEK FORWARD, then ONE SEEK BACK. Each is exactly one reposition.
@@ -2567,6 +2642,192 @@ int main()
 
         pump.stop();
         CHECK(!pump.running(), "L1a T2: the pump thread joins");
+    }
+
+    // ==================================================================
+    // QBX-214 — the pump at an ASIO-sized block.
+    //
+    // T5 a SMALL fall-behind is a catch-up: the instrument is not reset;
+    // T6 the pump at BLOCK = 256 with the DEFAULT lead keeps up in real time.
+    //
+    // On ASIO the device block is 256 frames, so the plan's default lead is 2
+    // blocks = 10.7 ms. The pump's idle nap was a sleep_for(2 ms) that Windows
+    // stretches to its 15.6 ms tick, so every nap ended with the clock past the
+    // pump: a reposition per wake, and for an instrument a reset + chase +
+    // pre-roll per 256-frame block. T2 above runs BLOCK = 1024 with a 4-block
+    // lead and could not see it.
+    // ==================================================================
+
+    // --- T5: a small fall-behind is a catch-up (synchronous, deterministic)
+    {
+        printf("\n=== QBX-214 T5: a pump 768 frames late CATCHES UP ===\n");
+
+        const length_t BLOCK = 256;
+        CountingGen **slot = new CountingGen *(nullptr);
+        auto proc = std::make_shared<twPluginSlotProcessor>(
+            env,
+            [slot]() -> std::unique_ptr<twPlugin> {
+                CountingGen *g = new CountingGen();
+                *slot = g;
+                return std::unique_ptr<twPlugin>(g);
+            },
+            twPluginIoLayout{ 0, 2 });
+        proc->setChannelCount(2);
+        CountingGen *gen = *slot;
+        delete slot;
+        // A note held over the whole test, so a reposition has to pre-roll and
+        // its cost shows in the frame count.
+        proc->setEventSource(std::make_shared<OneNoteSource>(0, 100000000, 60, 1));
+        proc->setLiveOwned(true);
+
+        auto plan = std::make_shared<twLivePlan>();
+        plan->blockFrames = BLOCK;
+        plan->sampleRate  = (int)env.getSRate();
+        plan->outputTrack = 0;
+        plan->transport.playing = true;
+        {
+            twLiveTrackPlan t;
+            t.name     = "inst";
+            t.channels = 2;
+            t.inserts.push_back(proc);
+            plan->tracks.push_back(std::move(t));
+        }
+        CHECK(plan->finalize(), "QBX-214 T5: the plan finalizes");
+
+        twLiveMixRing ring;
+        ring.reset(2, (std::uint32_t)BLOCK, plan->requiredRingDepth());
+        twEngineClock clock;
+        LiveGraphPump pump(ring, clock);
+        pump.setPlan(plan);
+
+        // The pump has to BE the pump: a live-owned processor answers silence to
+        // any other thread, and the marker is sticky, so this is a thread of
+        // its own (see the L1a AC2 note above).
+        std::thread th([&] {
+            auto drain = [&] { twLiveRingEntry e; while (ring.peek(e)) ring.pop(); };
+            const std::int64_t base = 480000;    // 10 s in: a real pre-roll is 4 s
+            clock.stamp(base - BLOCK, base, 0);
+            while (pump.renderOneBlock()) {}     // the first reposition + the lead
+            drain();
+            pump.resetStats();
+
+            const int          resets0 = gen ? gen->resets() : -1;
+            const std::int64_t frames0 = gen ? gen->frames() : -1;
+            // Late by three blocks: the shape of one Windows tick at 256 frames.
+            const std::int64_t late = pump.lastPosition() + BLOCK + 3 * BLOCK;
+            clock.stamp(late - BLOCK, late, 0);
+            pump.renderOneBlock();
+            drain();
+
+            CHECK(gen && gen->resets() == resets0,
+                  "QBX-214 T5: a pump 768 frames late does NOT reset the instrument");
+            CHECK(pump.repositions() == 0 && pump.catchUps() == 1,
+                  "QBX-214 T5: ...it is counted as ONE catch-up, not a reposition");
+            CHECK(gen && gen->frames() - frames0 == 3 * BLOCK + BLOCK,
+                  "QBX-214 T5: ...the instrument rendered the gap and the block, "
+                  "and no pre-roll");
+            CHECK(pump.lastPosition() == late,
+                  "QBX-214 T5: ...and the block it rendered is where the clock is");
+
+            // A SEEK is still a reposition, and still resets.
+            pump.resetStats();
+            const std::int64_t seek = late + 2000000;
+            clock.stamp(seek - BLOCK, seek, 0);
+            pump.renderOneBlock();
+            drain();
+            CHECK(pump.repositions() == 1,
+                  "QBX-214 T5: a jump of 2,000,000 frames is exactly one reposition");
+            CHECK(gen && gen->resets() == resets0 + 1,
+                  "QBX-214 T5: ...and that one DOES reset the instrument");
+        });
+        th.join();
+    }
+
+    // --- T6: BLOCK = 256 with the default lead, threaded, in real time -----
+    {
+        printf("\n=== QBX-214 T6: the pump keeps up at an ASIO block of 256 ===\n");
+
+        const length_t BLOCK = 256;
+        auto plan = std::make_shared<twLivePlan>();
+        plan->blockFrames = BLOCK;
+        plan->sampleRate  = (int)env.getSRate();
+        plan->outputTrack = 0;                   // leadFrames left at the DEFAULT
+        plan->transport.playing = true;
+        {
+            twLiveTrackPlan t;
+            t.name     = "ramp";
+            t.channels = 1;
+            t.input    = std::make_shared<RampInput>();
+            plan->tracks.push_back(std::move(t));
+        }
+        CHECK(plan->finalize(), "QBX-214 T6: the plan finalizes");
+        CHECK(plan->leadFrames == 2 * BLOCK,
+              "QBX-214 T6: the default lead is two blocks (10.7 ms at 48 kHz)");
+
+        twLiveMixRing   ring;
+        twLiveMixReader reader;
+        twLiveMixState  fade;
+        ring.reset(1, (std::uint32_t)BLOCK, plan->requiredRingDepth());
+        twEngineClock clock;
+        LiveGraphPump pump(ring, clock);
+        pump.setPlan(plan);
+        pump.start();
+
+        // The pretend RT on an ABSOLUTE schedule (block k due at t0 + k * 256 /
+        // 48000 s) through the same high-resolution waiter the pump now uses,
+        // so the test's own clock cannot oversleep into running slow, which
+        // would hide exactly the lateness this measures.
+        audio::PreciseWaiter rt;
+        rt.open();
+        std::vector<float> out((std::size_t)BLOCK, 0.0f);
+        float *outs[1] = { out.data() };
+        twLiveMixGate g; g.haveRoot = true;
+        std::int64_t want = 0;
+        const std::int64_t blockNs = (std::int64_t)BLOCK * 1000000000LL / env.getSRate();
+        std::int64_t due = audio::MidiOutScheduler::hostNowNs();
+        std::size_t silent = 0, delivered = 0;
+
+        auto runBlocks = [&](int count) {
+            for (int i = 0; i < count; ++i) {
+                due += blockNs;
+                rt.waitUntil(due);
+                clock.stamp(want - (std::int64_t)BLOCK, want, 0);
+                std::fill(out.begin(), out.end(), 0.0f);
+                g.wantPos = want;
+                twLiveStreamStats st;
+                twlive::mixStream(outs, 1, (std::size_t)BLOCK, want, g, ring, reader, fade, st);
+                for (std::size_t k = 0; k < (std::size_t)BLOCK; ++k) {
+                    if (out[k] == 0.0f) ++silent;
+                    else                ++delivered;
+                }
+                want += BLOCK;
+            }
+        };
+
+        runBlocks(40);                            // warm up
+        pump.resetStats();
+        silent = delivered = 0;
+        const int STEADY = 375;                   // 2 s
+        runBlocks(STEADY);
+        const std::uint64_t late = pump.repositions() + pump.catchUps();
+        printf("     steady: %d blocks, repositions=%llu, catchUps=%llu, "
+               "silent=%zu delivered=%zu\n",
+               STEADY, (unsigned long long)pump.repositions(),
+               (unsigned long long)pump.catchUps(), silent, delivered);
+        pump.stop();
+        rt.close();
+
+        // REPORTED everywhere, ASSERTED on Windows only: the bound is loose (the
+        // test thread is not on MMCSS and can itself oversleep a tick), and on
+        // Linux/macOS a 2 ms sleep was always accurate, so the unfixed pump
+        // passes there too. This gate demonstrates the Windows failure.
+#if defined(_WIN32)
+        CHECK(late * 10 <= (std::uint64_t)STEADY,
+              "QBX-214 T6: at BLOCK = 256 and the default lead the pump falls "
+              "behind in at most 10% of blocks (unfixed: about one in three)");
+#else
+        printf("     (QBX-214 T6's bound is asserted on Windows only)\n");
+#endif
     }
 
     // --- T3: end to end, through the REAL render callback --------------

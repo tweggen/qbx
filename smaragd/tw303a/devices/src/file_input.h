@@ -4,7 +4,7 @@
 #include "tw/devices/audio_input.h"
 #include "tw/devices/audio_ring.h"
 
-#include "precise_waiter.h"
+#include "tw/devices/precise_waiter.h"
 
 #include <atomic>
 #include <string>

@@ -1,6 +1,7 @@
 #include "tw/playback/twlivepump.h"
 
 #include "tw/core/twlog.h"
+#include "tw/devices/midi_out_scheduler.h"
 #include "tw/graph/tw_freeze_context.h"
 #include "tw/graph/twcomponent.h"
 #include "tw/pages/tw_output_page.h"
@@ -15,13 +16,21 @@
 #endif
 
 namespace {
-// The idle wait between "the ring is full" and the next attempt. The RT's DRAIN
-// is the pacer — the pump renders whenever there is room and sleeps otherwise —
-// so this is a granularity, not a schedule: a ring 4 blocks deep at 1024 frames
-// is ~85 ms of slack at 48 kHz, and Windows' 15.6 ms scheduler tick fits inside
-// it with room to spare. (Proposal 21 L0's PreciseWaiter is the sub-millisecond
-// answer for a thread that must hit a DEADLINE; this one only has to not spin.)
-constexpr int kIdleWaitMs = 2;
+// The idle wait between "nothing to do" (the ring is full, or the pace says the
+// pump is a whole lead ahead) and the next attempt. The RT's DRAIN is the pacer,
+// so this is a granularity rather than a schedule — but the granularity must be
+// well inside `leadFrames - blockFrames`, or the pump wakes up BEHIND the clock.
+//
+// QBX-214. This used to be sleep_for(2 ms), budgeted for a 1024-frame block
+// ("a ring 4 blocks deep … is ~85 ms of slack"). ASIO runs at 256 frames, where
+// the plan's default lead is 2 blocks = 10.7 ms, and Windows returns a 2 ms
+// sleep after its 15.6 ms tick (devices inv. 13 measured the same rounding for a
+// condition_variable). Every nap therefore ended with the clock past the pump:
+// one reposition per wake-up, and for an instrument a reset + chase + pre-roll
+// per block — heard as "parts of the buffer intermixed". The PreciseWaiter's
+// high-resolution timer waits what it is asked to; 1 ms rather than a deadline
+// because a STOPPED pump has no clock to derive a deadline from.
+constexpr std::int64_t kIdleWaitNs = 1000000;
 }  // namespace
 
 LiveGraphPump::LiveGraphPump( twLiveMixRing &ring, const twEngineClock &clock )
@@ -53,6 +62,7 @@ void LiveGraphPump::resetStats()
 {
     blocks_.store( 0, std::memory_order_relaxed );
     repositions_.store( 0, std::memory_order_relaxed );
+    catchUps_.store( 0, std::memory_order_relaxed );
     frozenMisses_.store( 0, std::memory_order_relaxed );
     shortfalls_.store( 0, std::memory_order_relaxed );
     ringFull_.store( 0, std::memory_order_relaxed );
@@ -64,16 +74,21 @@ void LiveGraphPump::start()
 {
     if( running_.load( std::memory_order_acquire ) ) return;
     stopFlag_.store( false, std::memory_order_relaxed );
+    waiter_.open();
     running_.store( true, std::memory_order_release );
     thread_ = std::thread( [this] { loop(); } );
 }
 
+// A pump that was never started returns at once; its waiter's handles (if any)
+// are closed by ~PreciseWaiter.
 void LiveGraphPump::stop()
 {
     if( !running_.load( std::memory_order_acquire ) && !thread_.joinable() ) return;
     stopFlag_.store( true, std::memory_order_release );
+    waiter_.wake();
     if( thread_.joinable() ) thread_.join();
     running_.store( false, std::memory_order_release );
+    waiter_.close();
 }
 
 void LiveGraphPump::loop()
@@ -101,7 +116,7 @@ void LiveGraphPump::loop()
         }
         if( stopFlag_.load( std::memory_order_acquire ) ) break;
         (void)produced;
-        std::this_thread::sleep_for( std::chrono::milliseconds( kIdleWaitMs ) );
+        waiter_.waitUntil( audio::MidiOutScheduler::hostNowNs() + kIdleWaitNs );
     }
 
 #if defined( _WIN32 )
@@ -215,6 +230,7 @@ bool LiveGraphPump::renderOneBlock()
     const bool forced = repositionReq_.load( std::memory_order_acquire );
 
     bool     reposition = forced || !havePos_ || ( havePos_ && playing != wasPlaying_ );
+    bool     catchUp    = false;
     offset_t want       = havePos_ ? nextPos_ : plan->stoppedAnchor;
 
     if( playing ) {
@@ -229,8 +245,23 @@ bool LiveGraphPump::renderOneBlock()
                 want = nf;
             } else if( nextPos_ < nf ) {
                 // FELL BEHIND, or a seek forward past everything we covered.
-                reposition = true;
-                want       = nf;
+                //
+                // A LITTLE behind is a CATCH-UP (QBX-214): the same timeline,
+                // reached late. Nothing is forgotten — a live-owned instrument
+                // renders the skipped frames with the output discarded and keeps
+                // every voice, an effect carries on — so lateness costs what it
+                // costs any host after an xrun: the frames that were missed. A
+                // reposition here used to cost an instrument reset + chase +
+                // pre-roll, which is dearer than the block it was late for and
+                // so invited the next late wake-up. Beyond the bound (a real
+                // seek) re-rendering the gap would cost more than that, so it
+                // stays a reposition.
+                if( !reposition &&
+                    nf - nextPos_ <= (offset_t)audio::twPluginSlotProcessor::kLiveCatchUpMaxFrames )
+                    catchUp = true;
+                else
+                    reposition = true;
+                want = nf;
             } else if( nextPos_ > nf + lead + (offset_t)block ) {
                 // THE CLOCK MOVED BACK: a seek back or a loop wrap. What we
                 // have rendered describes a future that no longer exists.
@@ -270,6 +301,13 @@ bool LiveGraphPump::renderOneBlock()
     // inside applyReposition() is what tells the consumer to throw it away and
     // let the producer back in.
     if( reposition ) applyReposition( *plan, want );
+    else if( catchUp ) {
+        // No new RUN: everything still queued is behind `want`, and the
+        // consumer drops wholly-behind entries itself (twlivering.cc). No
+        // forgetContinuity(): the processors' own catch-up rule sees the jump.
+        nextPos_ = want;
+        catchUps_.fetch_add( 1, std::memory_order_relaxed );
+    }
 
     float *dest = ring_.beginWrite();
     if( !dest ) {

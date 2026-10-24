@@ -560,7 +560,7 @@ tw_module(devices
         devices/src/file_input.cc
         devices/src/file_input.h
         devices/src/precise_waiter.cc
-        devices/src/precise_waiter.h
+        devices/include/tw/devices/precise_waiter.h
         devices/src/null_input.cc
         devices/src/null_input.h
         devices/src/midi_factory.cc

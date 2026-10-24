@@ -938,6 +938,36 @@ Known debt:
     owner is one reposition by construction. Handing ownership back also drops
     the live event source and resets the transport.
 
+45a. **A LIVE-OWNED SLOT A LITTLE LATE CATCHES UP; IT DOES NOT REPOSITION**
+    (QBX-214). While `liveOwned_`, a block that starts `0 < startPos - lastEnd_
+    <= kLiveCatchUpMaxFrames` (= `kMinPreRollFrames`, 4096) after the last one
+    ended was not MOVED — the pump was late (playback inv. 17). Then:
+      * a GENERATOR renders the gap `[lastEnd_, startPos)` through
+        `runGenerator_nolock( nullptr, nullptr, … )` — output discarded, the
+        feed's events at their real offsets (collected only when
+        `liveTx_.feedEnabled`), no chase injected — and then the block. That is
+        exactly the DSP state a continuous run reaches, so no voice is reset, no
+        note-off inside the gap is lost and nothing is re-attacked, which is why
+        no `requestChase()` is needed. The LIVE source is not collected for the
+        gap: it drains a ring, and what arrived since the last block belongs to
+        the block's own collect, at offset 0 as always;
+      * an EFFECT carries on without `resetInstances_nolock()` — what it did
+        before this rule existed, when the pump forgot continuity on every late
+        wake-up and the reset branch was never reached.
+    A CHAIN is not a continuous run over the gap, only the generator is: an
+    effect after an instrument is not run over the gap (its input for it — the
+    generator's discarded output — never exists), so it sees a dropout, as any
+    host's effect does across an xrun.
+    Beyond the bound the gap would cost more than reset + chase + the minimum
+    pre-roll, so it is a reposition. NOT live-owned, nothing changes: a frozen
+    page stays a pure function of its position (invariant 40) and every golden
+    is byte-identical. Why it exists: with the pump late on EVERY wake-up (the
+    Windows oversleep of playback inv. 16a), each 256-frame block of an armed
+    VST3 instrument cost a deactivate/activate cycle on the live thread plus a
+    ≥ 4096-frame pre-roll, which is dearer than the block and so made the next
+    wake-up late too. Gated in plugins_test (`testLiveCatchUp`, on a thread of
+    its own because `markLiveThread()` is sticky) and playback_test QBX-214 T5.
+
 46. **THE PROCESSOR HOLDS TWO EVENT SOURCES.** `events_` is THE FEED
     (`setEventSource`, owned by `STrack::syncInstrumentSlot()`, also read by
     `SMidiOutPump` and `assert-midi-events`); `liveEvents_` is the LIVE source

@@ -1486,8 +1486,8 @@ QString SLiveMonitor::describe() const
                  .arg( bridge_->inputChannels() )
                  .arg( bridge_->inputLatencyFrames() );
     if( pump_ )
-        s += QStringLiteral( " blocks=%1 repositions=%2 misses=%3 shortfalls=%4" )
-                 .arg( pump_->blocks() ).arg( pump_->repositions() )
+        s += QStringLiteral( " blocks=%1 repositions=%2 catchUps=%3 misses=%4 shortfalls=%5" )
+                 .arg( pump_->blocks() ).arg( pump_->repositions() ).arg( pump_->catchUps() )
                  .arg( pump_->frozenInputMisses() ).arg( pump_->inputShortfalls() );
     if( !midiLive_.empty() ) {
         s += QStringLiteral( " midi=%1" ).arg( midiLive_.size() );

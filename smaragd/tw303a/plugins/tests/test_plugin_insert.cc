@@ -3,6 +3,7 @@
 #include "tw/events/tweventsource.h"
 #include "tw/events/twtempomap.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/graph/tw_freeze_context.h"
 #include "tw/pages/io_vector.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include <algorithm>
@@ -1545,6 +1546,12 @@ public:
         ++calls_;
         lastCtx_ = ctx;
         eventsSeen_ += events.count;
+        framesProcessed_ += nframes;
+        // QBX-214: WHERE each note-off landed, in project frames, so a test can
+        // tell "delivered at its real offset" from "folded to a block start".
+        for( std::uint32_t k = 0; k < events.count; ++k )
+            if( events.events[k].kind == twEventKind::NoteOff )
+                noteOffAt_.push_back( ctx.position + events.events[k].time );
         std::uint32_t ev = 0;
         float *const *out = ( outBuses ? outBuses[0] : nullptr );
         for( std::uint32_t i = 0; i < nframes; ++i ) {
@@ -1592,10 +1599,14 @@ public:
     int  calls() const { return calls_; }
     int  resets() const { return resets_; }
     std::uint32_t eventsSeen() const { return eventsSeen_; }
+    std::int64_t  framesProcessed() const { return framesProcessed_; }
+    const std::vector<std::int64_t> &noteOffAt() const { return noteOffAt_; }
     const twProcessContext &lastCtx() const { return lastCtx_; }
 
 private:
     twPluginIoLayout io_{};
+    std::int64_t     framesProcessed_ = 0;
+    std::vector<std::int64_t> noteOffAt_;
     std::uint32_t    rate_ = 48000, maxBlock_ = 4096, tail_ = 0;
     double           level_ = 0.0, lastOnVelocity_ = 0.0;
     int              notes_ = 0, calls_ = 0, resets_ = 0;
@@ -1891,6 +1902,143 @@ static int testGeneratorSlot()
     return gFailures;
 }
 
+// ===========================================================================
+// QBX-214: a LIVE-OWNED slot that is a little late CATCHES UP, it does not
+// reposition.
+//
+// The live pump renders an armed track block-wise. When it is late by a few
+// blocks it used to forget continuity, and an instrument then paid reset +
+// chase + pre-roll (a VST3 deactivate/activate cycle, on the live thread) for
+// every 256-frame block — heard as garbage on ASIO, where every pump nap was
+// late. The slot's half of the fix: a live-owned generator renders the gap with
+// its output discarded, which is exactly the state a continuous run would have,
+// and a live-owned effect simply carries on. The frozen path is unchanged.
+//
+// The live-owned half runs on a THREAD OF ITS OWN: markLiveThread() is sticky
+// and also sets the render policy to Never, so marking this test's main thread
+// would turn every later freezePage in this binary into silence.
+// ===========================================================================
+static int testLiveCatchUp()
+{
+    std::cout << "=== QBX-214 live-owned slot: catch-up, not reposition ===" << std::endl;
+
+    tw303aEnvironment env;
+    env.setSRate( 48000 );
+    const int rate = env.getSRate();
+    const length_t gap = twPluginSlotProcessor::kLiveCatchUpMaxFrames;
+
+    // One note over [100, 600) - its note-off falls INSIDE the catch-up gap -
+    // and one from 900 that is sounding when the late block arrives.
+    auto addNotes = []( MockEventSource &f ) {
+        f.add( 100, 500, 60, 127.0 );
+        f.add( 900, 1100, 62, 127.0 );
+    };
+
+    std::thread live( [&] {
+        twRtThreadGuard::markLiveThread();
+
+        // --- a generator, late by three 256-frame blocks -------------------
+        GenRig r = buildGenRig( env, 2, 2 );
+        addNotes( *r.feed );
+        r.proc->setLiveOwned( true );
+        renderGen( *r.proc, 2, 0, 256, 0.0f, rate );
+        const int          resets0 = r.gen->resets();
+        const std::int64_t frames0 = r.gen->framesProcessed();
+        auto late = renderGen( *r.proc, 2, 1024, 256, 0.0f, rate );
+
+        check( r.gen->resets() == resets0,
+               "QBX-214: a live-owned generator that is 768 frames late is NOT reset" );
+        check( r.gen->framesProcessed() - frames0 == 768 + 256,
+               "...it renders the gap (768) and the block (256) and nothing else: "
+               "no chase, no pre-roll" );
+        check( std::find( r.gen->noteOffAt().begin(), r.gen->noteOffAt().end(),
+                          (std::int64_t)600 ) != r.gen->noteOffAt().end(),
+               "...and the note-off inside the gap reached the plugin at its REAL "
+               "position (600)" );
+
+        // The catch-up IS a continuous run, so the late block equals the same
+        // frames of an uninterrupted [0, 1280) render.
+        GenRig c = buildGenRig( env, 2, 2 );
+        addNotes( *c.feed );
+        c.proc->setLiveOwned( true );
+        auto whole = renderGen( *c.proc, 2, 0, 1280, 0.0f, rate );
+        bool same = true;
+        for( int ch = 0; ch < 2; ++ch )
+            for( std::size_t i = 0; i < 256; ++i )
+                if( late[(std::size_t)ch][i] != whole[(std::size_t)ch][1024 + i] )
+                    same = false;
+        check( same && late[0][0] != 0.0f,
+               "...and the late block is byte-identical to a continuous render "
+               "(the note from 900 is sounding)" );
+
+        // --- beyond the bound it is a reposition again ---------------------
+        GenRig far = buildGenRig( env, 2, 2 );
+        addNotes( *far.feed );
+        far.proc->setLiveOwned( true );
+        renderGen( *far.proc, 2, 0, 256, 0.0f, rate );
+        const int farResets = far.gen->resets();
+        renderGen( *far.proc, 2, 256 + gap + 1, 256, 0.0f, rate );
+        check( far.gen->resets() == farResets + 1,
+               "QBX-214: a live-owned generator late by MORE than "
+               "kLiveCatchUpMaxFrames repositions (reset + chase + pre-roll)" );
+
+        // --- an effect, late the same way, carries on ----------------------
+        MockPlugin **slot = new MockPlugin *( nullptr );
+        auto fx = std::make_shared<twPluginSlotProcessor>(
+            env,
+            [slot]() -> std::unique_ptr<twPlugin> {
+                MockPlugin *m = new MockPlugin( 2, 2 );
+                *slot = m;
+                return std::unique_ptr<twPlugin>( m );
+            },
+            twPluginIoLayout{ 2, 2 } );
+        fx->setChannelCount( 2 );
+        MockPlugin *fxPlug = *slot;
+        delete slot;
+        fx->setLiveOwned( true );
+        renderGen( *fx, 2, 0, 256, 0.5f, rate );
+        const int fxResets = fxPlug ? fxPlug->resets_ : -1;
+        renderGen( *fx, 2, 1024, 256, 0.5f, rate );
+        check( fxPlug && fxPlug->resets_ == fxResets,
+               "QBX-214: a live-owned EFFECT that is 768 frames late is not reset "
+               "(what it did before, when the pump forgot continuity)" );
+    } );
+    live.join();
+
+    // --- the FROZEN path is unchanged: the same jump is a reposition --------
+    {
+        GenRig r = buildGenRig( env, 2, 2 );
+        addNotes( *r.feed );
+        renderGen( *r.proc, 2, 0, 256, 0.0f, rate );
+        const int before = r.gen->resets();
+        renderGen( *r.proc, 2, 1024, 256, 0.0f, rate );
+        check( r.gen->resets() == before + 1,
+               "QBX-214: NOT live-owned, the same 768-frame jump still repositions "
+               "(plugins inv. 40: a frozen page is a pure function of its position)" );
+    }
+    {
+        MockPlugin **slot = new MockPlugin *( nullptr );
+        auto fx = std::make_shared<twPluginSlotProcessor>(
+            env,
+            [slot]() -> std::unique_ptr<twPlugin> {
+                MockPlugin *m = new MockPlugin( 2, 2 );
+                *slot = m;
+                return std::unique_ptr<twPlugin>( m );
+            },
+            twPluginIoLayout{ 2, 2 } );
+        fx->setChannelCount( 2 );
+        MockPlugin *fxPlug = *slot;
+        delete slot;
+        renderGen( *fx, 2, 0, 256, 0.5f, rate );
+        const int before = fxPlug ? fxPlug->resets_ : -1;
+        renderGen( *fx, 2, 1024, 256, 0.5f, rate );
+        check( fxPlug && fxPlug->resets_ == before + 1,
+               "...and a frozen effect still resets on a non-sequential page" );
+    }
+
+    return gFailures;
+}
+
 static int testEventAbi()
 {
     using namespace ev36;
@@ -2178,6 +2326,7 @@ int testPluginInsert()
     testConcurrentSlotFreeze();
     testEventAbi();
     testGeneratorSlot();
+    testLiveCatchUp();
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
     testClapEditor();
