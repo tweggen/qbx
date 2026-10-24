@@ -1,6 +1,7 @@
-// Gate for SPluginNativeEditor's two pure geometry statics — clampOntoAScreen()
-// (proposal 33 D2) and the plugin-units <-> Qt-units conversion pair
-// hostSizeFor()/nativeSizeFor() (the Retina half-size fix, 2026-09-21).
+// Gate for SPluginNativeEditor's pure geometry statics — clampOntoAScreen()
+// (proposal 33 D2), the plugin-units <-> Qt-units conversion pair
+// hostSizeFor()/nativeSizeFor() (the Retina half-size fix, 2026-09-21), and
+// the two reopen rules restoredGeometry()/sizeWithoutAnAnswer() (QBX-219).
 //
 // The failure this prevents is the classic multi-monitor one: a plugin editor
 // restored at the position it had on a second screen that has since been
@@ -225,6 +226,70 @@ int main( int argc, char **argv )
         check( !SPluginNativeEditor::isSendableScale(
                    -std::numeric_limits<qreal>::infinity() ),
                "negative infinity is not a scale" );
+    }
+
+    // ---------------------------------------------------------------------
+    // restoredGeometry(): the CLIENT rectangle a reopened window is given
+    // (QBX-219).
+    //
+    // WHAT THIS PREVENTS: a fixed-size editor walking down the screen one title
+    // bar per reopen. saveGeometryToSettings() stores geometry(), the client
+    // rectangle; the restore used move(), which places the FRAME, so every
+    // reopen came back 31 px lower and every close saved the lower spot. The
+    // drift itself needs a mapped window to exist at all -- a window the suite
+    // never maps has no frame -- so what is gated here is the rule, and that
+    // the result goes through setGeometry() is restoreGeometryFromSettings()'s
+    // one line. What the rule must say: the stored POSITION, untouched, for a
+    // window that is already on screen; the stored size only if the plugin can
+    // be resized.
+    std::cout << "=== restoredGeometry ===\n";
+    {
+        const QRect stored( avail.x() + 50, avail.y() + 70, 300, 200 );
+        const QSize pluginSize( 240, 160 );
+
+        const QRect fixed =
+            SPluginNativeEditor::restoredGeometry( stored, false, pluginSize );
+        check( fixed.topLeft() == stored.topLeft(),
+               "fixed-size: the stored client position is kept exactly: " + show( fixed ) );
+        check( fixed.size() == pluginSize,
+               "...at the size the plugin asked for, not the stored one" );
+
+        const QRect resizable =
+            SPluginNativeEditor::restoredGeometry( stored, true, pluginSize );
+        check( resizable == stored,
+               "resizable: the stored client rectangle is kept whole: " + show( resizable ) );
+
+        // The clamp sees the size the window will really have. A fixed-size
+        // window stored near the right edge at a SMALL size, now asked for at
+        // a bigger one, must be pulled back far enough for the bigger one.
+        const QRect nearEdge( avail.right() - 120, avail.y() + 20, 100, 100 );
+        const QRect pulled =
+            SPluginNativeEditor::restoredGeometry( nearEdge, false, QSize( 300, 200 ) );
+        check( avail.contains( pulled ) && pulled.size() == QSize( 300, 200 ),
+               "fixed-size near the edge: clamped at its REAL size: " + show( pulled ) );
+
+        check( !SPluginNativeEditor::restoredGeometry( QRect(), false, pluginSize ).isValid(),
+               "nothing stored: nothing restored" );
+    }
+
+    // ---------------------------------------------------------------------
+    // sizeWithoutAnAnswer(): what a window gets when its plugin reports an
+    // invalid size on the window's first sizing (QBX-219). Every iPlug2 plugin
+    // on the dev box answers 0x0 from its second attach on; the window used to
+    // be shown at exactly that.
+    std::cout << "=== sizeWithoutAnAnswer ===\n";
+    {
+        const QSize lastGood( 944, 714 ), stored( 800, 600 );
+        check( SPluginNativeEditor::sizeWithoutAnAnswer( lastGood, stored ) == lastGood,
+               "the plugin's own last good size comes first" );
+        check( SPluginNativeEditor::sizeWithoutAnAnswer( QSize(), stored ) == stored,
+               "...then the remembered window size" );
+        check( SPluginNativeEditor::sizeWithoutAnAnswer( QSize( 0, 0 ), QSize( 0, 0 ) )
+                   == QSize( 640, 480 ),
+               "...and with neither, a default -- never an empty window" );
+        const QSize none = SPluginNativeEditor::sizeWithoutAnAnswer( QSize(), QSize() );
+        check( none.width() > 0 && none.height() > 0,
+               "the answer is never empty" );
     }
 
     if( g_failures ) {

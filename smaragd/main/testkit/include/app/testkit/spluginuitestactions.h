@@ -231,6 +231,14 @@ private:
 //                        (a CAMetalLayer drawable of 0x0, nil from
 //                        nextDrawable, a null SkCanvas). "1x1 or more" fails on
 //                        0x0 and passes on every honest answer at every ratio.
+//   windowSizeAtLeast = "" if set, "WxH": the open editor WINDOW must come up
+//                        at least W x H logical units when shown
+//                        (SPluginNativeEditor::windowSizeFor(): Qt's first-show
+//                        rule, its size() if it was resized, else its
+//                        sizeHint()). QBX-219: a plugin that answers 0x0 on a reopen
+//                        used to get a window of exactly that, and the user saw
+//                        nothing open. A floor, for minContainerAtLeast's
+//                        reason. Empty = do not check.
 class SPluginNativeEditorAction : public SAction {
 public:
     QString name() const override
@@ -248,6 +256,7 @@ private:
     QString action_     = QStringLiteral( "open" );
     int     expectOpen_ = 1;
     QString minContainerAtLeast_;
+    QString windowSizeAtLeast_;
 };
 
 // plugin-generic-editor -- the plugin-native-editor twin for the GENERIC
