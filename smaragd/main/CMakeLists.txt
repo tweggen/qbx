@@ -472,6 +472,7 @@ set(APP_UI_FILES
     shell/include/app/shell/sautomationrecorder.h
     shell/include/app/shell/saudiorecorder.h
     shell/include/app/shell/sunusedrecordingsview.h
+    shell/include/app/shell/stransportreadout.h
     shell/include/app/shell/srecordplacement.h
     shell/include/app/shell/sliveinputsource.h
     shell/include/app/shell/slivemonitor.h
@@ -490,6 +491,7 @@ set(APP_UI_FILES
     shell/src/sapplication.cpp
     shell/src/saudiorecorder.cpp
     shell/src/sunusedrecordingsview.cpp
+    shell/src/stransportreadout.cpp
     shell/src/sliveinputsource.cpp
     shell/src/slivemonitor.cpp
     shell/src/sliveplanbuilder.cpp

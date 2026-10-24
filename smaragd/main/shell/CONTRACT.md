@@ -2045,3 +2045,40 @@ take coming back) and the dialog's own surface
 boxes default off, the zero case still offers them, Cancel is the default
 button). The two wires in between — `editMenu->addAction(...)` and
 `connect( view, &cleanupRequested, ... )` — are read, not measured.
+
+## inv. 68 — the transport toolbar shows the PLAYHEAD and the TIME SELECTION, and each value arrives by its OWN signal (QBX-215)
+
+`STransportReadout` sits right of Play / Stop / Record: `▶ <position>` and
+`[ <start> – <end> ] (<length>)`, in the ruler's mode (`rulerMode`: bars as
+bar.beat.tick, 1-based, a length 0-based; time as m:ss.mmm). It only formats;
+`SMainWindow::refreshTransportReadout()` gathers the state.
+
+- **The range is the ACTIVE arranger's**, read from the view
+  (`SMVActualView::hasRange/getRangeStart/getRangeEnd`), never from
+  `SProjectProps::Range*`: the arranger may show a default it made up and
+  never stored (`loadRangeFromProject`), and each arranger view holds its
+  own. `retargetTransportReadout()` re-points at the active one on
+  `SViewTabs::activeRootChanged`. A zero-length range is no selection.
+- **Bars go through the project's `twTempoMap` only**, exactly to ticks and
+  then to the NEAREST tick: a bar line at 143 BPM is a fractional frame, the
+  render boundary floors it, and a floor to ticks would read bar 10 as
+  9.4.959.
+- **Every value has its own signal, and none is `arrangementChanged`**:
+  `globalLocatorMoved` / `locatorAdvanced` (the playhead), the arranger's
+  `rangeChanged` (live, every drag step), `bpmTempoChanged` and
+  `sampleRateChanged` (the tempo map and the rate), `propertyChanged` (the
+  ruler mode). `arrangementChanged` fires after EVERY applied action, test
+  verbs included: it would refresh for nothing on each edit, and it hid three
+  missing connections from the case until it was taken out (measured).
+- **The project is `SApplication`'s**, not `currentProject_`: a scripted run
+  never goes through the attach sites, and the readout must show what the
+  engine plays.
+
+Gated by `transport_readout.qxa` through `assert-transport-readout` (no forced
+refresh: it re-targets and reads the labels) and `drag-range` (the real ruler
+gesture; `phase=` splits it to look MID-drag). Sabotages that bite: floor
+instead of nearest, no live `rangeChanged`, locator / tempo / ruler mode not
+connected, a zero-length range shown. The release's own `rangeChanged` is a
+second defence behind `saveRangeToProject()`'s `propertyChanged` and bites
+nothing alone. Not gated: `locatorAdvanced` under real playback.
+

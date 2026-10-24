@@ -418,6 +418,11 @@ const Fixture kFixtures[] = {
       " toKey='67' edge='end' lane='notes' toValue='90'/>" },
     // `repeat` is non-zero deliberately: 0 is the default, so a dropped
     // attribute would read back identical and hide itself.
+    // Non-default values, so a dropped attribute cannot read back identical.
+    { "drag-range",
+      "<drag-range from='192000' to='384000' phase='press-move'/>" },
+    { "assert-transport-readout",
+      "<assert-transport-readout contains='mode=bars' absent='mode=time'/>" },
     { "event-editor-key",
       "<event-editor-key clip='1,0' key='right' repeat='3'/>" },
     // `tick` and `key` are non-default (0 and 60) for the same reason.

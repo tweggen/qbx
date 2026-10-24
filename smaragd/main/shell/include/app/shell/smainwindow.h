@@ -26,6 +26,8 @@ class STrackDetailPanel;
 class SClipPropertiesPanel;
 class SUnusedRecordingsView;
 class SEventEditorDock;
+class SMVActualView;
+class STransportReadout;
 class SVirtualKeyboardDock;
 class SMediaBrowserPanel;
 class SMixerPane;
@@ -591,6 +593,13 @@ public:
     //                          submits `add-note`. False when there is no event
     //                          clip to write into.
     QString describeEventEditor( const QString &clipPath, const QString &kind );
+    //   describeTransportReadout — the transport toolbar's position / time
+    //                           selection readout as it is shown, after
+    //                           re-reading every input (QBX-215).
+    //   dragRange             — a REAL drag in the active arranger's ruler
+    //                           band, from `from` to `to` (frames).
+    QString describeTransportReadout();
+    bool dragRange( offset_t from, offset_t to, int phase );
     bool grabEventEditor( const QString &path, int w, int h );
     bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
                    qint64 toTick, int toKey, const QString &edge,
@@ -985,6 +994,22 @@ private:
     // a question the transport bar should be able to answer.
     QLabel *qLatencyLabel_ = nullptr;
     QString lastLatencyText_;
+
+    // The POSITION / TIME SELECTION readout beside the transport (QBX-215).
+    // It follows the ACTIVE arranger's range (readoutArranger_, re-targeted
+    // on a tab switch) and the project's tempo, ruler mode and locator.
+    STransportReadout *transportReadout_ = nullptr;
+    QPointer<SMVActualView> readoutArranger_;
+    QPointer<SProject> readoutProject_;
+    QMetaObject::Connection readoutRangeConn_;
+    QMetaObject::Connection readoutPropConn_;
+    QMetaObject::Connection readoutArrConn_;    // the tempo map
+    QMetaObject::Connection readoutRateConn_;
+    QMetaObject::Connection readoutTabsConn_;
+    void attachTransportReadout();
+    void detachTransportReadout();
+    void retargetTransportReadout();
+    void refreshTransportReadout();
     QDoubleSpinBox *tempoSpin_ = nullptr;  // Transport tempo (BPM) box
     // Who had the keyboard before the tempo box took it, so Return can give it
     // back. Cleared implicitly — always re-checked for liveness before use.

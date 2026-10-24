@@ -213,7 +213,10 @@ signals:
     void secondWidthChanged( double x );
     void leftOffsetChanged( offset_t );
     void topOffsetChanged( offset_t );
-    
+    // The time-range selection moved: created, dragged (every move, so a
+    // listener follows it live), finished or cleared (QBX-215).
+    void rangeChanged();
+
 protected slots:
     void ctGlobalShow();
     // Range-bar context menu.
@@ -679,6 +682,16 @@ public:
     // it is the only route to a lane click that hits no clip at all.
     bool clickLane( STrack *t, offset_t time,
                     Qt::KeyboardModifiers mods = Qt::NoModifier );
+    // TEST ENTRY POINT (QBX-215): drag a time-range selection in the ruler
+    // band from `from` to `to` with real press/move/release events, so the
+    // range is made by beginRangeDrag/updateRangeDrag/endRangeDrag - grid
+    // snapping included - exactly as a hand makes it. A press inside an
+    // EXISTING range moves or resizes that one instead, which is also what a
+    // hand would get. `phase` splits the gesture so a case can look at the
+    // range WHILE it is being dragged: DragRangePressMove stops before the
+    // release, DragRangeRelease sends only the release at `to`.
+    enum { DragRangeAll = 0, DragRangePressMove = 1, DragRangeRelease = 2 };
+    bool dragRange( offset_t from, offset_t to, int phase = DragRangeAll );
     // TEST ENTRY POINT: doubleClickClip()'s twin for a double-click that may
     // hit no clip at all — clickLane()'s twin for a DOUBLE click. It is the
     // only route to a double-click on a bare FOLDER LANE (no clip of the
