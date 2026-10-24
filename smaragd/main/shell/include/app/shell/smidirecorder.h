@@ -97,6 +97,43 @@ public:
     explicit SMidiRecorder( SApplication *app, QObject *parent = nullptr );
     ~SMidiRecorder() override;
 
+    /**
+     * THE RECORD GESTURE HAS BEGUN, but the take has not: a count-in or a
+     * pre-roll is in front of it (proposal 21 L5), and `start()` will not run
+     * until the click has finished.
+     *
+     * CAPTURE ANYWAY, FROM HERE (QBX-213). A note played to a count-in click
+     * is a note played AFTER the record button, and before this existed it
+     * was lost in one of two ways, both measured:
+     *
+     *   - on the FIRST take of a session there was no recorder sink at all
+     *     while the click ran - `SMidiInputHub::recorderSink()` is minted on
+     *     first ask and the first ask was `start()` - so the fan-out had
+     *     nowhere to put it and NOTHING logged the loss;
+     *   - on every later take the sink existed, filled during the click, and
+     *     `start()`'s drain threw the messages away (at TW_LOGD, so an
+     *     ordinary run never saw that either).
+     *
+     * So this acquires the sinks and drains them ONCE, right here - which
+     * keeps the drain's original purpose exactly: whatever is in the ring at
+     * the instant the button goes down really is from before it. What arrives
+     * during the preamble is then kept, and `start()` harvests it instead of
+     * draining.
+     *
+     * IT DOES NOT MAKE THE RECORDER ACTIVE. `isActive()` stays false, so
+     * `isRecordingActive()`, the monitor state (design D9) and the transport
+     * edge are untouched: this is a buffer filling, not a take running.
+     *
+     * Nothing happens when no MIDI track is armed, when there is no project,
+     * or when a take is already running.
+     */
+    void beginPreCapture();
+    /// The preamble was cancelled: drop what it collected, so it cannot leak
+    /// into the next take. Safe to call when no pre-capture is running.
+    void cancelPreCapture();
+    /// Is the pre-capture buffer filling? (`describe()` / diagnostics)
+    bool isPreCapturing() const { return preCapture_; }
+
     /// Begin a take on every armed MIDI track. False (and nothing changed)
     /// when there are none, when there is no project, or when no port opens.
     bool start();
@@ -123,6 +160,11 @@ public:
     int lastTrackCount() const { return lastTracks_; }
     /// Notes whose mapped start fell before their pass and were CLAMPED to it.
     int clampedNotes() const { return clamped_; }
+    /// Messages the PREAMBLE collected that this take admitted (QBX-213).
+    int preCapturedMessages() const { return preMsgs_; }
+    /// Notes played before the take's start and DROPPED as further away than
+    /// the catch range (QBX-213).
+    int uncaughtNotes() const { return uncaught_; }
     /**
      * THE PROJECT-LEVEL record mode this take started under, as plan 53 spells
      * it (`takes` | `takes-split` | `overdub` | `replace`).
@@ -158,6 +200,13 @@ private:
         qint64       hostNs = 0;
         std::uint8_t size   = 0;
         std::uint8_t bytes[16] = {};
+        // Did this arrive during the PREAMBLE, before the take began
+        // (QBX-213)? The catch range applies to these and to no others: a
+        // clamp of a pre-start message is about a performer anticipating the
+        // downbeat, while a clamp INSIDE a running take is latency
+        // compensation and is deliberately unbounded (a punch-in lead-in
+        // clamps to the in point today, and that is not this ticket's).
+        bool         pre = false;
     };
 
     // One OPEN input port. Two tracks on the same port share ONE sink, because
@@ -176,6 +225,14 @@ private:
         QList<int> path;
         int        portIndex = -1;
         int        channel   = -1;    // -1 = any
+    };
+
+    // One port's pre-capture buffer, kept across `start()`'s own
+    // `collectArmed_()` - which CLEARS `ports_`, so the messages have to be
+    // carried over by PORT NAME rather than by index (QBX-213).
+    struct PreMsgs {
+        QString          port;
+        std::vector<Msg> msgs;
     };
 
     bool   collectArmed_();
@@ -230,6 +287,10 @@ private:
     // Read ONCE at start (see the class comment).
     QString mode_     = QStringLiteral( "takes" );
     QString quantize_ = QStringLiteral( "off" );
+    // `midi/recordCatchRangeMs` (QBX-213), in FRAMES at the take's rate, read
+    // once at the start with its neighbours. 0 = off, which is exactly the
+    // behaviour before the key existed.
+    qint64  catchFrames_ = 0;
     bool    cycle_    = false;
     offset_t cycleIn_ = 0, cycleOut_ = 0;
     bool    punch_    = false;
@@ -241,6 +302,9 @@ private:
      * recurse.
      */
     bool    stopping_ = false;
+    /// The preamble's buffer is filling: the tick drains the rings and maps
+    /// nothing, and `active_` is still false. See `beginPreCapture()`.
+    bool    preCapture_ = false;
 
     int lastPassCount_  = 0;
     int lastPlacements_ = 0;
@@ -248,6 +312,8 @@ private:
     int lastEvents_     = 0;
     int captured_       = 0;
     int clamped_        = 0;
+    int preMsgs_        = 0;
+    int uncaught_       = 0;
     int lastTracks_     = 0;
 };
 

@@ -148,18 +148,82 @@ int SMidiRecorder::portIndexFor_( const QString &portName )
     return (int) ports_.size() - 1;
 }
 
+void SMidiRecorder::beginPreCapture()
+{
+    if( active_ || preCapture_ ) return;
+    if( !app_ || !app_->getCurrentProject() ) return;
+    // The armed set is collected HERE so the sinks exist while the click runs.
+    // `start()` collects it again - arming can change during a count-in - and
+    // the buffer is carried across that by port NAME.
+    if( !collectArmed_() ) return;
+
+    // DRAINED ONCE, and discarded: this is the instant the button went down,
+    // so whatever is in the ring is genuinely from before the gesture. Same
+    // reasoning the drain in `start()` used to carry for every take, and the
+    // same comment applies - popping is the consumer side and always safe,
+    // while `MidiInRing::clear()` is not.
+    for( PortIn &p : ports_ ) {
+        audio::MidiInMessage m;
+        int dropped = 0;
+        while( p.sink && p.sink->pop( m ) ) ++dropped;
+        p.msgs.clear();
+        if( dropped )
+            TW_LOGD( "shell", "[MREC] pre-capture dropped %d message(s) from "
+                              "before the button on '%s'",
+                     dropped, p.name.toStdString().c_str() );
+    }
+
+    preCapture_ = true;
+    timer_->start();
+    TW_LOGI( "shell", "[MREC] pre-capture on %u port(s): a preamble is in "
+                      "front of the take",
+             (unsigned) ports_.size() );
+}
+
+void SMidiRecorder::cancelPreCapture()
+{
+    if( !preCapture_ ) return;
+    preCapture_ = false;
+    if( !active_ ) timer_->stop();
+    armed_.clear();
+    ports_.clear();
+    TW_LOGI( "shell", "[MREC] pre-capture cancelled with the preamble" );
+}
+
 bool SMidiRecorder::start()
 {
     if( active_ ) return true;
     error_.clear();
+
+    // THE PRE-CAPTURE HARVEST COMES FIRST, because `collectArmed_()` below
+    // CLEARS `ports_` and the buffer lives in it (QBX-213). One last drain
+    // picks up the final tick's worth, and the messages are then carried over
+    // by port NAME - an index would not survive a re-collect.
+    std::vector<PreMsgs> harvested;
+    const bool wasPreCapturing = preCapture_;
+    if( wasPreCapturing ) {
+        drainRings_();
+        for( PortIn &p : ports_ )
+            if( !p.msgs.empty() ) {
+                for( Msg &m : p.msgs ) m.pre = true;
+                harvested.push_back( PreMsgs{ p.name, std::move( p.msgs ) } );
+            }
+        preCapture_ = false;
+    }
+
     lastPassCount_ = lastPlacements_ = lastNotes_ = lastEvents_ = 0;
     lastTracks_ = 0;
-    captured_ = clamped_ = 0;
+    captured_ = clamped_ = preMsgs_ = uncaught_ = 0;
 
     SProject *project = app_ ? app_->getCurrentProject() : nullptr;
-    if( !project ) { error_ = QStringLiteral( "no project" ); return false; }
+    if( !project ) {
+        error_ = QStringLiteral( "no project" );
+        if( wasPreCapturing ) timer_->stop();
+        return false;
+    }
     if( !collectArmed_() ) {
         error_ = QStringLiteral( "no armed MIDI tracks" );
+        if( wasPreCapturing ) timer_->stop();
         return false;
     }
 
@@ -168,19 +232,46 @@ bool SMidiRecorder::start()
     punch_       = punchRegion_( punchIn_, punchOut_ );
     stopping_    = false;
 
-    // The rings are DRAINED, never cleared: `MidiInRing::clear()` is only safe
-    // while the producer is known to be idle, and a performer's finger is not.
-    // Popping is the consumer side and is always safe. Whatever was in there
-    // belongs to before the button was pressed - a retrospective `place-retro-
-    // midi` (design D8) would keep it, and is not implemented.
-    for( PortIn &p : ports_ ) {
-        audio::MidiInMessage m;
-        int dropped = 0;
-        while( p.sink && p.sink->pop( m ) ) ++dropped;
-        p.msgs.clear();
-        if( dropped )
-            TW_LOGD( "shell", "[MREC] dropped %d stale message(s) on '%s'",
-                     dropped, p.name.toStdString().c_str() );
+    // WHAT THE PREAMBLE COLLECTED IS THE TAKE'S, and is put back on the ports
+    // it came from (QBX-213). This is the retrospective-capture buffer
+    // `SMidiInputHub::recorderSink()` was already keeping the ring alive for -
+    // "a recorder that acquired and released per pass would lose whatever
+    // arrived between passes" - and which this very function used to throw
+    // away, three lines further down, for the reason below.
+    if( wasPreCapturing ) {
+        for( PortIn &p : ports_ )
+            for( PreMsgs &h : harvested )
+                if( h.port == p.name ) {
+                    p.msgs = std::move( h.msgs );
+                    preMsgs_ += (int) p.msgs.size();
+                    captured_ += (int) p.msgs.size();
+                    break;
+                }
+        if( preMsgs_ )
+            TW_LOGI( "shell", "[MREC] %d message(s) came from the preamble",
+                     preMsgs_ );
+    } else {
+        // NO PREAMBLE: the button and the take are the same instant, so the
+        // rings are DRAINED, never cleared - `MidiInRing::clear()` is only
+        // safe while the producer is known to be idle, and a performer's
+        // finger is not. Popping is the consumer side and is always safe.
+        // Whatever was in there belongs to before the button was pressed.
+        //
+        // THIS IS STILL THE RULE, and a case gates it: a key pressed before
+        // the record button must not appear inside the take. QBX-213 did not
+        // widen that - it noticed that with a count-in the button is N bars
+        // EARLIER than this line, so the click's notes are not "before the
+        // button" at all, and `beginPreCapture()` is where the drain belongs
+        // for those takes.
+        for( PortIn &p : ports_ ) {
+            audio::MidiInMessage m;
+            int dropped = 0;
+            while( p.sink && p.sink->pop( m ) ) ++dropped;
+            p.msgs.clear();
+            if( dropped )
+                TW_LOGD( "shell", "[MREC] dropped %d stale message(s) on '%s'",
+                         dropped, p.name.toStdString().c_str() );
+        }
     }
 
     // Read ONCE: a settings change mid-take must not make the commit
@@ -198,6 +289,18 @@ bool SMidiRecorder::start()
     quantize_ = SSettings::instance().value(
         SOpt::MidiRecordQuantize,
         SOpt::def( SOpt::MidiRecordQuantize ) ).toString();
+    // THE CATCH RANGE (QBX-213), in frames, read once with its neighbours and
+    // for the same reason: a change made mid-take must not leave the commit
+    // disagreeing with the capture. Clamped to 0..1000 ms here rather than
+    // trusted, because it comes out of the INI.
+    {
+        int ms = SSettings::instance().value(
+            SOpt::MidiRecordCatchRangeMs,
+            SOpt::def( SOpt::MidiRecordCatchRangeMs ) ).toInt();
+        if( ms < 0 )    ms = 0;
+        if( ms > 1000 ) ms = 1000;
+        catchFrames_ = (qint64) ( (double) ms * projectRate_() / 1000.0 + 0.5 );
+    }
 
     lastPos_  = (qint64) recordStart_;
     playIter_ = 0;
@@ -236,7 +339,16 @@ void SMidiRecorder::drainRings_()
 
 void SMidiRecorder::poll()
 {
-    if( !active_ ) return;
+    if( !active_ ) {
+        // THE PREAMBLE'S TICK (QBX-213). Take the messages off the rings and
+        // nothing else: there is no run on the clock yet, no playhead to
+        // offer it and no pass to belong to. Draining here rather than only
+        // at `start()` is what keeps a long count-in from overflowing a
+        // 1024-slot ring - the same headroom argument the tick already makes
+        // for a take.
+        if( preCapture_ ) drainRings_();
+        return;
+    }
     SApplication &app = *app_;
     tw303aEnvironment *env = app.get303aEnvironment();
     const qint64 rate = env ? (qint64) env->getSRate() : 0;
@@ -285,7 +397,15 @@ void SMidiRecorder::poll()
 
 void SMidiRecorder::stop()
 {
-    if( !active_ || stopping_ ) return;
+    // A STOP THAT ARRIVES WHILE ONLY THE PREAMBLE'S BUFFER IS FILLING ends
+    // that too (QBX-213). Nothing was recorded, so nothing is kept - the same
+    // answer `cancelRecordPreamble()` gives, given here as well so that
+    // "safe to call when not recording" does not quietly mean "and leaves the
+    // pre-capture running". No caller takes this route today, because
+    // `SApplication::stopRecording()` cancels the preamble before it reaches
+    // either recorder; the invariant should not depend on that staying true.
+    if( !active_ ) { cancelPreCapture(); return; }
+    if( stopping_ ) return;
     stopping_ = true;           // pollFinal_ re-enters poll(), which punches out
     active_ = false;
     timer_->stop();
@@ -317,6 +437,9 @@ struct OpenNote {
     int    channel = 0;
     qint64 startFrame = 0;
     double velocity = 100.0;
+    /// Was the note-on captured during the PREAMBLE (QBX-213)? Only such a
+    /// note is measured against the catch range.
+    bool   pre = false;
 };
 
 }  // namespace
@@ -381,11 +504,42 @@ void SMidiRecorder::commit_()
 
         std::vector<OpenNote> open;
         auto emit_ = [&]( qint64 startF, qint64 endF, int key, int ch,
-                          double vel, double relVel ) {
+                          double vel, double relVel, bool pre ) {
             qint64 pass = passOf( startF );
             qint64 ps   = passStart( pass );
             qint64 pe   = passEnd( pass );
-            if( startF < ps ) { startF = ps; ++clamped_; }   // clamp, never drop
+            if( startF < ps ) {
+                // THE CATCH RANGE, and only for a note the PREAMBLE captured
+                // (QBX-213). A performer plays to the count-in click and
+                // anticipates the downbeat; that note is the take's, and it is
+                // clamped to the start while KEEPING ITS END - shortened,
+                // never moved.
+                //
+                // TWO CONDITIONS, and the second is not a detail. A caught
+                // note must have begun within the range AND must still be
+                // SOUNDING when the take begins:
+                //
+                //   - outside the range it was a different note, played
+                //     during the click rather than at the top of the take,
+                //     and mashing it onto beat 1 is worse than dropping it;
+                //   - a note that began AND ENDED during the click was never
+                //     an anticipation of the downbeat at all. Admitting it
+                //     would clamp both its ends to the same frame and store a
+                //     note of ZERO LENGTH at the take's start, which is junk
+                //     the performer never played. "Anticipated the downbeat"
+                //     means the finger was still down when the downbeat came,
+                //     and that is exactly `endF > ps`.
+                //
+                // A note captured INSIDE the take keeps the old, unbounded
+                // clamp: that one is latency compensation, not anticipation,
+                // and a punch-in's lead-in has always clamped to the in point.
+                if( pre && ( ps - startF > catchFrames_ || endF <= ps ) ) {
+                    ++uncaught_;
+                    return;
+                }
+                startF = ps;
+                ++clamped_;
+            }
             if( startF >= pe ) return;
             if( endF > pe ) endF = pe;                       // held across a wrap
             if( endF < startF ) endF = startF;
@@ -414,7 +568,8 @@ void SMidiRecorder::commit_()
                              - port.offsetProj;
 
             if( status == 0x90 && m.size >= 3 && m.bytes[2] > 0 ) {
-                open.push_back( { (int) m.bytes[1], ch, f, (double) m.bytes[2] } );
+                open.push_back( { (int) m.bytes[1], ch, f,
+                                  (double) m.bytes[2], m.pre } );
                 continue;
             }
             if( status == 0x80 || ( status == 0x90 && m.size >= 3
@@ -428,7 +583,7 @@ void SMidiRecorder::commit_()
                     const OpenNote on = open[(std::size_t) i];
                     open.erase( open.begin() + i );
                     emit_( on.startFrame, f, key, ch, on.velocity,
-                           m.size >= 3 ? (double) m.bytes[2] : 64.0 );
+                           m.size >= 3 ? (double) m.bytes[2] : 64.0, on.pre );
                     break;
                 }
                 continue;
@@ -456,6 +611,15 @@ void SMidiRecorder::commit_()
                            : 0.0; break;
             default: continue;
             }
+            // A CONTROLLER FROM THE PREAMBLE IS KEPT WHATEVER THE CATCH
+            // RANGE SAYS, and that asymmetry with notes is deliberate
+            // (QBX-213). A CC, a bend or a program change is the
+            // instrument's STATE, not an event: a sustain pedal pressed
+            // during the count-in and still down at the downbeat belongs to
+            // the take, and dropping it would record the take with the pedal
+            // up while the performer has their foot on it. So the clamp to 0
+            // below stays unbounded. A NOTE is an event and is bounded,
+            // because a note mashed onto beat 1 is audibly wrong.
             const qint64 pass = passOf( f );
             qint64 at = f - passStart( pass );
             if( at < 0 ) at = 0;
@@ -468,7 +632,7 @@ void SMidiRecorder::commit_()
         // unterminated note is not a recording.
         for( const OpenNote &on : open )
             emit_( on.startFrame, std::max( stopAbs, on.startFrame ), on.key,
-                   on.channel, on.velocity, 64.0 );
+                   on.channel, on.velocity, 64.0, on.pre );
     }
 
     // ONE UNDO STEP for the whole PRESS, opened by SApplication rather than
@@ -546,7 +710,8 @@ QString SMidiRecorder::describe() const
 {
     return QStringLiteral( "rec=%1 start=%2 stop=%3 tracks=%4 ports=%5 mode=%6 "
                            "quantize=%7 msgs=%8 placements=%9 passes=%10 "
-                           "notes=%11 events=%12 clamped=%13 anchored=%14" )
+                           "notes=%11 events=%12 clamped=%13 anchored=%14 "
+                           "pre=%15 uncaught=%16 catch=%17" )
         .arg( active_ ? "on" : "off" )
         .arg( (qlonglong) recordStart_ )
         .arg( (qlonglong) stopFrame_ )
@@ -560,5 +725,11 @@ QString SMidiRecorder::describe() const
         .arg( lastNotes_ )
         .arg( lastEvents_ )
         .arg( clamped_ )
-        .arg( clock_.hasAnchor() ? 1 : 0 );
+        .arg( clock_.hasAnchor() ? 1 : 0 )
+        // QBX-213: what the preamble contributed, what the catch range
+        // refused, and the range itself in frames - so a case can assert the
+        // mechanism and not just its result.
+        .arg( preMsgs_ )
+        .arg( uncaught_ )
+        .arg( (qlonglong) catchFrames_ );
 }

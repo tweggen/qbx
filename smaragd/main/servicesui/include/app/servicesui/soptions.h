@@ -160,8 +160,24 @@ inline constexpr const char *MidiInputPortIds  = "midi/inputPortIds";
 //                       means. OFF by default: quantising a performance the
 //                       user did not ask to have quantised is destructive, and
 //                       the verb is one keystroke away afterwards.
+//   MidiRecordCatchRangeMs
+//                       how far BEFORE the take's start a note may have been
+//                       played and still be caught by it, in milliseconds,
+//                       0..1000. Cubase calls this the "MIDI Record Catch
+//                       Range" and 100 ms is its number; 0 turns it off.
+//                       It exists because of the COUNT-IN (QBX-213): the
+//                       performer plays to the click and anticipates the
+//                       downbeat by a few tens of milliseconds, and without a
+//                       catch range that first note is not in the take at all.
+//                       A caught note is CLAMPED to the take's start and keeps
+//                       its end - shortened, never moved. The range is what
+//                       separates "anticipated the downbeat" from "was
+//                       noodling during the click": a pickup bar played early
+//                       in the count-in is further away than any range and is
+//                       still dropped, rather than being mashed onto beat 1.
 inline constexpr const char *MidiRecordMode     = "midi/recordMode";
 inline constexpr const char *MidiRecordQuantize = "midi/recordQuantize";
+inline constexpr const char *MidiRecordCatchRangeMs = "midi/recordCatchRangeMs";
 
 // TAKE RECORDING (plan 53, QBX-156 M0). Per-user for the same reason the pair
 // above is: both are about how this person likes to work, not about the song.

@@ -795,6 +795,20 @@ endif()
 # (ii)), so the `null` default a headless run already takes is exactly right.
 # The MIDI half arrives through CaptureMidiInput, which
 # SMARAGD_MIDI_BACKEND=capture already selects by default.
+# QBX-213: midi_count_in_catch records MIDI THROUGH a count-in, so it is a
+# wall-clock case for the same reasons as both groups around it: RUN_SERIAL
+# with SMARAGD_CAPTURE_SPEED=1, and NO audio input backend, because its armed
+# track is a MIDI instrument track with no audio input at all (the live
+# instrument reading below, not the L3b one above). It WRITES
+# transport/countInBars and transport/preRollBars, joining the group above
+# that owns those two between them, and it OWNS midi/recordCatchRangeMs
+# outright; all three are put back by the case itself.
+if(TEST qxa.midi_count_in_catch)
+    set_tests_properties(qxa.midi_count_in_catch PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
+endif()
+
 foreach(_liveinst live_instrument_play live_instrument_merge
                   live_instrument_disarm_playback live_instrument_ownership
                   live_instrument_thru live_instrument_keyboard)
