@@ -8,8 +8,9 @@ the one thread that puts MIDI bytes on the wire at their due time.
 
 Public headers: audio_backend.h, audio_input.h, audio_ring.h, null_backend.h,
 capture_backend.h, midi_output.h, midi_input.h, midi_out_scheduler.h,
-capture_midi.h, null_midi.h, and the per-platform AUDIO backend headers.
-Platform *_input.h, file_input.h, precise_waiter.h and every platform MIDI
+capture_midi.h, null_midi.h, precise_waiter.h (since QBX-214) and the
+per-platform AUDIO backend headers.
+Platform *_input.h, file_input.h and every platform MIDI
 header (winmm_midi.h, coremidi_midi.h, alsa_seq_midi.h) are PRIVATE (src/).
 audio_ring.h is public because the ring's contract IS the input contract and
 because a gate has to be able to test the class directly.
@@ -223,10 +224,14 @@ Invariants:
     backend's analogue of inv. 9's block log and for the same reason: pacing is
     a wall-clock property, so the only way to hold it to a number is to record
     when delivery actually happened.
-24. PreciseWaiter (src/) is MidiOutScheduler's wait, extracted for the second
-    paced thread. The scheduler still owns its copy: it is on the MIDI timing
-    gate, and re-pointing a green measured path at a new class buys nothing.
-    This is the form a future consolidation takes, not that consolidation.
+24. PreciseWaiter (tw/devices/precise_waiter.h) is MidiOutScheduler's wait,
+    extracted for the second paced thread. The scheduler still owns its copy: it
+    is on the MIDI timing gate, and re-pointing a green measured path at a new
+    class buys nothing. This is the form a future consolidation takes, not that
+    consolidation. PUBLIC since QBX-214, for the third waiter: tw/playback's
+    LiveGraphPump, whose idle nap was a sleep_for(2 ms) that Windows returned
+    after the 15.6 ms tick — longer than the pump's whole lead at a 256-frame
+    ASIO block (playback inv. 16a).
 
 --- ASIO (proposal 35 Phase 2; the input half is Phase 3) ---
 

@@ -1084,7 +1084,30 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
         // the page itself rendered - which is why the page's OWN chase set is
         // never re-issued here (it has just been rebuilt into the DSP, and
         // re-attacking it would double every held note).
-        if( !haveLastEnd_ || startPos != lastEnd_ ) {
+        //
+        // EXCEPT A LIVE CATCH-UP (QBX-214). A live-owned slot whose block
+        // starts a little AFTER where the last one ended was not moved: the pump
+        // was late. Render the skipped frames with the feed's events at their
+        // real offsets and the output discarded, which is exactly the state a
+        // continuous run would have reached — no reset, no chase, no pre-roll,
+        // every voice kept, every note-off inside the gap delivered. The live
+        // source is NOT collected for the gap: it drains a ring, and whatever
+        // arrived since the last block is the block's own collect's (at offset
+        // 0, as always). Only for live ownership: a frozen page stays a pure
+        // function of its position (invariant 40), so every golden is
+        // untouched. Beyond kLiveCatchUpMaxFrames the gap would cost more than
+        // the reposition, so that is what it gets.
+        const bool liveCatchUp = liveOwned_ && haveLastEnd_ && startPos > lastEnd_ &&
+                                 startPos - lastEnd_ <= (offset_t)kLiveCatchUpMaxFrames;
+        if( liveCatchUp ) {
+            const length_t gap = (length_t)( startPos - lastEnd_ );
+            TW_LOGD( "plugins", "[slot] live catch-up over %lld frames to %lld (no reset)",
+                     (long long)gap, (long long)startPos );
+            gapBlock_.clear();
+            if( events_ && liveTx_.feedEnabled )
+                events_->collect( (std::int64_t)lastEnd_, (std::int64_t)gap, gapBlock_ );
+            runGenerator_nolock( nullptr, nullptr, gap, lastEnd_, gapBlock_, false, sampleRate );
+        } else if( !haveLastEnd_ || startPos != lastEnd_ ) {
             TW_LOGD( "plugins", "[slot] instrument reposition to %lld (expected %lld); "
                      "reset + chase + pre-roll",
                      (long long)startPos,
@@ -1110,11 +1133,13 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
             // is gone until the user lifts and presses again.
             //
             // Heard as: while RECORDING, every note played on a MIDI keyboard
-            // is cut off a block or two after it starts. Only while recording,
-            // because a STOPPED pump runs a virtual counter that never
-            // repositions, while a running one follows the engine clock and
-            // repositions whenever it falls behind — which a machine busy
-            // capturing, writing a WAV and freezing pages does often.
+            // is cut off a block or two after it starts. Only while the
+            // transport runs, because a STOPPED pump runs a virtual counter that
+            // never repositions, while a running one follows the engine clock.
+            // (QBX-214: the "often" was not load. On Windows the pump's idle nap
+            // overslept to the 15.6 ms tick, past an ASIO lead of 10.7 ms, so it
+            // was EVERY wake-up; and a small fall-behind is now a catch-up that
+            // resets nothing, so this path is left to real seeks.)
             //
             // requestChase() makes the next collect emit the held notes as
             // note-ons at offset 0, which is the SAME mechanism design D4 uses
@@ -1146,7 +1171,16 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
     if( positional ) {
         // Stateful DSP: a page that does not start exactly where the last one
         // ended is a discontinuity the plugin cannot continue from.
-        if( haveLastEnd_ && startPos != lastEnd_ ) {
+        //
+        // A live-owned effect a little late (QBX-214) carries on instead: its
+        // input jumps across the frames the pump missed, exactly as any host's
+        // effect does after an xrun. That is also what it did before the pump
+        // learned to catch up — the pump forgot continuity, so this branch was
+        // never reached. Not rendered over the gap: its input for those frames
+        // was never produced (an instrument ahead of it discards its own).
+        const bool liveCatchUp = liveOwned_ && haveLastEnd_ && startPos > lastEnd_ &&
+                                 startPos - lastEnd_ <= (offset_t)kLiveCatchUpMaxFrames;
+        if( haveLastEnd_ && startPos != lastEnd_ && !liveCatchUp ) {
             TW_LOGD( "plugins", "[slot] non-sequential page at %lld (expected %lld); "
                      "resetting plugin state",
                      (long long)startPos, (long long)lastEnd_ );

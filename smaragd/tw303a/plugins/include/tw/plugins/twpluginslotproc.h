@@ -321,6 +321,14 @@ public:
     static constexpr length_t kMinPreRollFrames = 4096;
     static constexpr int      kMaxPreRollSeconds = 4;
 
+    // QBX-214: the largest FORWARD jump a LIVE-OWNED slot treats as a catch-up
+    // (the pump was late) rather than a reposition. Within it a generator
+    // renders the gap with its output discarded — the state a continuous run
+    // would have — and an effect carries on; beyond it rendering the gap would
+    // cost more than reset + chase + the minimum pre-roll, so it repositions.
+    // LiveGraphPump uses the same bound to decide what it calls a catch-up.
+    static constexpr length_t kLiveCatchUpMaxFrames = kMinPreRollFrames;
+
 private:
     // All _nolock helpers require mutex_.
     void  bumpParamEpoch_nolock();
@@ -445,6 +453,7 @@ private:
     // Per-call scratch. Members, not locals: the render path allocates nothing
     // once it is warm (CONTRACT invariant 2).
     twEventBlock          pageBlock_, preBlock_, probeBlock_;
+    twEventBlock          gapBlock_;   // a live catch-up's skipped frames (QBX-214)
     std::vector<twEvent>  chunkEvents_;
     std::vector<uint8_t>  chunkArena_;
     std::vector<twEvent>  chaseEvents_;

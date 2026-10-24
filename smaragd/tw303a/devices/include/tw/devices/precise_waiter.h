@@ -24,6 +24,11 @@ namespace audio {
 // tidiness that buys nothing. This header is the form a future consolidation
 // takes, not that consolidation.
 //
+// PUBLIC since QBX-214, for its third waiter: tw/playback's LiveGraphPump. Its
+// idle nap was a sleep_for(2 ms) that Windows stretched to the 15.6 ms tick,
+// which is longer than the pump's whole lead at an ASIO block of 256 frames
+// (2 blocks = 10.7 ms) — so every nap ended with the pump behind the clock.
+//
 // One waiter belongs to ONE waiting thread. wake() may be called from any
 // thread; open()/close() are control-plane calls made while the waiter's thread
 // is not running.

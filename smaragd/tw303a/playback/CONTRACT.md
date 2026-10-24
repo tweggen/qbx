@@ -201,6 +201,20 @@ Invariants:
     `ceil(lead/block) + 2` and the pump warns once if the ring it was handed is
     shallower.
 
+16a. THE PUMP'S IDLE WAIT MUST BE SHORTER THAN `lead - block` AT THE SMALLEST
+    BLOCK, which is why it is a `PreciseWaiter` (devices inv. 24) of 1 ms and not
+    a sleep (QBX-214). The default lead is TWO blocks, so at ASIO's 256 frames
+    it is 10.7 ms, and Windows returns a 2 ms `sleep_for` after its 15.6 ms tick:
+    every nap ended BEHIND the clock, every wake-up was a reposition, and an
+    armed instrument track was reset, chased and pre-rolled once per block —
+    reported as playback that "sounds garbage" on ASIO while WAV tracks (frozen
+    lane) were clean. Measured headlessly by playback_test QBX-214 T6 (BLOCK =
+    256, default lead, real-time pretend RT): 100 repositions in 375 blocks and
+    63 % of frames silent before, none after. A STOPPED pump has no clock to
+    derive a deadline from, which is why the wait is a fixed 1 ms rather than a
+    deadline. The waiter is opened in `start()` and closed after the join in
+    `stop()`, which wakes it first.
+
 17. ONE EXPLICIT REPOSITION per start/stop/seek/wrap, decided by the pump and
     applied THROUGH THE PLAN (`applyReposition()`: move the position, count it,
     open a new RING RUN, `forgetContinuity()` on every plan processor), never by
@@ -217,6 +231,16 @@ Invariants:
     streams on. The reposition is applied BEFORE the ring slot is claimed, so a
     full ring cannot lose it — which matters most in the case a reposition
     creates, where the ring is full of the run being abandoned.
+    AMENDED BY QBX-214 — A SMALL FALL-BEHIND IS A CATCH-UP. While playing, with
+    no request and no play-state change, `0 < nextFrame - nextPos <=
+    twPluginSlotProcessor::kLiveCatchUpMaxFrames` (4096) moves the position to
+    `nextFrame` and counts `catchUps()`, and does NOTHING else: no new ring run
+    (everything queued is behind; the consumer drops wholly-behind entries
+    itself) and no `forgetContinuity()` — the processors' own catch-up rule
+    (plugins inv. 45a) sees the jump and keeps their state. A larger jump, a
+    seek back, a wrap, a request and a start/stop remain repositions, so
+    `repositions()` still means "the run was abandoned"; a late pump shows up in
+    `catchUps()`, which L1a T2 reports and bounds so a gate can still see it.
 
 18. THE LIVE LANE REQUIRES DEVICE RATE == PROJECT RATE, and `openLive()`
     REFUSES otherwise (-1, one log naming both rates, `liveRateRefusals()`, and

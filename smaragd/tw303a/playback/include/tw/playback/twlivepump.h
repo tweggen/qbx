@@ -4,6 +4,7 @@
 #include "tw/playback/twliveclock.h"
 #include "tw/playback/twliveplan.h"
 #include "tw/playback/twlivering.h"
+#include "tw/devices/precise_waiter.h"
 
 #include <atomic>
 #include <cstdint>
@@ -105,6 +106,12 @@ public:
     // --- counters -----------------------------------------------------------
     std::uint64_t blocks()            const { return blocks_.load( std::memory_order_relaxed ); }
     std::uint64_t repositions()       const { return repositions_.load( std::memory_order_relaxed ); }
+    // QBX-214: late wake-ups that were absorbed as a CATCH-UP (a forward jump
+    // of at most twPluginSlotProcessor::kLiveCatchUpMaxFrames while playing)
+    // rather than a reposition. Counted apart so repositions() still means
+    // "the pump abandoned its run", and so a gate can still see the pump being
+    // late after lateness stopped costing an instrument its voices.
+    std::uint64_t catchUps()          const { return catchUps_.load( std::memory_order_relaxed ); }
     std::uint64_t frozenInputMisses() const { return frozenMisses_.load( std::memory_order_relaxed ); }
     std::uint64_t inputShortfalls()   const { return shortfalls_.load( std::memory_order_relaxed ); }
     std::uint64_t ringFull()          const { return ringFull_.load( std::memory_order_relaxed ); }
@@ -166,9 +173,13 @@ private:
     std::thread       thread_;
     std::atomic<bool> running_{ false };
     std::atomic<bool> stopFlag_{ false };
+    // The idle wait (QBX-214). Opened before the thread starts, closed after it
+    // joins; wake() from stop() so the join does not wait out a nap.
+    audio::PreciseWaiter waiter_;
 
     std::atomic<std::uint64_t> blocks_{ 0 };
     std::atomic<std::uint64_t> repositions_{ 0 };
+    std::atomic<std::uint64_t> catchUps_{ 0 };
     std::atomic<std::uint64_t> frozenMisses_{ 0 };
     std::atomic<std::uint64_t> shortfalls_{ 0 };
     std::atomic<std::uint64_t> ringFull_{ 0 };

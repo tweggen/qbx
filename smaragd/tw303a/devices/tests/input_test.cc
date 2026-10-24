@@ -37,7 +37,7 @@
 #include "tw/core/position_code.h"
 
 #include "file_input.h"          // PRIVATE to the module (src/), see CMakeLists
-#include "precise_waiter.h"
+#include "tw/devices/precise_waiter.h"
 
 #include <cstdio>
 #include <cstdlib>
