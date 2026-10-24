@@ -10,8 +10,8 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
+class QKeyEvent;
 class QShowEvent;
-class QToolButton;
 class QVBoxLayout;
 
 class SEventEditorView;
@@ -93,8 +93,16 @@ protected:
      */
     void showEvent( QShowEvent *event ) override;
 
+    /**
+     * Delete and Backspace belong to the editor while the focus is anywhere
+     * inside it (QBX-221): event() accepts their ShortcutOverride so the
+     * arranger's window-wide "Remove sample" cannot take them, and
+     * keyPressEvent() hands one that a toolbar child did not use to the view.
+     */
+    bool event( QEvent *ev ) override;
+    void keyPressEvent( QKeyEvent *ev ) override;
+
 private slots:
-    void onToolChanged();
     void onGridChanged( int index );
     void onKindChanged( int index );
     void onLinkToggled( bool on );
@@ -113,9 +121,6 @@ private:
     QVBoxLayout     *viewSlot_ = nullptr;
     QLabel          *placeholder_ = nullptr;
 
-    QToolButton *toolSelect_ = nullptr;
-    QToolButton *toolDraw_   = nullptr;
-    QToolButton *toolErase_  = nullptr;
     QComboBox   *gridCombo_  = nullptr;
     QComboBox   *kindCombo_  = nullptr;
     QComboBox   *ccCombo_    = nullptr;
@@ -132,6 +137,8 @@ private:
     // Re-entrancy: refresh() runs off arrangementChanged, which the dock's own
     // committed edits emit (timeline invariant 9).
     bool       updating_ = false;
+    // keyPressEvent()'s guard while it hands Delete/Backspace to the view.
+    bool       forwardingKey_ = false;
 };
 
 #endif // _SEVENTEDITORDOCK_H_

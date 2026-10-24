@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-221. THE EVENT EDITOR HAS NO MODES: Delete and Backspace remove the
+  selected NOTES, never the clip being edited, and a double-click on empty
+  grid creates a note.
+
+  THE DEFECT. The arranger's "Remove sample" binds Delete and Backspace as a
+  WINDOW shortcut, and Qt fires a window shortcut BEFORE any keyPressEvent
+  unless the focus widget (or an ancestor) accepts the ShortcutOverride. The
+  piano roll accepted it for Ctrl-A only, so Delete pressed in the editor
+  removed the clip the user was editing in. `event-editor-key` used to send
+  the key straight to keyPressEvent and could not see that; it now offers
+  every press to the shortcut map first, exactly as Qt does, and lets a
+  window shortcut that wins fire instead (SPianoRollView::tkPressKey).
+
+  The clip is opened the way a user opens it, by double-clicking it in the
+  arranger: that click is also what "Remove sample" acts on, so a stolen
+  Delete removes THIS clip and the clip-window assertions below fail. Every
+  key section double-clicks the clip AGAIN first, because a removal and its
+  undo leave the arranger with no clicked clip, and a later section would
+  then pass on a stolen key for want of a target rather than because the
+  editor kept it.
+
+  WHICH DEFENCE THIS PINS. SEventEditorDock::event() accepting the override
+  is what the key sections gate (sabotaged, they fail with the clip gone).
+  The view consuming Delete with nothing selected, and the dock's
+  re-entrancy guard, are a second line behind it that no case here can tell
+  apart: a key the view ignores ends in the dock, which swallows it.
+
+  120 BPM, PPQ 960, 48 kHz -> 25 frames per tick. The grid is the editor's
+  default 1/16 = 240 ticks.
+-->
+<SActionScript version="1" name="event_editor_delete">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Notes"/>
+    <add-note clip="0,0" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+    <add-note clip="0,0" tick="1920" dur="480" key="72" velocity="100" channel="0"/>
+    <double-click-clip track="0" clip="0"/>
+    <assert-event-editor clip="0,0" contains="notes=2" absent="tool="/>
+
+    <!-- ===== DELETE removes the selected note, and the clip stays. ===== -->
+    <!-- A press on the note without moving it selects it and commits nothing. -->
+    <drag-note clip="0,0" tick="0" key="60" toTick="0" toKey="60"/>
+    <assert-event-editor clip="0,0" contains="notes=2|grid=1/16|linked=1|empty=0|selection=1"/>
+    <event-editor-key clip="0,0" key="delete"/>
+    <assert-clip-window clip="0,0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="72" at="48000"/>
+    <assert-event-editor clip="0,0" contains="notes=1|grid=1/16|linked=1|empty=0|selection=0"/>
+
+    <!-- ...as ONE undo step, which puts the note back. -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+
+    <!-- ===== DELETE WITH NOTHING SELECTED does nothing at all - it must
+         not fall through to anything that reads it as "remove the clip". -->
+    <double-click-clip track="0" clip="0"/>
+    <assert-event-editor clip="0,0" contains="selection=0"/>
+    <event-editor-key clip="0,0" key="delete"/>
+    <assert-clip-window clip="0,0"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+
+    <!-- ===== BACKSPACE is the same key (it is Delete on a Mac keyboard). -->
+    <double-click-clip track="0" clip="0"/>
+    <drag-note clip="0,0" tick="1920" key="72" toTick="1920" toKey="72"/>
+    <event-editor-key clip="0,0" key="backspace"/>
+    <assert-clip-window clip="0,0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="60" at="0"/>
+    <!-- ...and again, with nothing selected now. -->
+    <double-click-clip track="0" clip="0"/>
+    <event-editor-key clip="0,0" key="backspace"/>
+    <assert-clip-window clip="0,0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+
+    <!-- ===== A DOUBLE-CLICK ON EMPTY GRID creates a note there: one grid
+         division long, snapped, selected. Off the 1/16 grid on purpose
+         (tick 970, not 960), so the snap is under test too. -->
+    <event-editor-double-click clip="0,0" tick="970" key="64"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="64" at="24000"/>
+    <assert-event-editor clip="0,0" contains="notes=2|grid=1/16|linked=1|empty=0|selection=1"/>
+    <!-- ...one undo step... -->
+    <undo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <redo count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1" key="64" at="24000"/>
+
+    <!-- ...and the double-click ON a note creates nothing. -->
+    <event-editor-double-click clip="0,0" tick="0" key="60"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+
+    <!-- The created note is the selection, so Delete straight after a
+         double-click takes it back out. -->
+    <event-editor-double-click clip="0,0" tick="2880" key="67"/>
+    <assert-midi-events clip="0,0" kind="note" count="3"/>
+    <event-editor-key clip="0,0" key="delete"/>
+    <assert-midi-events clip="0,0" kind="note" count="2"/>
+    <assert-midi-events clip="0,0" kind="note" count="0" key="67"/>
+    <assert-clip-window clip="0,0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

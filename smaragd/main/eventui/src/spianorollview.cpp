@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QAction>
 #include <QApplication>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -48,6 +50,35 @@ bool hasPrimaryMod( Qt::KeyboardModifiers m ) { return m & Qt::ControlModifier; 
 constexpr int    PR_WHEEL_VSCROLL_STEP = 600;
 constexpr double PR_WHEEL_ZOOM_H_BASE  = 1.2;
 constexpr double PR_WHEEL_ZOOM_V_BASE  = 1.5;
+
+// The QAction a window's shortcut map would fire for `seq` while `focus` has
+// the focus, or null (QBX-221). Qt's own matcher (QShortcutMap, private) is
+// approximated with the rules that decide the cases this module meets: the
+// action must be enabled, bound to a widget in the same window, and reachable
+// from `focus` by its context. Visibility is deliberately NOT tested -- a
+// headless run never shows the main window, and a shown one would pass.
+QAction *shortcutThatWouldWin( QWidget *focus, const QKeySequence &seq )
+{
+    QWidget *win = focus->window();
+    for( QAction *a : win->findChildren<QAction *>() ) {
+        if( !a->isEnabled() || !a->shortcuts().contains( seq ) ) continue;
+        for( QObject *o : a->associatedObjects() ) {
+            QWidget *w = qobject_cast<QWidget *>( o );
+            if( !w || w->window() != win || !w->isEnabled() ) continue;
+            switch( a->shortcutContext() ) {
+            case Qt::WidgetShortcut:
+                if( w == focus ) return a;
+                break;
+            case Qt::WidgetWithChildrenShortcut:
+                if( w == focus || w->isAncestorOf( focus ) ) return a;
+                break;
+            default:   // WindowShortcut, ApplicationShortcut
+                return a;
+            }
+        }
+    }
+    return nullptr;
+}
 
 double clampVel( double v )
 {
@@ -229,15 +260,14 @@ void SPianoRollView::refresh()
 
 QString SPianoRollView::describeExtra() const
 {
-    const char *tool = tool_ == Tool::Draw ? "draw"
-                     : tool_ == Tool::Erase ? "erase" : "select";
     // botKey is the LOWEST key currently visible in the grid - together with
     // topKey_ it is what a case checks the full 0-127 range against after
     // scrolling to either end (tkScrollKeys).
     const int rows = std::max( 1, gridHeight() / keyHeight_ );
     const int botKey = std::max( 0, topKey_ - ( rows - 1 ) );
-    return QStringLiteral( "tool=%1|topKey=%2|keyH=%3|ccLanes=%4|botKey=%5" )
-        .arg( QLatin1String( tool ) ).arg( topKey_ ).arg( keyHeight_ )
+    // There is no tool= field any more: the editor has no modes (QBX-221).
+    return QStringLiteral( "topKey=%1|keyH=%2|ccLanes=%3|botKey=%4" )
+        .arg( topKey_ ).arg( keyHeight_ )
         .arg( ccLanes_.size() ).arg( botKey );
 }
 
@@ -403,29 +433,10 @@ void SPianoRollView::mousePressEvent( QMouseEvent *ev )
         bool onEdge = false;
         const int idx = noteAt( r, notes, pos, &onEdge );
 
-        if( tool_ == Tool::Erase ) {
-            if( idx >= 0 ) {
-                const SEvent &e = notes[ (size_t) idx ];
-                SApplication::app().submitAction(
-                    new SRemoveNoteAction( clipPath_, e.t, e.key, e.channel,
-                                           -1, true ) );
-            }
-            ev->accept();
-            return;
-        }
-        if( tool_ == Tool::Draw ) {
-            const qint64 g = gridTicks( r );
-            const qint64 t = snapTick( r, tickOfX( r, pos.x() - KEYS_W ) );
-            const qint64 d = drawDurTicks_ > 0 ? drawDurTicks_
-                                               : ( g > 0 ? g : 240 );
-            SApplication::app().submitAction(
-                new SAddNoteAction( clipPath_, t, d, keyOfY( pos.y() ),
-                                    drawVelocity_, 0, 64.0, -1, true ) );
-            ev->accept();
-            return;
-        }
-
-        // Select tool.
+        // There are no tool modes (QBX-221): a press selects, moves or
+        // resizes; a DOUBLE-click on empty grid creates a note
+        // (mouseDoubleClickEvent) and Delete/Backspace removes the selection
+        // (keyPressEvent).
         if( idx >= 0 ) {
             const SEvent &e = notes[ (size_t) idx ];
             const QString id = idStr( e );
@@ -489,6 +500,47 @@ void SPianoRollView::mousePressEvent( QMouseEvent *ev )
         return;
     }
     ev->accept();
+}
+
+void SPianoRollView::mouseDoubleClickEvent( QMouseEvent *ev )
+{
+    // A double-click on EMPTY note grid creates a note there (QBX-221), which
+    // is what replaced the Draw tool. Qt delivers press, release, DOUBLE-
+    // CLICK, release: the first press already ran as an ordinary press (an
+    // empty spot clears the selection and arms a marquee, which its release
+    // committed as nothing), so this handler sees a settled view.
+    const QPoint pos = ev->position().toPoint();
+    const Resolved r = resolve();
+    if( ev->button() == Qt::LeftButton && r.valid() && axis_
+        && pos.x() >= KEYS_W && bandAt( pos.y() ) == Band::Grid ) {
+        const std::vector<SEvent> notes = notesOf( r );
+        if( noteAt( r, notes, pos ) < 0 ) {
+            drag_ = Drag();
+            const qint64 g = gridTicks( r );
+            const qint64 t = snapTick( r, tickOfX( r, pos.x() - KEYS_W ) );
+            const qint64 d = drawDurTicks_ > 0 ? drawDurTicks_
+                                               : ( g > 0 ? g : 240 );
+            const int key = keyOfY( pos.y() );
+            // The new note is the selection, so Delete straight after takes
+            // it back out. Set BEFORE the submit, like commitDrag(): the
+            // arrangementChanged refresh then finds it live and keeps it.
+            SEvent made;
+            made.t = std::max<qint64>( 0, t );
+            made.key = key;
+            made.channel = 0;
+            selectOnly( idStr( made ) );
+            SApplication::app().submitAction(
+                new SAddNoteAction( clipPath_, made.t, d, key, drawVelocity_,
+                                    0, 64.0, -1, true ) );
+            update();
+            ev->accept();
+            return;
+        }
+    }
+    // Anywhere else -- on a note, in a lane, on the keyboard column -- a
+    // double-click is a second press, which is what QWidget's own default
+    // does with it.
+    mousePressEvent( ev );
 }
 
 void SPianoRollView::mouseMoveEvent( QMouseEvent *ev )
@@ -732,6 +784,7 @@ bool SPianoRollView::tkPressKey( const QString &keyName, int repeats )
     else if( keyName == QLatin1String( "up" ) )     qtKey = Qt::Key_Up;
     else if( keyName == QLatin1String( "down" ) )   qtKey = Qt::Key_Down;
     else if( keyName == QLatin1String( "delete" ) ) qtKey = Qt::Key_Delete;
+    else if( keyName == QLatin1String( "backspace" ) ) qtKey = Qt::Key_Backspace;
     else if( keyName == QLatin1String( "select-all" ) ) {
         qtKey = Qt::Key_A;
         // The same modifier hasPrimaryMod() tests for, so the select-all
@@ -743,16 +796,38 @@ bool SPianoRollView::tkPressKey( const QString &keyName, int repeats )
         return false;
     }
 
+    // EACH PRESS GOES THROUGH THE SHORTCUT MAP FIRST, as a real one does
+    // (QBX-221). Qt offers the focus widget a ShortcutOverride before it
+    // dispatches a QAction shortcut; only if nobody on the way up accepts it
+    // does a matching shortcut fire, and then the key press is NEVER
+    // delivered. A seam that skipped this step sent Delete straight to
+    // keyPressEvent and so could not see that the arranger's window-wide
+    // "Remove sample" was taking the key and deleting the clip being edited.
+    auto press = [&]( bool autorep ) {
+        QKeyEvent over( QEvent::ShortcutOverride, qtKey, mods, QString(),
+                        autorep );
+        over.ignore();
+        QApplication::sendEvent( this, &over );
+        if( !over.isAccepted() ) {
+            if( QAction *a = shortcutThatWouldWin(
+                    this, QKeySequence( QKeyCombination( mods,
+                                                         Qt::Key( qtKey ) ) ) ) ) {
+                qWarning().noquote()
+                    << "tkPressKey:" << keyName << "is taken by the window"
+                    << "shortcut" << a->text() << "- the view never sees it";
+                a->trigger();
+                return;
+            }
+        }
+        QKeyEvent ev( QEvent::KeyPress, qtKey, mods, QString(), autorep );
+        QApplication::sendEvent( this, &ev );
+    };
+
     // THE FIRST PRESS IS NOT AN AUTO-REPEAT, every following one is -- which
     // is exactly what a held key delivers, and what the nudge gesture token
     // keys off.
-    QKeyEvent first( QEvent::KeyPress, qtKey, mods );
-    QApplication::sendEvent( this, &first );
-    for( int i = 0; i < repeats; ++i ) {
-        QKeyEvent again( QEvent::KeyPress, qtKey, mods, QString(),
-                         /*autorep=*/true );
-        QApplication::sendEvent( this, &again );
-    }
+    press( false );
+    for( int i = 0; i < repeats; ++i ) press( true );
     return true;
 }
 
@@ -824,7 +899,11 @@ void SPianoRollView::keyPressEvent( QKeyEvent *ev )
     case Qt::Key_Down:   nudgeSelection( 0, -1 ); break;
     case Qt::Key_Delete:
     case Qt::Key_Backspace: {
-        if( !r.valid() || selected_.isEmpty() ) { ev->ignore(); return; }
+        // CONSUMED even with nothing selected (QBX-221): Delete inside the
+        // editor is about notes, never about the clip being edited, so the
+        // key must not travel on to anything that would read it as "remove
+        // the clip". With nothing selected it does nothing at all.
+        if( !r.valid() || selected_.isEmpty() ) break;
         const std::vector<SEvent> notes = notesOf( r );
         std::vector<SEvent> keep;
         for( const SEvent &e : notes )
@@ -1099,11 +1178,6 @@ bool SPianoRollView::tkDragNote( qint64 tick, int key, int channel,
         if( y0 < 0 || y1 < 0 ) return false;
     }
 
-    // Move/resize are Select-tool gestures whatever the toolbar says: the verb
-    // names the gesture, not the tool.
-    const Tool saved = tool_;
-    tool_ = Tool::Select;
-
     auto send = [&]( QEvent::Type type, int x, int y, Qt::MouseButton button,
                      Qt::MouseButtons buttons ) {
         const QPointF local( x, y );
@@ -1114,8 +1188,6 @@ bool SPianoRollView::tkDragNote( qint64 tick, int key, int channel,
     send( QEvent::MouseButtonPress,   x0, y0, Qt::LeftButton, Qt::LeftButton );
     send( QEvent::MouseMove,          x1, y1, Qt::NoButton,   Qt::LeftButton );
     send( QEvent::MouseButtonRelease, x1, y1, Qt::LeftButton, Qt::NoButton );
-
-    tool_ = saved;
     return true;
 }
 
@@ -1135,6 +1207,40 @@ int SPianoRollView::tkScrollKeys( int topKey )
     // means topKey_ was already correct - see layoutKeyScroll()).
     keyScroll_->setValue( v );
     return topKey_;
+}
+
+bool SPianoRollView::tkDoubleClick( qint64 tick, int key )
+{
+    const Resolved r = resolve();
+    if( !r.valid() || !axis_ || key < 0 || key > 127 ) return false;
+
+    const int x = xOfTick( r, tick ) + KEYS_W + 1;
+    if( x < KEYS_W ) return false;
+    // Bring `key` into the grid if it is scrolled away, through the same
+    // scrollbar a user would drag, then grow the never-shown widget until
+    // the spot is inside it (tkDragNote's trick).
+    if( key > topKey_ || yOfKey( key ) + keyHeight_ > gridHeight() )
+        tkScrollKeys( std::min( 127, key + 2 ) );
+    const int rows  = std::max( 1, ( topKey_ - key ) + 3 );
+    const int needH = rows * keyHeight_ + VEL_H + ccLanes_.size() * CC_H + 8;
+    const int needW = x + 64;
+    if( height() < needH || width() < needW )
+        resize( std::max( width(), needW ), std::max( height(), needH ) );
+    const int y = yOfKey( key ) + keyHeight_ / 2;
+    if( y < 0 || bandAt( y ) != Band::Grid ) return false;
+
+    auto send = [&]( QEvent::Type type, Qt::MouseButton button,
+                     Qt::MouseButtons buttons ) {
+        const QPointF local( x, y );
+        QMouseEvent ev( type, local, mapToGlobal( local ), button, buttons,
+                        Qt::NoModifier );
+        QApplication::sendEvent( this, &ev );
+    };
+    send( QEvent::MouseButtonPress,    Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    send( QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease,  Qt::LeftButton, Qt::NoButton );
+    return true;
 }
 
 // The KIND REGISTRY entry (proposal 37 6.2). A static initializer, which is why

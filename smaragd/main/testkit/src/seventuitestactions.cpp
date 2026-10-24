@@ -172,7 +172,8 @@ bool SEventEditorKeyAction::readXml( const QDomElement &elem, int )
     static const QStringList kKeys = {
         QStringLiteral( "left" ),   QStringLiteral( "right" ),
         QStringLiteral( "up" ),     QStringLiteral( "down" ),
-        QStringLiteral( "delete" ), QStringLiteral( "select-all" )
+        QStringLiteral( "delete" ), QStringLiteral( "backspace" ),
+        QStringLiteral( "select-all" )
     };
     if( !kKeys.contains( key_ ) ) {
         qWarning() << "event-editor-key: unknown key:" << key_
@@ -181,6 +182,48 @@ bool SEventEditorKeyAction::readXml( const QDomElement &elem, int )
     }
     if( repeats_ < 0 ) {
         qWarning() << "event-editor-key: repeat must not be negative";
+        return false;
+    }
+    return true;
+}
+
+// ------------------------------------------------ event-editor-double-click
+
+QStringList SEventEditorDoubleClickAction::knownAttributes() const
+{
+    return { "clip", "tick", "key" };
+}
+
+SApplyResult SEventEditorDoubleClickAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "event-editor-double-click: no main window";
+        return { false, nullptr };
+    }
+    if( !win->eventEditorDoubleClick( clip_, tick_, key_ ) ) {
+        qWarning() << "event-editor-double-click: no grid spot at tick"
+                   << tick_ << "key" << key_ << "in clip" << clip_;
+        return { false, nullptr };
+    }
+    // Not undoable itself: the add-note the gesture submits is.
+    return { true, nullptr };
+}
+
+void SEventEditorDoubleClickAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "tick", QString::number( tick_ ) );
+    elem.setAttribute( "key", key_ );
+}
+
+bool SEventEditorDoubleClickAction::readXml( const QDomElement &elem, int )
+{
+    clip_ = elem.attribute( "clip" );
+    tick_ = elem.attribute( "tick", "0" ).toLongLong();
+    key_  = elem.attribute( "key", "60" ).toInt();
+    if( key_ < 0 || key_ > 127 ) {
+        qWarning() << "event-editor-double-click: key out of range:" << key_;
         return false;
     }
     return true;
@@ -461,6 +504,12 @@ static const bool s_reg_eventeditorkey =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "event-editor-key" ),
           [] { return new SEventEditorKeyAction; } ),
+      true );
+
+static const bool s_reg_eventeditordoubleclick =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "event-editor-double-click" ),
+          [] { return new SEventEditorDoubleClickAction; } ),
       true );
 
 static const bool s_reg_scrolleventeditorkeys =

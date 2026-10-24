@@ -105,16 +105,31 @@ public:
      * one undo step and two separate presses must be two, and no mouse verb
      * can express the difference.
      *
-     * `keyName` is "left", "right", "up", "down", "delete" or "select-all".
-     * Returns false for anything else.
+     * `keyName` is "left", "right", "up", "down", "delete", "backspace" or
+     * "select-all". Returns false for anything else.
+     *
+     * Every press is offered to the SHORTCUT MAP first, as Qt does with a real
+     * one (QBX-221): a ShortcutOverride nobody accepts lets a matching window
+     * QAction fire INSTEAD, and the press is then not delivered at all. That
+     * is the path on which the arranger's "Remove sample" used to take Delete
+     * away from this view.
      */
     bool tkPressKey( const QString &keyName, int repeats = 0 );
+
+    /**
+     * TEST ENTRY POINT for a DOUBLE-click on the note grid at (tick, key) in
+     * CONTENT ticks (QBX-221): the real press / release / double-click /
+     * release sequence Qt delivers, so mouseDoubleClickEvent itself is under
+     * test. Returns false when no clip is bound or the spot is off the grid.
+     */
+    bool tkDoubleClick( qint64 tick, int key );
 
 protected:
     void paintEvent( QPaintEvent * ) override;
     void mousePressEvent( QMouseEvent * ) override;
     void mouseMoveEvent( QMouseEvent * ) override;
     void mouseReleaseEvent( QMouseEvent * ) override;
+    void mouseDoubleClickEvent( QMouseEvent * ) override;
     void keyPressEvent( QKeyEvent * ) override;
     void resizeEvent( QResizeEvent * ) override;
     void wheelEvent( QWheelEvent * ) override;
@@ -220,7 +235,7 @@ private:
     int           keyHeight_ = 6;
     QScrollBar   *keyScroll_ = nullptr;   // the note grid's vertical scroll
     int           noteCount_ = 0;
-    /** The length a Draw-tool insert gets, in ticks; 0 = one grid division. */
+    /** The length a double-click insert gets, in ticks; 0 = one grid division. */
     qint64        drawDurTicks_ = 0;
     double        drawVelocity_ = 100.0;
 
