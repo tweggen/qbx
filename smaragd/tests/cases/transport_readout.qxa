@@ -12,19 +12,18 @@
 
   120 BPM, 48 kHz: one bar is 96000 frames. Bars mode reads bar.beat.tick,
   1-based, a length 0-based. 143 BPM is where a tick-valued position and a
-  frame-valued one stop agreeing: one bar is 80559.44 frames there, so bar 10
-  starts at frame 725034.97 and the frame a render boundary puts it on is
-  725034 - which a FLOOR to ticks reads as 9.4.959. The readout takes the
-  NEAREST tick.
+  frame-valued one stop agreeing: the map stores it as 419580 us per quarter,
+  one bar is 80559.36 frames, so bar 10 starts at frame 725034.24 and the
+  frame a render boundary puts it on is 725034 - which a FLOOR to ticks reads
+  as 9.4.959. The readout takes the NEAREST tick.
 
   Two defences, one of them pinned: the RELEASE's rangeChanged is backed by
   saveRangeToProject()'s propertyChanged, so taking it out alone bites
   nothing; the live, MID-drag rangeChanged has no backup, and the
   press-move section below is what pins it.
 
-  The range keeps its FRAMES across the tempo change below, so its bars move:
-  that is today's behaviour, and QBX-212 is the ticket that changes it. When
-  it does, the post-tempo `sel=` expectation here moves with it.
+  The range keeps its BARS across the tempo change below (QBX-212), so its
+  seconds move; range_keeps_bars.qxa gates that rule itself.
 -->
 <SActionScript version="1" name="transport_readout">
 
@@ -48,7 +47,7 @@
 
     <!-- A tempo edit re-reads every bar, with no locator move to help. -->
     <set-tempo bpm="143"/>
-    <assert-transport-readout contains="pos=▶ 2.1.736|sel=[ 11.3.864 – 14.1.416 ] (2.1.512)|"/>
+    <assert-transport-readout contains="pos=▶ 2.1.736|sel=[ 10.1.000 – 12.1.000 ] (2.0.000)|"/>
 
     <!-- The NEAREST tick: bar 10's floored frame reads as bar 10. -->
     <set-locator position="725034"/>
@@ -57,7 +56,7 @@
 
     <!-- The ruler's other mode: m:ss.mmm for all three. -->
     <set-property key="rulerMode" value='["time"]'/>
-    <assert-transport-readout contains="pos=▶ 0:15.105|sel=[ 0:18.000 – 0:22.000 ] (0:04.000)|mode=time"/>
+    <assert-transport-readout contains="pos=▶ 0:15.105|sel=[ 0:15.105 – 0:18.462 ] (0:03.357)|mode=time"/>
 
     <!-- A click in the ruler without a drag clears the selection. -->
     <drag-range from="300000" to="300000"/>

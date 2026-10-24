@@ -97,6 +97,10 @@ void STransportReadout::setState( offset_t position, bool hasRange,
                                   bool barsMode )
 {
     bars_ = barsMode;
+    selFrames_ = ( hasRange && rangeEnd > rangeStart )
+        ? QStringLiteral( "%1-%2" ).arg( (qulonglong) rangeStart )
+                                   .arg( (qulonglong) rangeEnd )
+        : QStringLiteral( "-" );
 
     const QString p = QStringLiteral( "▶ " )
         + formatPosition( position, map, sampleRate, barsMode );
@@ -119,7 +123,8 @@ void STransportReadout::setState( offset_t position, bool hasRange,
 
 QString STransportReadout::describe() const
 {
-    return QStringLiteral( "pos=%1|sel=%2|mode=%3" )
+    return QStringLiteral( "pos=%1|sel=%2|mode=%3|selFrames=%4" )
         .arg( pos_->text(), sel_->text(),
-              bars_ ? QStringLiteral( "bars" ) : QStringLiteral( "time" ) );
+              bars_ ? QStringLiteral( "bars" ) : QStringLiteral( "time" ),
+              selFrames_ );
 }

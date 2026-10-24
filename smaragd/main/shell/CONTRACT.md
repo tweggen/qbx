@@ -2075,7 +2075,8 @@ bar.beat.tick, 1-based, a length 0-based; time as m:ss.mmm). It only formats;
   engine plays.
 
 Gated by `transport_readout.qxa` through `assert-transport-readout` (no forced
-refresh: it re-targets and reads the labels) and `drag-range` (the real ruler
+refresh: it re-targets and reads the labels; `selFrames=` carries the raw
+range frames for exactness claims, QBX-212) and `drag-range` (the real ruler
 gesture; `phase=` splits it to look MID-drag). Sabotages that bite: floor
 instead of nearest, no live `rangeChanged`, locator / tempo / ruler mode not
 connected, a zero-length range shown. The release's own `rangeChanged` is a

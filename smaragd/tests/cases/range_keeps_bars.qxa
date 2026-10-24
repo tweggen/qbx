@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-212. THE TIME SELECTION KEEPS ITS BARS WHEN THE TEMPO CHANGES, as a
+  beats clip does under set-tempo: a range over bars 10-12 is still over bars
+  10-12 at the new tempo, not over the same seconds.
+
+  The arranger view keeps the range's exact musical position (ticks, as of
+  the last gesture) and re-derives the frames from it on bpmTempoChanged, to
+  the nearest frame. Because the ticks never move, undoing the tempo edit
+  lands on the ORIGINAL frames exactly and a round trip through other tempi
+  does not drift - asserted on the raw frames (`selFrames=`), which no label
+  shows.
+
+  The recorders, the cycle and the MIDI out pump read the range PROPERTIES,
+  not the view, so a stored range must move there too (assert-property). A
+  range the user cleared is not stored, and a tempo change must not write
+  the frames it would have had.
+
+  120 BPM, 48 kHz: a bar is 96000 frames, so bars 10-12 are 864000-1056000.
+  143 BPM is 419580 us per quarter in the map: bar 10 is frame 725034.24 and
+  bar 12 is 886153.0..., so 725034 and 886153 to the nearest frame.
+-->
+<SActionScript version="1" name="range_keeps_bars">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <drag-range from="864000" to="1056000"/>
+    <assert-transport-readout contains="|sel=[ 10.1.000 – 12.1.000 ] (2.0.000)|mode=bars|selFrames=864000-1056000"/>
+    <assert-property key="rangeValid" equals="true"/>
+    <assert-property key="rangeStart" equals="864000"/>
+    <assert-property key="rangeEnd" equals="1056000"/>
+
+    <!-- ===== A tempo change keeps the bars, in the view and the property. -->
+    <set-tempo bpm="143"/>
+    <assert-transport-readout contains="|sel=[ 10.1.000 – 12.1.000 ] (2.0.000)|mode=bars|selFrames=725034-886153"/>
+    <assert-property key="rangeStart" equals="725034"/>
+    <assert-property key="rangeEnd" equals="886153"/>
+
+    <!-- ===== Undo is EXACT: the original frames, not a rounding of them. -->
+    <undo count="1"/>
+    <assert-transport-readout contains="|selFrames=864000-1056000"/>
+    <assert-property key="rangeStart" equals="864000"/>
+    <assert-property key="rangeEnd" equals="1056000"/>
+    <redo count="1"/>
+    <assert-transport-readout contains="|selFrames=725034-886153"/>
+
+    <!-- ===== No drift: two more separate tempo edits, then back to 120. -->
+    <set-tempo bpm="97.3"/>
+    <assert-transport-readout contains="|sel=[ 10.1.000 – 12.1.000 ] (2.0.000)|"/>
+    <set-tempo bpm="120"/>
+    <assert-transport-readout contains="|sel=[ 10.1.000 – 12.1.000 ] (2.0.000)|mode=bars|selFrames=864000-1056000"/>
+    <assert-property key="rangeStart" equals="864000"/>
+    <!-- 297 BPM is the round trip a frame-based re-capture gets WRONG: the
+         map stores 202020 us per quarter, 10.101 frames per tick, so bar 10
+         lands at 349090.56 -> 349091, and re-capturing from that comes back
+         as 864001. From the ticks it comes back as 864000. -->
+    <set-tempo bpm="297"/>
+    <assert-transport-readout contains="|sel=[ 10.1.000 – 12.1.000 ] (2.0.000)|"/>
+    <set-tempo bpm="120"/>
+    <assert-transport-readout contains="|selFrames=864000-1056000"/>
+
+    <!-- ===== A range the user MOVED is captured again from where it went.
+         A press at 912000 is inside the range, so this drags the whole of it
+         back by 720000 frames, to 2.3-4.3; the tempo then keeps it there in
+         bars instead of returning it to the bars it was captured at first. -->
+    <drag-range from="912000" to="192000"/>
+    <assert-transport-readout contains="|sel=[ 2.3.000 – 4.3.000 ] (2.0.000)|mode=bars|selFrames=144000-336000"/>
+    <set-tempo bpm="143"/>
+    <assert-transport-readout contains="|sel=[ 2.3.000 – 4.3.000 ] (2.0.000)|"/>
+    <set-tempo bpm="120"/>
+
+    <!-- ===== A CLEARED range is not stored, and a tempo change must not
+         store the frames it would have had: the property keeps what the
+         clear left there. -->
+    <drag-range from="2000000" to="2000000"/>
+    <assert-transport-readout contains="|sel=[ — ]|"/>
+    <assert-property key="rangeValid" equals="false"/>
+    <set-property key="rangeStart" value="[123]"/>
+    <set-tempo bpm="143"/>
+    <assert-property key="rangeStart" equals="123"/>
+    <assert-property key="rangeValid" equals="false"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
