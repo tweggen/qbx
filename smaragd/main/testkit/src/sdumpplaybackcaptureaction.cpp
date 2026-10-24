@@ -10,11 +10,14 @@
 #include <QDomElement>
 #include <QDebug>
 
+#include <vector>
+
 QStringList SDumpPlaybackCaptureAction::knownAttributes() const
 {
     return {
         QStringLiteral("filename"),
         QStringLiteral("minFrames"),
+        QStringLiteral("leadSilenceFrames"),
     };
 }
 
@@ -81,6 +84,26 @@ SApplyResult SDumpPlaybackCaptureAction::apply(SProject * /*project*/)
         return {false, nullptr};
     }
 
+    // TEST-ONLY FAULT INJECTION (QBX-222). Everything above has judged the REAL
+    // recording; from here on the file may deliberately differ from it, so the
+    // injection is announced at WARNING level and the frame count written out is
+    // reported separately from the frames captured.
+    const float *samples = buf.samples.data();
+    qint64       outFrames = frames;
+    std::vector<float> doctored;
+    if (leadSilenceFrames_ > 0) {
+        const qint64 lead = leadSilenceFrames_;
+        doctored.assign((std::size_t) (lead * (qint64) buf.channels), 0.0f);
+        doctored.insert(doctored.end(), buf.samples.begin(), buf.samples.end());
+        samples   = doctored.data();
+        outFrames = frames + lead;
+        qWarning() << "dump-playback-capture: INJECTING" << lead
+                   << "frames of leading silence into" << filename_
+                   << "- this file is DELIBERATELY not what was captured"
+                   << "(leadSilenceFrames, QBX-222). Captured" << frames
+                   << "frames; writing" << outFrames;
+    }
+
     audio::AudioFileConfig cfg;
     cfg.sampleRate = buf.sampleRate;
     cfg.channels   = buf.channels;
@@ -102,7 +125,7 @@ SApplyResult SDumpPlaybackCaptureAction::apply(SProject * /*project*/)
                    << ":" << writer->errorMessage();
         return {false, nullptr};
     }
-    if (!writer->write(buf.samples.data(), (std::size_t) frames)) {
+    if (!writer->write(samples, (std::size_t) outFrames)) {
         qWarning() << "dump-playback-capture: failed to write" << fullPath
                    << ":" << writer->errorMessage();
         writer->close();
@@ -114,8 +137,8 @@ SApplyResult SDumpPlaybackCaptureAction::apply(SProject * /*project*/)
         return {false, nullptr};
     }
 
-    qDebug() << "dump-playback-capture: wrote" << frames << "frames ("
-             << (double) frames / (double) (buf.sampleRate ? buf.sampleRate : 1)
+    qDebug() << "dump-playback-capture: wrote" << outFrames << "frames ("
+             << (double) outFrames / (double) (buf.sampleRate ? buf.sampleRate : 1)
              << "s," << buf.channels << "ch @" << buf.sampleRate << "Hz) to"
              << fullPath;
     return {true, nullptr};  // Not undoable: it produces an artifact.
@@ -127,6 +150,9 @@ void SDumpPlaybackCaptureAction::writeXml(QDomElement &elem) const
     if (minFrames_ > 0) {
         elem.setAttribute("minFrames", QString::number(minFrames_));
     }
+    if (leadSilenceFrames_ > 0) {
+        elem.setAttribute("leadSilenceFrames", QString::number(leadSilenceFrames_));
+    }
 }
 
 bool SDumpPlaybackCaptureAction::readXml(const QDomElement &elem, int /*version*/)
@@ -135,6 +161,7 @@ bool SDumpPlaybackCaptureAction::readXml(const QDomElement &elem, int /*version*
     // makes the verb undeserializable and breaks the round-trip audit.
     filename_  = elem.attribute("filename", "");
     minFrames_ = elem.attribute("minFrames", "0").toLongLong();
+    leadSilenceFrames_ = elem.attribute("leadSilenceFrames", "0").toLongLong();
     return true;
 }
 

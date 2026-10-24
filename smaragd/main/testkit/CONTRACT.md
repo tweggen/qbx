@@ -1560,3 +1560,48 @@ proposal 45 and both of which still caught these cases out:
 - Numbers go through `QString::number` / `QString::toDouble`, never
   `QLocale` — this box's `LC_NUMERIC` is `de_DE`, and a locale-aware parse
   reads `0.5` as `0` (proposal 49 trap T9).
+
+## Anything measured over a playback capture (QBX-222)
+
+`dump-playback-capture` writes what the capture backend recorded. **Captured
+frame 0 is the DEVICE START, not the locator position playback began from.**
+
+- **The number of leading silent frames is a wall-clock quantity of the
+  machine.** `twSpeaker::monitorReadaheadBuffer` starts the backend once the
+  readahead reports ready, but that test is weaker than "the page at the start
+  position is frozen and valid": when the first callback beats it,
+  `twAudioEngine`'s page lookup takes its graceful-degradation branch and emits
+  ONE BLOCK OF SILENCE. It leaves **no trace in the log** — the FOUND and
+  UNDERRUN messages share one rate-limited counter (`% 500` and `% 50`) — so
+  the only evidence is the recording's length, one block longer than usual.
+- **So bound the start with `assert-audio-onset` and begin the measurement
+  window one device block in.** 1024 frames is the house tolerance, the same
+  one `assert-metronome-clicks` uses and for the same reason; that verb's
+  contract has said so since proposal 21 L5 ("the grid is anchored on the FIRST
+  detected onset, deliberately … a wall-clock quantity of the box").
+- **A window at frame 0 with a tight band is the shape to look for.** It cost
+  two unexplained flakes two months apart, both on correct builds and both
+  reported as though the DSP had moved: `0.4823` against `[0.5401, 0.5735]` on
+  a 4096-frame window (`plan/STATE.md`, 2026-08-22) and `0.272503` against
+  `[0.350061, 0.427853]` on a 2048-frame one (CI run 40100984951, 2026-10-24).
+  Both are `golden * sqrt((N - 1024) / N)` exactly. The sweep that found them
+  checked all 30 capture cases; the only other one reading inside the first
+  block is `automation_write_pass`, where the window is 48000 frames so one
+  block costs 1 % of the RMS against a band spanning a factor of 5.9 — annotated
+  in place as knowingly exposed.
+- **`leadSilenceFrames` is the fault injector, and a case should use it.** It
+  prepends N frames of silence to the dump and logs a WARNING naming the
+  injection, so a doctored recording cannot be read as a real one. It turns
+  "we hope the anchor works" into a gate:
+  `instrument_locate_continuity` section (c) injects one block, asserts the
+  onset moved, asserts the anchored window did NOT, and carries an
+  `expectReject` on the OLD unanchored window — which measures 0.272503, the
+  CI failure pinned to the digit.
+- **Never assert the recording's FRAME COUNT.** A case that stops on
+  `wait-playhead` gets "however many blocks were pumped before the stop took
+  effect" — 47 blocks locally and 48 on the CI runner for one case. It is a
+  first-rate triage signal and a flaky assertion.
+- **`assert-audio-onset`'s `maxFrame` can only be shown live by a SLIPPED
+  recording.** On an aligned capture the onset is 0 and passes any upper bound,
+  so a case that bounds the onset above without also exercising a late one has
+  a bound it has never seen refuse.

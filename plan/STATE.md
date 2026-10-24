@@ -15391,6 +15391,33 @@ this branch changed. 6/6 in isolation afterwards and green in a second full
 a rebuild, so a plugin rescan was re-probing six modules while it measured.
 Recorded as load-sensitive, not explained.
 
+> **CORRECTION 2026-10-24 (QBX-222): explained, and it was not the DSP.** The
+> capture acquired **one leading silent block**, and the window measured from
+> frame 0 therefore lost 1024 of its 4096 frames to silence:
+> `0.556769 * sqrt( (4096 - 1024) / 4096 )` = **0.482176** against the 0.4823
+> recorded above. The same arithmetic explains a second occurrence two months
+> later, on the OTHER window of the same case — CI run 40100984951, 2026-10-24,
+> `0.385377 * sqrt( (2048 - 1024) / 2048 )` = **0.272503**, which is what that
+> run measured to six decimal places. The 2026-10-24 one was diagnosed first
+> and its arithmetic then predicted this entry's number to 0.03 %.
+>
+> Captured frame 0 is the **device start**, not the locator position:
+> `monitorReadaheadBuffer` starts the backend once the readahead reports ready,
+> but that test is weaker than "the page at the start position is frozen and
+> valid", and when the first callback beats it `twAudioEngine`'s page lookup
+> emits one block of silence on its graceful-degradation branch. It leaves **no
+> log line** — the FOUND and UNDERRUN messages share one rate-limited counter —
+> so the only evidence is the recording's length, one block longer than usual.
+> The plugin-rescan theory above was a plausible guess with nothing behind it.
+> `RUN_SERIAL` would not have helped either: the failure needs one early
+> callback, not sustained load.
+>
+> Fixed by anchoring the case's windows one device block in and bounding the
+> onset with `assert-audio-onset`, the rule `assert-metronome-clicks` had
+> already written down ("capture frame 0 is the DEVICE start … a wall-clock
+> quantity of the box"). `dump-playback-capture leadSilenceFrames=` now injects
+> the slip so the case gates its own robustness against it.
+
 ## 2026-08-22 — Proposal 41 EXECUTED: lane fragments, and the clip visual model
 
 Reusable same-lane clip groups placed by reference through the existing asset
