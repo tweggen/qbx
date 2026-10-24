@@ -2011,3 +2011,16 @@ is its listener. `SStdMixerView::dragRange(from, to, phase)` drives the real
 ruler-band press / move / release; a press inside an existing range moves or
 resizes that one, as a hand's would, and grid snapping applies.
 
+**The range keeps its BARS when the tempo changes (QBX-212)**, as a beats clip
+does under `set-tempo`. The view keeps the two ends in exact content ticks
+(`rangeStartTicks_` / `rangeEndTicks_`), captured where a gesture LEAVES the
+range (the release) and where it is loaded, and on `SProject::bpmTempoChanged`
+re-derives the frames from THOSE ticks to the nearest frame - never from the
+frames the last tempo produced. So an undone tempo edit lands on the original
+frames exactly, and a round trip does not drift (at 297 BPM a re-capture from
+frames comes back one frame late; `range_keeps_bars.qxa` pins it). The
+recorders, the cycle and the MIDI out pump read the range PROPERTIES, so a
+stored range is saved to them as well; a range the view made up or the user
+cleared is not stored, and a tempo change does not store it. Not converted
+mid-drag: a tempo change cannot arrive during one from the UI.
+

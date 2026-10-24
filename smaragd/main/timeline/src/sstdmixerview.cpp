@@ -3249,7 +3249,53 @@ void SMVActualView::endRangeDrag( int x )
     rangeDrag_ = RangeNone;
     saveRangeToProject();
     update();
+    rangeMoved();
+}
+
+void SMVActualView::rangeMoved()
+{
+    // The range's MUSICAL position, captured exactly where a gesture LEAVES
+    // it - the release - and where it is loaded (QBX-212). Not on every drag
+    // step: onTempoChanged() does nothing mid-drag, so a capture there would
+    // only ever be overwritten by the release's. A tempo change re-derives the frames from these
+    // ticks and never from the frames it last produced, so an undone tempo
+    // edit lands back on the exact frames and repeated edits do not drift.
+    if( smv_.model_ ) {
+        const SProject &p = smv_.model_->getProject();
+        rangeStartTicks_ = p.tempoMap().framesToTickLen(
+            (int64_t) rangeStart_, p.getSRate() ).ticks();
+        rangeEndTicks_   = p.tempoMap().framesToTickLen(
+            (int64_t) rangeEnd_, p.getSRate() ).ticks();
+    }
     emit rangeChanged();
+}
+
+void SMVActualView::onTempoChanged()
+{
+    // The selection keeps its BAR position, as a beats clip does under
+    // set-tempo (QBX-212): bars 5-9 stay bars 5-9 rather than the same
+    // seconds. Nearest frame, from the exact ticks.
+    if( !smv_.model_ || rangeDrag_ != RangeNone ) return;
+    const SProject &p = smv_.model_->getProject();
+    const Fraction half( (int64_t) 1, (int64_t) 2 );
+    auto frameOf = [&]( const Fraction &ticks ) {
+        const int64_t f = ( p.tempoMap().ticksToFrames( TickPos( ticks ),
+                                                        p.getSRate() )
+                            + half ).floorToInt();
+        return (offset_t) ( f < 0 ? 0 : f );
+    };
+    const offset_t s = frameOf( rangeStartTicks_ );
+    const offset_t e = frameOf( rangeEndTicks_ );
+    if( s == rangeStart_ && e == rangeEnd_ ) return;
+    rangeStart_ = s;
+    rangeEnd_   = e;
+    // The recorders, the cycle and the MIDI out pump read the PROPERTIES, so
+    // a stored range must move there too. A range this view made up and
+    // never stored stays unstored: moving it is not a reason to write it.
+    if( smv_.model_->getProject().prop( SProjectProps::RangeValid, false ).toBool() )
+        saveRangeToProject();
+    update();
+    emit rangeChanged();   // the ticks did not move, so not rangeMoved()
 }
 
 void SMVActualView::saveRangeToProject()
@@ -6394,6 +6440,11 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Restore a saved range marker for this project (the view is rebuilt per
     // project, and the project is fully loaded before this widget is created).
     loadRangeFromProject();
+    rangeMoved();   // its ticks, under the tempo it was loaded at
+    // ...and keep its bars when the tempo changes (QBX-212).
+    if( smv_.getModel() )
+        connect( &smv_.getModel()->getProject(), &SProject::bpmTempoChanged,
+                 this, [this]( double ) { onTempoChanged(); } );
 
     // Track the mouse with no button held so the cursor can telegraph the
     // clip-edit gesture under the pointer (resize / slip / stretch / loop).

@@ -40,7 +40,10 @@ public:
                    bool barsMode );
 
     /** The test face: `pos=<shown>|sel=<shown>|mode=<bars|time>`, built
-     *  from the labels' own text, so what is asserted is what is shown. */
+     *  from the labels' own text, so what is asserted is what is shown;
+     *  then `|selFrames=<start>-<end>` (or `-`), the range's raw frames as
+     *  last shown, which no label can carry and an exactness claim needs
+     *  (QBX-212). */
     QString describe() const;
 
     // The formatting, exposed for setState() and for anyone else that must
@@ -54,6 +57,7 @@ private:
     QLabel *pos_  = nullptr;
     QLabel *sel_  = nullptr;
     bool    bars_ = true;
+    QString selFrames_ = QStringLiteral( "-" );
 };
 
 #endif // _STRANSPORTREADOUT_H_
