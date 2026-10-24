@@ -20,10 +20,12 @@
        backend - a render would not exercise the readahead's start at all.
 
        (a) PRESENCE - the chase. tw.test.clap.sine holds key 60 from 0 to 4 s.
-       Locate to 96000 (2.0 s) while stopped, play, and the FIRST 4096 frames of
-       the recording have to be that note. Without a chase the page would open
-       with no voice at all and the estimator would be looking at silence; the
-       energy assertion next to it says which of the two failures happened. The
+       Locate to 96000 (2.0 s) while stopped, play, and 4096 frames of the
+       recording, measured ONE DEVICE BLOCK IN, have to be that note. Without a
+       chase the page would open with no voice at all and the estimator would be
+       looking at silence; the energy assertion next to it says which of the two
+       failures happened, and the onset assertion in front of both says whether
+       the recording started where it was supposed to. The
        band is 261.626 +/- 3 Hz: a 4096-frame window is a coarse estimate and
        the note is either there at its own pitch or it is not there at all, so
        nothing is bought by making it tighter.
@@ -48,14 +50,58 @@
 
        MEASURED, and the band is that measurement +/- 10 %:
 
-           full render,  frames [96000, 98048)   rms = 0.388957
-           capture,      frames [    0,  2048)   rms = 0.388957   (identical)
-           => band [0.350061, 0.427853]
+           full render,  frames [97024, 99072)   rms = 0.391949
+           capture,      frames [ 1024,  3072)   rms = 0.391949   (identical)
+           => band [0.352754, 0.431144]
 
-       The two windows agree to every digit, which also confirms the capture is
-       frame-aligned: recorded frame 0 IS timeline frame 96000, with no leading
+       The two windows still agree to every digit, which is the property that
+       makes the comparison worth making: the same material through the render
+       and through the playback-capture path reads the same number.
+
+       WHY BOTH WINDOWS START ONE DEVICE BLOCK IN, and why they did not used to
+       (QBX-222). This case asserted them from frame 0 and said so in as many
+       words - "recorded frame 0 IS timeline frame 96000, with no leading
        silence to budget for (the device is not started until the readahead has
-       primed - twSpeaker::monitorReadaheadBuffer).
+       primed - twSpeaker::monitorReadaheadBuffer)". That was an observation
+       about the dev box dressed as a guarantee, and it was wrong.
+
+       CAPTURED FRAME 0 IS THE DEVICE START. monitorReadaheadBuffer does start
+       the backend only once the readahead reports ready, but that test is
+       weaker than "the page at the start position is frozen and valid": when
+       the first callback beats it, twAudioEngine's page lookup takes its
+       graceful-degradation branch and emits ONE BLOCK OF SILENCE. It leaves no
+       trace in the log, because the FOUND and UNDERRUN messages share one
+       rate-limited counter (% 500 and % 50) - so the only evidence is the
+       recording's own length, one block longer than usual.
+
+       It cost this project two unexplained flakes, two months apart, both of
+       them on CORRECT builds and both reported as though the DSP had moved:
+
+           plan/STATE.md, 2026-08-22, section (a)'s 4096-frame window
+               0.4823 against [0.5401, 0.5735]
+               = 0.556769 * sqrt( (4096 - 1024) / 4096 ) = 0.482176
+           CI run 40100984951, 2026-10-24, section (b)'s 2048-frame window
+               0.272503 against [0.350061, 0.427853]
+               = 0.385377 * sqrt( (2048 - 1024) / 2048 ) = 0.272503
+
+       The second was diagnosed first, and its arithmetic then predicted the
+       first to 0.03 % - which is how a flake STATE.md recorded as
+       "load-sensitive, not explained" became explained.
+
+       The rule was already written down one verb away, in
+       assert-metronome-clicks: "the grid is anchored on the FIRST detected
+       onset, deliberately. Capture frame 0 is the DEVICE start, and how many
+       blocks of silence the ring took to fill before the first entry was summed
+       is a wall-clock quantity of the box". Its tolerance is 1024 frames, one
+       device block, and that is the bound used here. Section (c) injects the
+       slip and proves all of it.
+
+       WHAT WAS CONSIDERED AND REJECTED: pinning the recording's FRAME COUNT.
+       The stop is a wait-playhead, so the length is "however many blocks were
+       pumped before the stop took effect" - 47 blocks here, 48 on the CI run
+       that failed. It is a first-rate TRIAGE signal (a one-block difference
+       against a local run identifies the slip in seconds) and it would be a
+       flaky assertion.
 
        THE FALSIFICATION, run once by hand. With a debug knob capping K at 4096
        frames (SMARAGD_PREROLL_MAX_FRAMES=4096, a temporary local patch to
@@ -130,8 +176,23 @@
     <toggle-playback play="0"/>
     <dump-playback-capture filename="sine_locate.wav" minFrames="32768"/>
 
-    <!-- The note is THERE (a chase happened) and it is at its own pitch. -->
-    <assert-audio-frequency filename="sine_locate.wav" startFrame="0" frameCount="4096"
+    <!-- CLAIM 1, ALIGNMENT AND PRESENCE: the sound starts at the device start,
+         within ONE DEVICE BLOCK. That tolerance is not slack - it is the
+         house bound assert-metronome-clicks already uses, and it exists
+         because the engine may emit one silent block when the first callback
+         beats the page it needs (see the header). A chase that produced NO
+         voice fails here, by name, instead of surfacing as a mystery RMS. -->
+    <assert-audio-onset filename="sine_locate.wav" channel="0"
+                        minFrame="0" maxFrame="1024"/>
+    <!-- ...and that assertion is LIVE: demanding a late start must refuse on
+         an aligned capture. Without this the bound above could be vacuous. -->
+    <assert-audio-onset filename="sine_locate.wav" channel="0"
+                        minFrame="2048" expectReject="true"/>
+
+    <!-- CLAIM 2, PITCH AND LEVEL, measured ONE BLOCK IN so that a tolerated
+         slip cannot reach it. The note is THERE (a chase happened) and it is
+         at its own pitch. -->
+    <assert-audio-frequency filename="sine_locate.wav" startFrame="1024" frameCount="4096"
                             channel="0" minHz="258.626" maxHz="264.626"/>
     <!-- ...and at full level. tw.test.clap.sine is envelope-less with
          amp = velocity, so a held note is exactly velocity/sqrt(2) =
@@ -139,7 +200,7 @@
          same band instrument_sine_render uses. A chase that produced a voice at
          the wrong velocity, or a fade-in, fails here rather than in the
          frequency estimate. -->
-    <assert-audio-energy filename="sine_locate.wav" startFrame="0" frameCount="4096"
+    <assert-audio-energy filename="sine_locate.wav" startFrame="1024" frameCount="4096"
                          channel="0" minRms="0.54007" maxRms="0.57347"/>
 
     <!-- ============ (b) the reference render, then the same locate ======= -->
@@ -151,8 +212,8 @@
          capture below: if the fixture's own level ever moves, this says so
          first, instead of letting a moved reference silently redefine what the
          capture is being compared with. -->
-    <assert-audio-energy filename="n303_full.wav" startFrame="96000" frameCount="2048"
-                         channel="0" minRms="0.350061" maxRms="0.427853"/>
+    <assert-audio-energy filename="n303_full.wav" startFrame="97024" frameCount="2048"
+                         channel="0" minRms="0.352754" maxRms="0.431144"/>
 
     <set-locator position="96000"/>
     <toggle-playback play="1"/>
@@ -160,8 +221,64 @@
     <toggle-playback play="0"/>
     <dump-playback-capture filename="n303_locate.wav" minFrames="32768"/>
 
-    <assert-audio-energy filename="n303_locate.wav" startFrame="0" frameCount="2048"
-                         channel="0" minRms="0.350061" maxRms="0.427853"/>
+    <assert-audio-onset filename="n303_locate.wav" channel="0"
+                        minFrame="0" maxFrame="1024"/>
+    <assert-audio-energy filename="n303_locate.wav" startFrame="1024" frameCount="2048"
+                         channel="0" minRms="0.352754" maxRms="0.431144"/>
+
+    <!-- ============ (c) THE SLIP ITSELF, injected and survived ===========
+         A third pass, identical to (b), whose dump DELIBERATELY carries one
+         block of leading silence (`leadSilenceFrames`, a test-only fault
+         injector that logs a warning so a doctored recording can never be
+         read as a real one).
+
+         This is the section that makes the whole remedy a gate rather than a
+         hope. It states three things that together are the fix:
+
+           1. the onset assertion SEES the slip and still tolerates it;
+           2. the moved energy window is UNTOUCHED by it - the number barely
+              budges, because 1024 frames is 1 % of a 2-second envelope;
+           3. THE OLD FORMULATION WOULD HAVE FAILED. The expectReject on a
+              window at frame 0 is the defect this ticket is about, pinned in
+              place: `golden * sqrt((2048 - 1024) / 2048)` = 0.272503, which
+              is exactly what CI measured on 2026-10-24 and 30 % below the
+              band. The same arithmetic on section (a)'s 4096-frame window
+              gives 0.482176 against the 0.4823 recorded in plan/STATE.md on
+              2026-08-22 - two unexplained flakes, two months apart, one
+              cause.
+         ================================================================== -->
+    <set-locator position="96000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="144000" minAdvance="4096" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="n303_slipped.wav" minFrames="32768"
+                           leadSilenceFrames="1024"/>
+
+    <!-- 1. The onset is one block in. The bound is a RANGE and not 1024
+         exactly because the detector's running window is 64 frames wide, so
+         it fires as soon as the window is mostly signal: MEASURED at 961,
+         which is 1024 - (64 - 1) to the frame. The bound is kept loose rather
+         than pinned at 961 so that a change to the verb's default window or
+         threshold moves it without breaking this case for the wrong reason;
+         the verb reports the frame it found either way, which is what makes a
+         slip legible instead of mysterious. -->
+    <assert-audio-onset filename="n303_slipped.wav" channel="0"
+                        minFrame="900" maxFrame="1024"/>
+
+    <!-- ...and maxFrame is LIVE too, which nothing else here would show: on
+         the aligned captures the onset is 0 and passes any upper bound, so
+         only the slipped file can demonstrate an upper bound refusing. -->
+    <assert-audio-onset filename="n303_slipped.wav" channel="0"
+                        maxFrame="500" expectReject="true"/>
+
+    <!-- 2. ...and the measurement does not care. -->
+    <assert-audio-energy filename="n303_slipped.wav" startFrame="1024" frameCount="2048"
+                         channel="0" minRms="0.352754" maxRms="0.431144"/>
+
+    <!-- 3. ...while the window this case used to carry would have failed. -->
+    <assert-audio-energy filename="n303_slipped.wav" startFrame="0" frameCount="2048"
+                         channel="0" minRms="0.352754" maxRms="0.431144"
+                         expectReject="true"/>
   </actions>
 
   <assertions>

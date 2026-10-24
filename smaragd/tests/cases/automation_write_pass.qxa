@@ -144,6 +144,20 @@
     <toggle-playback play="0"/>
     <dump-playback-capture filename="pass.wav" minFrames="184320"/>
 
+    <!-- KNOWINGLY EXPOSED, and safe by margin (QBX-222). Captured frame 0 is
+         the DEVICE start, not the locator position: the engine may emit one
+         block of silence when the first callback beats the page it needs, so a
+         window starting at frame 0 can lose up to 1024 frames to silence. Here
+         the window is 48000 frames, so one block is 2 % of it and costs 1 % of
+         the RMS - against a band that spans a factor of 5.9 (0.0031..0.0184),
+         the ramp's whole first quarter. The three windows after this one start
+         at 48000 and beyond and are not exposed at all.
+
+         This is the one case the QBX-222 sweep found besides
+         instrument_locate_continuity, where the same shape cost 25 % and 50 %
+         of the window and produced two unexplained flakes. The rule for a new
+         capture assertion is in sdumpplaybackcaptureaction.h: anchor on
+         assert-audio-onset and start the window one device block in. -->
     <assert-audio-energy filename="pass.wav" channel="0"
                          startFrame="0" frameCount="48000"
                          minRms="0.0031" maxRms="0.0184"/>

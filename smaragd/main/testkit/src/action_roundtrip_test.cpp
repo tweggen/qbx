@@ -119,9 +119,11 @@ const Fixture kFixtures[] = {
     { "assert-log",
       "<assert-log contains='SFutureThing' minCount='2' maxCount='4'"
       " level='warn'/>" },
-    // minFrames is only written when non-zero, so a fixture must give it one.
+    // minFrames and leadSilenceFrames are only written when non-zero, so a
+    // fixture must give both one (QBX-222 added the second).
     { "dump-playback-capture",
-      "<dump-playback-capture filename='playback.wav' minFrames='315392'/>" },
+      "<dump-playback-capture filename='playback.wav' minFrames='315392'"
+      " leadSilenceFrames='1024'/>" },
     { "assert-sidecar",
       "<assert-sidecar aspect='onsets' minRecords='1' maxRecords='4'"
       " expectExists='true'/>" },
