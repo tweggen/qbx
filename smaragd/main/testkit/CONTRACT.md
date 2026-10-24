@@ -375,7 +375,10 @@ Automation UI gestures (proposal 37 P6):
   8. NOT reachable from a script: the Delete key over a marquee selection.
      Delete is a QAction SHORTCUT (`actRemoveSample_`), not an event a case can
      synthesise, so the marquee gesture is gated and the deletion it enables is
-     not. Recorded rather than papered over.
+     not. Recorded rather than papered over. (The EVENT EDITOR's keys are a
+     different story since QBX-221: `event-editor-key` runs every press through
+     an emulation of the shortcut map, so a window shortcut that would take a
+     key from the piano roll fires in a case exactly as it would for a user.)
 
 How to test:
   cd smaragd/tests/cases

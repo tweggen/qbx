@@ -1,15 +1,16 @@
 #include "app/eventui/seventeditordock.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "app/eventui/seventeditorview.h"
@@ -73,22 +74,9 @@ void SEventEditorDock::buildUi()
     barLayout->setContentsMargins( 4, 2, 4, 2 );
     barLayout->setSpacing( 4 );
 
-    auto mkTool = [&]( const QString &text, const QString &tip ) {
-        QToolButton *b = new QToolButton( bar );
-        b->setText( text );
-        b->setToolTip( tip );
-        b->setCheckable( true );
-        b->setAutoExclusive( true );
-        barLayout->addWidget( b );
-        connect( b, &QToolButton::toggled, this,
-                 &SEventEditorDock::onToolChanged );
-        return b;
-    };
-    toolSelect_ = mkTool( tr( "S" ), tr( "Select / move / resize notes" ) );
-    toolDraw_   = mkTool( tr( "D" ), tr( "Draw notes" ) );
-    toolErase_  = mkTool( tr( "E" ), tr( "Erase notes" ) );
-    toolSelect_->setChecked( true );
-
+    // No tool buttons (QBX-221): the editor has no Select/Draw/Erase modes.
+    // A double-click on empty grid creates a note and Delete/Backspace
+    // removes the selected ones, whatever was clicked last.
     barLayout->addWidget( new QLabel( tr( "Grid:" ), bar ) );
     gridCombo_ = new QComboBox( bar );
     for( const char *g : kGrids ) gridCombo_->addItem( QLatin1String( g ) );
@@ -186,11 +174,6 @@ void SEventEditorDock::setKind( const QString &kind )
     view_->setTimeAxis( axis_ );
     view_->setGrid( gridCombo_ ? gridCombo_->currentText()
                                : QStringLiteral( "1/16" ) );
-    view_->setTool( toolDraw_ && toolDraw_->isChecked()
-                        ? SEventEditorView::Tool::Draw
-                    : toolErase_ && toolErase_->isChecked()
-                        ? SEventEditorView::Tool::Erase
-                        : SEventEditorView::Tool::Select );
     viewSlot_->addWidget( view_, 1 );
     view_->setClip( clipPath_ );
     placeholder_->setVisible( clipPath_.isEmpty() );
@@ -280,16 +263,64 @@ void SEventEditorDock::showEvent( QShowEvent *event )
 }
 
 // ---------------------------------------------------------------------------
-// Toolbar
+// Delete / Backspace belong to the editor while it has the focus (QBX-221)
 // ---------------------------------------------------------------------------
 
-void SEventEditorDock::onToolChanged()
+namespace {
+
+bool isDeleteKey( const QKeyEvent *ke )
 {
-    if( !view_ ) return;
-    view_->setTool( toolDraw_->isChecked()  ? SEventEditorView::Tool::Draw
-                  : toolErase_->isChecked() ? SEventEditorView::Tool::Erase
-                                            : SEventEditorView::Tool::Select );
+    // Bare keys only, like the arranger's binding: Shift is let through
+    // because a Shift+Delete still means "delete" to a user, Ctrl/Alt/Meta
+    // are left to whatever else may bind them.
+    const Qt::KeyboardModifiers held = ke->modifiers()
+        & ( Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier );
+    return held == Qt::NoModifier
+        && ( ke->key() == Qt::Key_Delete || ke->key() == Qt::Key_Backspace );
 }
+
+}  // namespace
+
+bool SEventEditorDock::event( QEvent *ev )
+{
+    // The arranger's "Remove sample" binds Delete and Backspace WINDOW-wide,
+    // and Qt fires a window shortcut before any keyPressEvent unless the
+    // focus widget, or an ancestor on the way up, accepts the
+    // ShortcutOverride. Nothing did, so Delete pressed in the editor removed
+    // the clip being edited. Accepting it HERE covers every child of the
+    // dock that can hold the focus (the piano roll, the toolbar combos, the
+    // Link box), which is the ticket's "if the focus is inside the event
+    // editor". A child that wants the key itself (a line edit) accepts it
+    // first and keeps it.
+    if( ev->type() == QEvent::ShortcutOverride
+        && isDeleteKey( static_cast<QKeyEvent *>( ev ) ) ) {
+        ev->accept();
+        return true;
+    }
+    return QWidget::event( ev );
+}
+
+void SEventEditorDock::keyPressEvent( QKeyEvent *ev )
+{
+    // Reached from a child that did not take the key (the view consumes
+    // Delete/Backspace itself), so hand it to the view: with the focus on the
+    // grid combo, Delete still deletes notes. `forwardingKey_` stops a view
+    // that ever ignored it from bouncing it straight back here for good.
+    if( isDeleteKey( ev ) ) {
+        if( view_ && !forwardingKey_ ) {
+            forwardingKey_ = true;
+            QApplication::sendEvent( view_, ev );
+            forwardingKey_ = false;
+        }
+        ev->accept();
+        return;
+    }
+    QWidget::keyPressEvent( ev );
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
 
 void SEventEditorDock::applyGridToChildren()
 {

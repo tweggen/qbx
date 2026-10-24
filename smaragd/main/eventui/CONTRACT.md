@@ -123,7 +123,8 @@ the empty state), `event_editor_open.qxa` (double-click on an EVENT clip opens
 the dock through the REAL gesture, the fixed 6 px row height, and the vertical
 key scrollbar reaching both ends of 0-127), `action_roundtrip_test` rows for
 `virtual-key` / `drag-note` / `scroll-event-editor-keys` / `double-click-clip`
-/ `assert-event-editor`.
+/ `assert-event-editor` / `event-editor-double-click`, and
+`event_editor_delete.qxa` (invariant 19).
 
 Known debt:
 - **CC lanes are draw-one-point, not curve editing.** A press in a CC lane
@@ -268,3 +269,34 @@ Known debt:
     dock in this app (the virtual keyboard) cannot be shadowed by, and that
     the shortcut and the button call the SAME slot so there is only one
     behaviour to verify.
+19. **No modes: Delete/Backspace remove notes, a double-click creates one
+    (QBX-221).** The Select / Draw / Erase tool buttons are gone, and with them
+    `SEventEditorView::Tool` and `describe()`'s `tool=` field. A press selects,
+    moves or resizes; a DOUBLE-click on EMPTY note grid creates a note there
+    (snapped, one grid division, selected, one `add-note`) — on a note or in a
+    lane it is a second press, which is QWidget's own default.
+
+    **Delete and Backspace belong to the editor while the focus is anywhere in
+    it, and never reach the clip.** The arranger's "Remove sample" binds both
+    keys as a WINDOW shortcut, and Qt fires a window shortcut BEFORE any
+    `keyPressEvent` unless the focus widget or an ancestor accepts the
+    `ShortcutOverride`: Delete in the editor used to remove the clip being
+    edited. `SEventEditorDock::event()` accepts the override for the bare
+    keys (Shift allowed; Ctrl/Alt/Meta left alone), which covers every
+    focusable child of the dock since a `ShortcutOverride` propagates to the
+    parents; `keyPressEvent()` hands a key a toolbar child did not use on to
+    the view. The view CONSUMES both keys even with nothing selected, and the
+    dock's forward carries a re-entrancy guard — two further lines behind the
+    override that no case can tell apart, recorded as such in
+    `event_editor_delete.qxa`'s header.
+
+    Gated through the SHORTCUT MAP, not around it: `event-editor-key`
+    (`SPianoRollView::tkPressKey`) now offers every press as a
+    `ShortcutOverride` first and, when nobody accepts it, fires the enabled
+    window `QAction` that binds the key instead of delivering the press —
+    `shortcutThatWouldWin()` approximates Qt's private matcher by enabled
+    state, window and context, and deliberately ignores visibility because a
+    headless run never shows the window. Sabotaging the dock's override fails
+    the case with the clip gone; the same sabotage with the old direct-send
+    seam passes, which is how the defect went unseen. The forward from a
+    toolbar child is hand-verification only (the seam presses keys on the view).

@@ -603,6 +603,12 @@ public:
     //                           separate presses (two) — QBX-203.
     bool eventEditorKey( const QString &clipPath, const QString &keyName,
                          int repeats );
+    //   eventEditorDoubleClick — a REAL double-click on the piano roll's note
+    //                           grid at (tick, key), which creates a note on
+    //                           empty grid (QBX-221: the editor has no Draw
+    //                           mode any more).
+    bool eventEditorDoubleClick( const QString &clipPath, qint64 tick,
+                                 int key );
     bool virtualKey( int key, double velocity, qint64 durationTicks );
     //   virtualKeyHold / Release — PLAY the virtual keyboard rather than write
     //   into a clip (proposal 21 L2): a note-on / note-off pair on the computer

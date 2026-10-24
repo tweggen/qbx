@@ -5265,6 +5265,19 @@ bool SMainWindow::eventEditorKey( const QString &clipPath,
     return roll->tkPressKey( keyName, repeats );
 }
 
+bool SMainWindow::eventEditorDoubleClick( const QString &clipPath,
+                                          qint64 tick, int key )
+{
+    if( !eventEditor_ ) return false;
+    ensureArranger_();
+    linkEventEditorAxis();
+
+    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    SPianoRollView *roll = eventEditor_->pianoRoll();
+    if( !roll ) return false;
+    return roll->tkDoubleClick( tick, key );
+}
+
 int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )
 {
     if( !eventEditor_ ) return -1;

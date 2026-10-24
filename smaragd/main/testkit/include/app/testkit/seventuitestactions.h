@@ -110,8 +110,35 @@ public:
 
 private:
     QString clip_;
-    QString key_;        // left | right | up | down | delete | select-all
+    QString key_;  // left | right | up | down | delete | backspace | select-all
     int     repeats_ = 0;
+};
+
+/**
+ * `event-editor-double-click` - a REAL double-click on the piano roll's note
+ * grid at (`tick`, `key`), content ticks (QBX-221).
+ *
+ * The editor has no Draw mode: a double-click on EMPTY grid creates a note of
+ * one grid division there, selected, through `add-note`; on a note it is a
+ * second press. The verb sends press / release / double-click / release, the
+ * sequence Qt itself delivers, so `mouseDoubleClickEvent` is what runs.
+ */
+class SEventEditorDoubleClickAction : public SAction
+{
+public:
+    SEventEditorDoubleClickAction() = default;
+
+    QString name() const override
+        { return QStringLiteral( "event-editor-double-click" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString clip_;
+    qint64  tick_ = 0;
+    int     key_  = 60;
 };
 
 class SDragNoteAction : public SAction

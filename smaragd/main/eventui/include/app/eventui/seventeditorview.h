@@ -63,11 +63,6 @@ public:
     void setGrid( const QString &grid );
     const QString &grid() const { return grid_; }
 
-    /** Editing tool. Draw inserts, Erase removes, Select moves/resizes. */
-    enum class Tool { Select, Draw, Erase };
-    void setTool( Tool t ) { tool_ = t; }
-    Tool tool() const { return tool_; }
-
     /** Re-resolve the clip and repaint. Cheap, idempotent, re-entrancy safe. */
     virtual void refresh();
 
@@ -136,7 +131,6 @@ protected:
     QList<int>      clipPath_;
     SEventTimeAxis *axis_ = nullptr;
     QString         grid_ = QStringLiteral( "1/16" );
-    Tool            tool_ = Tool::Select;
 };
 
 /**
