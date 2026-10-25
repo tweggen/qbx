@@ -1584,7 +1584,15 @@ frame 0 is the DEVICE START, not the locator position playback began from.**
   reported as though the DSP had moved: `0.4823` against `[0.5401, 0.5735]` on
   a 4096-frame window (`plan/STATE.md`, 2026-08-22) and `0.272503` against
   `[0.350061, 0.427853]` on a 2048-frame one (CI run 40100984951, 2026-10-24).
-  Both are `golden * sqrt((N - 1024) / N)` exactly. The sweep that found them
+  Both are close to `golden * sqrt((N - 1024) / N)` and NEITHER is that
+  number: for the 2048-frame case the form gives 0.277150 against a measured
+  0.272503. The displaced half is measured WHERE IT LANDS, and a decay
+  envelope is still moving there, so the identity is
+  `rms(the surviving half, at its own position) * sqrt((N - 1024) / N)` —
+  0.385377 * sqrt(1/2) = 0.272503 to six digits. The difference is 0.0046,
+  inside the band's lower half, which is why the approximation passed for a
+  derivation for two months and got a set of bounds sized by arithmetic
+  instead of by measurement (QBX-224). The sweep that found them
   checked all 30 capture cases; the only other one reading inside the first
   block is `automation_write_pass`, where the window is 48000 frames so one
   block costs 1 % of the RMS against a band spanning a factor of 5.9 — annotated
@@ -1597,6 +1605,26 @@ frame 0 is the DEVICE START, not the locator position playback began from.**
   onset moved, asserts the anchored window did NOT, and carries an
   `expectReject` on the OLD unanchored window — which measures 0.272503, the
   CI failure pinned to the digit.
+- **AN INJECTED SLIP DOES NOT REPLACE THE REAL ONE'S BUDGET, IT ADDS TO IT**
+  (QBX-224, and this is the correction to the bullet above). Section (c) was
+  first written with the injection's own magnitude as its bound — onset
+  `maxFrame="1024"`, window at 1024 — while the aligned sections already spend
+  that same 1024 on the real slip. Its tolerance for real slip was therefore
+  zero, and it reddened CI about one run in six: onset 2048 - 63 = 1985
+  against a bound of 1024, and the window back to half silence at 0.272503,
+  reaching the very number the `expectReject` pins. Size such a section at
+  `injected + one block`.
+- **Dump ONE capture TWICE to make the stack deterministic.**
+  `capturedAudio()` is a read, so two `dump-playback-capture` elements after a
+  single pass differ in exactly one thing. A file with `leadSilenceFrames`
+  twice the tolerated block is bit-for-bit the shape of the singly-injected
+  file WHEN THE CAPTURE ITSELF SLIPPED, so putting the singly-injected
+  section's own bounds on it asks "would that section survive a real slip?"
+  on every run and on any box. That is section (d), and it is the only thing
+  holding (c)'s bounds: on an aligned capture both of (c)'s corrected bounds
+  still pass when reverted (onset 961 is under 1024 as well as 2048, and the
+  old window moves 0.8 % against a 10 % band), so (c) states the rule and (d)
+  is the gate.
 - **Never assert the recording's FRAME COUNT.** A case that stops on
   `wait-playhead` gets "however many blocks were pumped before the stop took
   effect" — 47 blocks locally and 48 on the CI runner for one case. It is a
