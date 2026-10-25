@@ -81,4 +81,28 @@ private:
     QString trackPath_ = QStringLiteral( "0" );
 };
 
+/**
+ * `assert-track-detail-dock` — WHAT THE LIVE TRACK DETAIL DOCK SHOWS (QBX-231).
+ *
+ * Unlike assert-track-detail-layout, which builds a panel for a path, this
+ * reads the dock the main window owns, so what is asserted is what the
+ * production wiring put there: the track the ACTIVE tab's selection names,
+ * its qualified path, and its insert rows. `contains` / `absent` are
+ * substrings of SMainWindow::describeTrackDetailDock().
+ */
+class SAssertTrackDetailDockAction : public SAction
+{
+public:
+    SAssertTrackDetailDockAction() {}
+    SApplyResult apply( SProject *project ) override;
+    QString name() const override
+    { return QStringLiteral( "assert-track-detail-dock" ); }
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString contains_;
+    QString absent_;
+};
+
 #endif // _SDETAILPANETESTACTIONS_H_

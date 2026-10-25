@@ -33,4 +33,11 @@ void stimeline::submitActive( SAction *a )
     submitFor( activeArranger(), a );
 }
 
+void stimeline::submitRooted( SAction *a, const QString &rootName )
+{
+    if( !a ) return;
+    a->setPathRoot( rootName );
+    SApplication::app().submitAction( a );
+}
+
 const char *stimeline::rootNameDoc() { return "SStdMixerView::rootName()"; }

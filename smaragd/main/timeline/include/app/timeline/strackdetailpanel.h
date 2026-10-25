@@ -32,6 +32,7 @@ public:
 
     // Set the track to display (nullptr hides content)
     void setTrack(STrack *track);
+    STrack *track() const { return currentTrack_; }
 
     // Size constraint (50% of screen, max 450px; small when empty)
     QSize sizeHint() const override;

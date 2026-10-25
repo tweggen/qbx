@@ -1,6 +1,7 @@
 #ifndef SSUBMIT_H
 #define SSUBMIT_H
 
+class QString;
 class SAction;
 class SStdMixerView;
 
@@ -31,6 +32,12 @@ void submitActive( SAction *a );
 /** Root `a` at `v`'s arrangement, then submit it. For the rare caller that
  *  holds a specific view rather than acting through the active one. */
 void submitFor( SStdMixerView *v, SAction *a );
+
+/** Root `a` at the arrangement NAMED `rootName` (empty = the master), then
+ *  submit it. For a widget that knows which tree its object lives in -- the
+ *  track detail dock asks splacements::specOf() -- rather than assuming it is
+ *  the tree the active tab edits (QBX-231). */
+void submitRooted( SAction *a, const QString &rootName );
 
 /** The arrangement name `v` edits, or empty for the master. */
 const char *rootNameDoc();   // documentation anchor only; see SStdMixerView::rootName()

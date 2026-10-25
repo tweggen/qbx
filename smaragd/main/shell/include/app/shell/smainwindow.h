@@ -13,6 +13,7 @@
 #include <vector>
 // #include <qpopupmenu.h>
 
+class SObject;
 class SProject;
 class QAction;
 class QLabel;
@@ -460,6 +461,15 @@ public:
     /// button's signal reaching the project property; false for an unknown
     /// section or a path that names no track.
     QString describeTrackDetailSections( const QString &trackPath );
+
+    /// QBX-231: the LIVE Track Detail dock, not a panel built for a path --
+    /// `track=<name>|path=<splacements::specOf>|rows=<insert rows>` and, with
+    /// a row, `|slot0=<SPluginEffectStrip::describeSlot(0)>`, whose own
+    /// `trackPath=` is the address the strip's gestures submit to. What it
+    /// shows is whatever the active tab's selection put there. The FIRST call
+    /// attaches the dock (a scripted run never reaches the attach sites), so a
+    /// case calls it once before the gestures whose following it asserts.
+    QString describeTrackDetailDock();
     bool clickTrackDetailSection( const QString &trackPath, const QString &section );
 
     /// Every QBX-102 font mount, read off REAL widgets:
@@ -1067,10 +1077,14 @@ private:
 
     // Track detail dock, docked below the extern file list in the left area.
     // Like the file list it is persistent and project-independent; its content
-    // follows the current mixer's selected track via trackDetailConn_.
+    // follows the selected track of the ACTIVE TAB's root via trackDetailConn_
+    // (QBX-231: it followed the master's alone, so a track selected in an
+    // arrangement tab never reached it), re-pointed by trackDetailRootConn_.
     QDockWidget       *qDockTrackDetail_  = nullptr;
     STrackDetailPanel *trackDetailPanel_  = nullptr;
     QMetaObject::Connection trackDetailConn_;
+    QMetaObject::Connection trackDetailRootConn_;
+    void followTrackDetailRoot_( SObject *root );
 
     // The log dock (proposal 24). Its objectName is what lets the existing
     // saveState/restoreState persistence restore its visibility and placement,

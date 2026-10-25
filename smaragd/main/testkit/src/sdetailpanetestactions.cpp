@@ -121,6 +121,46 @@ bool SDoubleClickControlAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+SApplyResult SAssertTrackDetailDockAction::apply( SProject * )
+{
+    SMainWindow *win = mainWindow();
+    if( !win ) {
+        qWarning() << "assert-track-detail-dock: no main window";
+        return { false, nullptr };
+    }
+    const QString desc = win->describeTrackDetailDock();
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning() << "assert-track-detail-dock FAILED: expected" << contains_
+                   << "in" << desc;
+        return { false, nullptr };
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning() << "assert-track-detail-dock FAILED: did not expect"
+                   << absent_ << "in" << desc;
+        return { false, nullptr };
+    }
+    qDebug() << "assert-track-detail-dock: OK -" << desc;
+    return { true, nullptr };
+}
+
+void SAssertTrackDetailDockAction::writeXml( QDomElement &elem ) const
+{
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertTrackDetailDockAction::readXml( const QDomElement &elem, int )
+{
+    contains_ = elem.attribute( "contains" );
+    absent_   = elem.attribute( "absent" );
+    return true;
+}
+
+static const bool s_reg_assert_track_detail_dock = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-track-detail-dock" ),
+        []{ return new SAssertTrackDetailDockAction; } ), true );
+
 static const bool s_reg_assert_track_detail_layout = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-track-detail-layout" ),

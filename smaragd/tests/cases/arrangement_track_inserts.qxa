@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="arrangement_track_inserts">
+
+  <!-- QBX-231. A TRACK INSIDE AN ASSET CAN BE GIVEN INSERTS, from the asset's
+       own arranger.
+
+       The author's report: tracks extracted into an asset, the asset opened
+       in its own arranger by double-clicking a placement, an EQ added to one
+       of its tracks - and nothing appeared, in that arranger's mixer or in
+       Track Detail. Two defects, both of them "the master is the only root":
+
+       1. SPluginEffectStrip::trackPathString() answered pathOf() against the
+          MASTER root. A track in an arrangement is not reachable from there,
+          so the path came back "" and every row gesture - Add Effect, Add
+          Instrument, Remove, Bypass, Edit - returned early without a word.
+          It now asks splacements::specOf(), which qualifies the path with
+          the root that holds the track ("Drums:0"). Sections 1 and 2 pin it
+          through plugin-row-command, which builds the SAME strip class the
+          mixer pane and the dock mount; Add Effect itself goes through a
+          modal plugin browser, which no headless case may open, but it
+          submits to the very trackPathString() the row commands use.
+
+       2. Track Detail followed the master mixer's selectedTrackChanged only.
+          It now follows the ACTIVE TAB's root, as the mixer pane does
+          (proposal 48 D12). Section 3 selects a track in the Drums tab and
+          reads the LIVE dock; section 4 switches back to the master and
+          sees the dock follow.
+
+       Section 5 is the dock's own fader, which addressed its track the same
+       master-only way and fell back to a NON-UNDOABLE model poke for an
+       arrangement track: the reset is asserted to be an undoable step. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <extract-arrangement trackPaths="0;1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="384000"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+
+    <insert-plugin trackPath="Drums:0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.stereoskew"
+                   name="Smaragd Test Stereo Skew" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- ========== 1. THE ROW ADDRESSES THE ARRANGEMENT ================ -->
+    <assert-plugin-strip trackPath="Drums:0" compact="1" slotCount="1"
+                         slotIndex="0" contains="|trackPath=Drums:0|"/>
+
+    <!-- ========== 2. A ROW COMMAND REACHES THE MODEL ================== -->
+    <!-- Bypass from the row's menu item. Before the fix the strip's path
+         was "", onPluginBypassToggled() returned before submitting, and the
+         slot stayed live. -->
+    <plugin-row-command trackPath="Drums:0" slotIndex="0" command="bypass"/>
+    <assert-plugin-strip trackPath="Drums:0" compact="1" slotIndex="0"
+                         contains="bypass=1"/>
+    <!-- ...as an UNDOABLE action, which a direct slot poke would not be. -->
+    <undo count="1"/>
+    <assert-plugin-strip trackPath="Drums:0" compact="1" slotIndex="0"
+                         contains="bypass=0"/>
+
+    <!-- ========== 3. TRACK DETAIL FOLLOWS THE ARRANGEMENT TAB ========= -->
+    <!-- The first read ATTACHES the dock: a scripted run never reaches the
+         attach sites. Every read after it sees only what the signals did,
+         so it has to come before the gestures it is meant to watch. -->
+    <assert-track-detail-dock contains="|rows="/>
+    <open-arrangement-tab name="Drums"/>
+    <select-track trackPath="0"/>
+    <assert-track-detail-dock contains="|path=Drums:0|rows=1|"/>
+    <assert-track-detail-dock contains="|trackPath=Drums:0|"/>
+
+    <!-- ========== 4. ...AND BACK TO THE MASTER ======================== -->
+    <!-- The master's lane 0 is the asset's placement lane, with no inserts. -->
+    <activate-tab name="Arrangement"/>
+    <select-track trackPath="0"/>
+    <assert-track-detail-dock contains="|path=0|rows=0"/>
+    <activate-tab name="Drums"/>
+    <assert-track-detail-dock contains="|path=Drums:0|rows=1|"/>
+
+    <!-- ========== 5. THE DOCK'S FADER, ROOTED THE SAME WAY ============ -->
+    <set-track-volume trackPath="Drums:0" volume="-6"/>
+    <double-click-control control="track-volume" trackPath="Drums:0"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="0"/>
+    <undo count="1"/>
+    <assert-track-volume trackPath="Drums:0" volumeDb="-6"/>
+
+    <!-- ========== 6. REMOVE, FROM THE ROW ============================= -->
+    <plugin-row-command trackPath="Drums:0" slotIndex="0" command="remove"/>
+    <assert-plugin-strip trackPath="Drums:0" compact="1" slotCount="0"/>
+  </actions>
+
+</SActionScript>
