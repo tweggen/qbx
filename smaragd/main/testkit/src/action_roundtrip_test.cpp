@@ -232,6 +232,11 @@ const Fixture kFixtures[] = {
       "<drag-track trackPath='1,0' targetRow='2' mode='before'/>" },
     { "assert-track-selection",
       "<assert-track-selection paths='0;1,0' primary='1,0'/>" },
+    // assert-selection writes root/count only when the fixture set them
+    // (QBX-230), so the fixture carries BOTH -- an absent-on-both-sides
+    // attribute is compared by neither side and would gate nothing.
+    { "assert-selection",
+      "<assert-selection paths='Drums:0,0;Drums:0,1' root='Drums' count='2'/>" },
     { "click-lane",
       "<click-lane trackPath='1,0' time='48000' modifiers='ctrl+shift'/>" },
 

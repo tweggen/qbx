@@ -85,6 +85,32 @@ public:
     void addSelectedSLink( SLink *lk, const QString &root );
     void clearSelection( const QString &root );
     const SSelectionList &selectionListFor( const QString &root ) const;
+
+    // Every root's `current` must be null or a MEMBER of that root's own list.
+    // Pointer comparisons only, so the question is answerable on a root that
+    // holds a stale entry -- which is what makes it the oracle for the
+    // `current` half of QBX-230's purge: emptying the lists and leaving a
+    // per-root `current` on the freed link breaks exactly this, and breaks it
+    // without anything having to dereference the dead pointer to notice.
+    // Names the first offending root in *offending when it answers false.
+    bool selectionCurrentIsConsistent( QString *offending = nullptr ) const;
+
+    // Is this link in ANY root's selection, not just the active one? The
+    // destroyed() wire is per LINK and not per root (see addSelectedSLink), so
+    // an unselect may only drop that wire once no root carries the link any
+    // more -- dropping it while another root still holds the link strands that
+    // root with a pointer nothing will ever purge, which is QBX-230 by hand.
+    bool isSLinkSelectedAnywhere( const SLink *lk ) const;
+
+    // Drop EVERY root's selection. A project swap deletes the whole object
+    // graph, so every pointer in `selections_` belongs to the document being
+    // closed -- while `selections_` is keyed by arrangement NAME, which the
+    // next document re-registers. SProject::clearArrangements' own comment
+    // states the rule this answers: anything held in a by-name registry rather
+    // than in the object tree has to be dropped explicitly, or it is inherited
+    // by the document being opened (proposal 09 M1). QBX-230.
+    void clearAllSelections();
+
     bool isSelectionEmpty() const;
     bool isSLinkSelected( SLink * ) const override;
     const SSelectionList &getSelectionList() const;
@@ -532,6 +558,17 @@ private slots:
     void resumeLiveAfterRender();
 
 private:
+    // Remove a DYING link from every root, by pointer value, touching nothing
+    // on the object itself (docs/PHASE3_SAFETY_ADDENDUM.md states that rule
+    // for SObject::dependentLinks_). QBX-230: the active root cannot be
+    // trusted in a destroyed() handler -- destroying an arrangement root fires
+    // SViewTabs::onRootDestroyed, which removes the tab and re-points the
+    // active root BEFORE the root's own children announce their destruction.
+    void purgeDestroyedLink( SLink *lk );
+
+    // Recompute the ACTIVE root's `current` from its own list, the way
+    // unselectSLink has always done it: the single selected link, or null.
+    void syncCurrentForActiveRoot();
     // The live monitor drives metering and reads the master width; both are
     // app state it has no business duplicating.
     friend class SLiveMonitor;
@@ -547,6 +584,10 @@ private:
     // until the next unrelated live-plan rebuild (e.g. a transport stop).
     // See setCurrentProject() for the connect() call.
     void onProjectPropertyChangedForLive( const QString &key, const QVariant &value );
+    // An unregistered arrangement takes its selection entry with it.
+    // `selections_` is keyed by arrangement NAME, so an entry left behind is
+    // inherited by the next root registered under that name. QBX-230.
+    void onArrangementUnregistered( const QString &name );
     // Proposal 38 gate 3: the media cache's root/cap and smediadrop's
     // placement hook. See the definition for why the hook exists at all.
     void initMediaLayer();

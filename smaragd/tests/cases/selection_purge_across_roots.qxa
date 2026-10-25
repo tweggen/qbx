@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-230. A DESTROYED SLink IS PURGED FROM EVERY SELECTION ROOT, not just the
+  active one.
+
+  THE CRASH THIS GATES. Reported from a Windows run: SIGSEGV inside
+  QObject::disconnect, reached from SApplication::unselectSLink
+  (shell/src/sapplication.cpp) by a plain mouse press in the mixer. The frame
+  that settles it is unselectSLink's own: the fault is at the
+  QObject::disconnect call, which sits INSIDE `if( wasFound )`, and
+  QList::removeOne compares pointer values without dereferencing. So removeOne
+  had returned true: the selection list genuinely held that pointer, and the
+  object behind it was already freed. The list had outlived the SLink.
+
+  WHY THE PURGE MISSED IT, and why that was not bad luck. Selection is PER
+  ROOT (proposal 09 section 3): one SSelectionList per arrangement, each
+  persisting while its root is not the active one. But `addSelectedSLink`
+  connects the link's destroyed() signal ONCE, with no record of which root it
+  was selected under, and the handler removed it from `selectionList_` alone,
+  which is the ACTIVE root's list. Destroying an arrangement root fires
+  SViewTabs::onRootDestroyed (shell/src/sviewtabs.cpp), which calls removeTab,
+  which makes QTabWidget emit currentChanged, which calls
+  setActiveSelectionRoot. Qt emits destroyed() BEFORE deleting an object's
+  children, so the root's own handler re-points the active root first and the
+  children it owns then announce their deaths into the WRONG list:
+
+      ~QObject(root)
+        emit destroyed()  ->  onRootDestroyed  ->  removeTab
+                                  ->  setActiveSelectionRoot( OTHER )
+        delete children   ->  each SLink's destroyed()
+                                  ->  removeOne on the wrong list, purging nothing
+
+  So the stranding is BY CONSTRUCTION every time a root holding a selection is
+  destroyed, which is why it reproduced on opening a project rather than
+  appearing as a rare race.
+
+  WHAT EACH SECTION PINS, AND THE COUNT ATTRIBUTE. `assert-selection` grew
+  `root` and `count` for this case. `root` is needed because the claim is
+  about a root that is NOT active, and the verb deliberately read the active
+  list only. `count` is needed because the verb's other half converts the
+  links to paths, which DEREFERENCES every one of them: on the stale entry
+  this case is here to catch, that is undefined behaviour, so a path
+  conversion could never be the oracle. A size is answerable from pointer
+  values alone, so it still reports honestly on a list holding a freed
+  pointer. That is the whole reason the gate counts rather than describes.
+
+  FOUR DEFENCES, AND THE SABOTAGE TABLE THAT SAYS WHICH ARE PINNED. Each was
+  reverted on its own, rebuilt, and run against this case plus select_all_scope,
+  tabs_selection_scoped, deselect_all_scope, tabs_edit_in_arrangement and
+  action_roundtrip:
+
+    S1  purgeDestroyedLink purges only the ACTIVE root (the original defect)
+          GATED
+    S2  addSelectedSLink drops its "if not already there" guard
+          GATED
+    S3  the purge updates the lists but leaves each root's `current`
+          GATED, but only because of the one-link block in section (a);
+          it passed the whole case before that block existed, since with two
+          links selected a root's `current` is null by construction
+    S5  SApplication stops listening to SProject::arrangementUnregistered
+          GATED by section (c)
+    S4  setCurrentProject stops calling clearAllSelections()
+          NOT GATED, and no .qxa can gate it: a load goes INTO the same
+          SProject, so setCurrentProject is never called with a different
+          pointer, and the real path (SMainWindow::closeProject, which deletes
+          the project and builds a new one) has no verb. The defence stays in
+          regardless: the sabotage shows only that no SCRIPT reaches it, not
+          that anything else covers it.
+
+  WHAT SECTION (c) ACTUALLY REPRODUCES, which is not what it was written for.
+  It was meant to strand a FREED link through the reporter's save/load path. It
+  does not, and the fix itself is the proof: a destroyed link is necessarily
+  purged by purgeDestroyedLink, so an entry that SURVIVES a load belongs to a
+  link that was never destroyed. clearArrangements() only removeRef()s, and an
+  open arrangement tab holds a ref, so the old root and its clips stay alive
+  while the name stops denoting them. Measured before the arrangementUnregistered
+  listener existed: the "Drums" entry still held the previous document's link,
+  resolving to the empty path "Drums:" (empty because the link is no longer
+  reachable in the registered tree). Stale state, therefore, not a
+  use-after-free. That is a second, lesser defect of the same family, and S5 is
+  its fix.
+
+-->
+<SActionScript version="1" name="selection_purge_across_roots">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The master: one track, one clip. -->
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Drums: one track, two clips. A different shape from the master's, so
+         a path resolved against the wrong root cannot accidentally agree. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav"
+                timePos="192000"/>
+
+    <!-- ===== (a) A LINK DESTROYED WHILE ITS ROOT IS NOT ACTIVE ==========
+         Select both of Drums' clips with Drums active, then make the MASTER
+         active, so Drums' list is the inactive one, and destroy one of the
+         selected clips. The purge must still find it. -->
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+    <select-all/>
+    <assert-selection paths="Drums:0,0;Drums:0,1"/>
+    <assert-selection root="Drums" count="2"/>
+
+    <activate-tab name="Arrangement"/>
+    <!-- Drums keeps its selection while inactive: that is the per-root design,
+         and it is also exactly what makes the stranding possible. Asserted so
+         a future change that simply dropped inactive selections could not
+         pass this case by making the bug unreachable. -->
+    <assert-selection root="Drums" count="2"/>
+    <!-- The master root is EMPTY, and measured so: `add-sample` does not
+         select the clip it adds. The element is the other half of the claim
+         above – Drums holds two while the master, now active, holds none, so
+         the two roots are genuinely separate lists and not one shared one. -->
+    <assert-selection root="" count="0"/>
+
+    <!-- `remove-sample` ends in `delete clipLink`
+         (objects/cut/src/sremovesampleaction.cpp), so the SELECTED SLink is
+         destroyed here, with the master active. On the pre-fix binary the
+         handler removed it from the MASTER's list, found nothing, and left
+         Drums holding a freed pointer. -->
+    <remove-sample trackPath="Drums:0" clipIndex="1" timePos="192000"/>
+    <assert-selection root="Drums" count="1"/>
+
+    <remove-sample trackPath="Drums:0" clipIndex="0" timePos="0"/>
+    <assert-selection root="Drums" count="0"/>
+
+    <!-- ONE link selected, then destroyed. This shape is here because the two
+         removals above cannot reach the `current` half of the purge: with TWO
+         links selected a root's `current` is null by construction
+         (addSelectedSLink nulls it as soon as a second link arrives), so a
+         purge that updated the lists and left every `current` untouched would
+         satisfy every assertion so far. Measured: that sabotage passed the
+         whole case until this block existed. With exactly one link selected
+         `current` IS that link, so destroying it must move both the list and
+         `current`, and the pointer-value invariant that assert-selection
+         checks for every root is what notices if it does not. -->
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <activate-tab name="Drums"/>
+    <select-all/>
+    <assert-selection root="Drums" count="1"/>
+    <remove-sample trackPath="Drums:0" clipIndex="0" timePos="0"/>
+    <assert-selection root="Drums" count="0"/>
+    <!-- Back to the master before (b): `set-selection` resolves its paths
+         against the ACTIVE root, and (b)'s "0,0" means the master's clip. -->
+    <activate-tab name="Arrangement"/>
+
+    <!-- ===== (b) A DUPLICATE IS NOT APPENDED ===========================
+         `addSelectedSLink`'s comment said "if not already there" from the
+         first commit and the code did not check. `set-selection` is the
+         unguarded caller: SApplication::setSelectionFromPathsFor loops over
+         the paths and adds each, with no isSLinkSelected guard of the kind
+         addSelectionFromPaths carries. Two identical paths therefore appended
+         the same link twice AND connected it twice, and on destruction the
+         first purge's disconnect dropped BOTH connections, because Qt skips a
+         connection disconnected during emission. The second copy was then a
+         dangling pointer nothing would ever purge.
+
+         Note the separator: `set-selection` splits its paths on "|", while
+         `assert-selection` splits on ";". Two verbs, two spellings. -->
+    <set-selection paths="0,0|0,0"/>
+    <assert-selection root="" count="1"/>
+    <assert-selection paths="0,0" root=""/>
+
+    <!-- ===== (c) THE REPORTER'S SCENARIO: OPENING A SAVED PROJECT =======
+         A load runs SProject::clearArrangements, which unregisters every
+         arrangement and drops the registry's reference: "may reach 0 ->
+         deleteLater". So the old roots die on a LATER event loop turn, after
+         the new document's arrangements have been registered under the same
+         names, and that deferred destruction is what runs the cascade in this
+         header. `wait-ms` is what lets the deleteLater queue run; without it
+         the case would assert before anything had been destroyed and would
+         pass on the pre-fix binary too.
+
+         load-project REPLACES the project, so this is the LAST section and
+         the final assertions below describe the FIXTURE, not what the
+         sections above built. -->
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <select-all/>
+    <assert-selection root="Drums" count="1"/>
+
+    <save-project
+        path="../../build/test-output/selection_purge_across_roots/spar.qxp"/>
+    <load-project
+        path="../../build/test-output/selection_purge_across_roots/spar.qxp"/>
+    <wait-ms ms="400"/>
+
+    <!-- THE CLAIM: nothing the closed document held survives in any root's
+         list. Drums is the root whose links were selected; the master is
+         checked too, because the cascade moves the active root onto it and a
+         fix that merely swapped which single root gets purged would leave one
+         of these two non-empty. -->
+    <assert-selection root="Drums" count="0"/>
+    <!-- THE MASTER ROOT IS NOT ASSERTED HERE, and that is a gap rather than
+         an oversight. Drums empties because `clearArrangements()` unregisters
+         the name and SApplication now listens to arrangementUnregistered. No
+         signal says the same about the MASTER root: it is never unregistered,
+         and the document boundary that would clear it (setCurrentProject ->
+         clearAllSelections) does not fire, because load-project loads INTO
+         the same SProject. Measured after the load: the master entry still
+         holds one link, resolving to the empty path "" – alive but orphaned,
+         so stale state and not a use-after-free. Asserting count="1" would
+         pin that staleness as intended, and asserting 0 fails, so the case
+         asserts neither and the gap is filed instead. -->
+  </actions>
+
+  <assertions>
+    <!-- The FIXTURE's shape (see section (c)): the master's one track. -->
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

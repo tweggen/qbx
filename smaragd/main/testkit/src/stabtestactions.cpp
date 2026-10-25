@@ -74,7 +74,36 @@ SApplyResult SAssertSelectionAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
     SApplication &app = SApplication::app();
-    const QString root = app.activeSelectionRoot();
+    const QString root = hasRoot_ ? root_ : app.activeSelectionRoot();
+
+    // EVERY root, before anything else and whatever this element asserts: a
+    // `current` left pointing at a link its own list no longer holds is a
+    // cross-root defect, and an assertion about selection is the cheapest
+    // place to notice it. Pointer comparisons only -- see the SApplication
+    // declaration. QBX-230.
+    QString badRoot;
+    if( !app.selectionCurrentIsConsistent( &badRoot ) ) {
+        qWarning() << "assert-selection FAILED: root"
+                   << ( badRoot.isEmpty() ? QStringLiteral( "<master>" ) : badRoot )
+                   << "has a `current` that its own selection list does not"
+                      " hold -- a destroyed link was dropped from the list but"
+                      " left in `current`";
+        return { false, nullptr };
+    }
+
+    // SIZE FIRST, and it is the only check when `paths` is absent: see the
+    // header. A count needs no dereference, so it still answers on a root
+    // holding a stale pointer -- which is the whole point for QBX-230.
+    if( hasCount_ ) {
+        const int actualCount = app.selectionListFor( root ).count();
+        if( actualCount != count_ ) {
+            qWarning() << "assert-selection FAILED: root"
+                       << ( root.isEmpty() ? QStringLiteral( "<master>" ) : root )
+                       << "holds" << actualCount << "link(s), expected" << count_;
+            return { false, nullptr };
+        }
+        if( paths_.isEmpty() ) return { true, nullptr };
+    }
 
     QStringList actual;
     for( const QList<int> &p : app.getCurrentSelectionPathsFor( root ) )
@@ -97,11 +126,17 @@ SApplyResult SAssertSelectionAction::apply( SProject *project )
 void SAssertSelectionAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "paths", paths_ );
+    if( hasRoot_ )  elem.setAttribute( "root", root_ );
+    if( hasCount_ ) elem.setAttribute( "count", count_ );
 }
 
 bool SAssertSelectionAction::readXml( const QDomElement &elem, int )
 {
-    paths_ = elem.attribute( "paths" );
+    paths_    = elem.attribute( "paths" );
+    hasRoot_  = elem.hasAttribute( "root" );
+    root_     = elem.attribute( "root" );
+    hasCount_ = elem.hasAttribute( "count" );
+    count_    = elem.attribute( "count", "0" ).toInt();
     return true;
 }
 

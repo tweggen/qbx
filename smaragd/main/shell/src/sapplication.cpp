@@ -88,6 +88,15 @@ void SApplication::setCurrentProject( SProject *cp )
     // delete - the File -> Close SIGSEGV in appendTrackSignature. Guarded on a
     // real change: a load calls this a second time with the same project.
     if( currentProject_ != cp && liveMonitor_ ) liveMonitor_->projectAboutToChange();
+    // EVERY ROOT'S SELECTION BELONGS TO THE PROJECT BEING LEFT. `selections_`
+    // is keyed by arrangement NAME, outside the object tree, so without this
+    // the next document inherits the previous one's entries under the names it
+    // re-registers -- freed SLink pointers included. SProject's own
+    // clearArrangements() states the rule for registries of this kind
+    // (proposal 09 M1). This is the SECOND defence: purgeDestroyedLink()
+    // already removes each link as it dies, and this removes the whole
+    // registry at the document boundary. QBX-230.
+    if( currentProject_ != cp ) clearAllSelections();
     currentProject_ = cp;
     // Push the project's sample rate / candidate set into the engine. For a
     // loaded project this runs again after the loader has populated these from
@@ -116,6 +125,24 @@ void SApplication::setCurrentProject( SProject *cp )
     // Qt::UniqueConnection silently refuse the connection, so nothing ever
     // watched the property and toggling the metronome off mid-playback did
     // not stop the click).
+    // AN UNREGISTERED ARRANGEMENT TAKES ITS SELECTION WITH IT, and a load is
+    // the case that matters: clearArrangements() unregisters every name and
+    // createObjects() then re-registers them, so an entry left behind is
+    // inherited by the NEXT root of the same name. Measured before this wire
+    // existed: after a save/load the "Drums" entry still held the previous
+    // document's link, which resolved to the empty path "Drums:" -- the link
+    // was alive but no longer reachable in the registered tree, because the
+    // open tab's addRef keeps the old root alive. Stale state, therefore, and
+    // not a use-after-free: a DESTROYED link would have been purged by
+    // purgeDestroyedLink() and the entry would have been empty.
+    // arrangementUnregistered has been declared and emitted since the first
+    // commit with nothing connected to it; this is its first listener.
+    // Pointer-to-member and not a lambda, or UniqueConnection silently
+    // refuses the connection -- see the next connect()'s comment. QBX-230.
+    if( cp )
+        connect( cp, &SProject::arrangementUnregistered, this,
+                 &SApplication::onArrangementUnregistered,
+                 Qt::UniqueConnection );
     if( cp )
         connect( cp, &SProject::propertyChanged, this,
                  &SApplication::onProjectPropertyChangedForLive,
@@ -267,6 +294,13 @@ bool SApplication::isSLinkSelected( SLink *lk ) const
  */
 void SApplication::addSelectedSLink( SLink *lk )
 {
+    if( !lk ) return;
+    // "IF NOT ALREADY THERE" IS NOW TRUE. The comment above said so from the
+    // first commit; the code did not check, and a duplicate was appended AND
+    // connected twice. On destruction the first purge's disconnect then
+    // dropped BOTH connections -- Qt skips a connection disconnected during
+    // emission -- stranding the second copy as a dangling pointer. QBX-230.
+    if( selectionList_->contains( lk ) ) return;
     // If this is not the first one in selection, we have no single 
     // currentSelectedSLink.
     if( selectionList_->count() ) {
@@ -275,8 +309,11 @@ void SApplication::addSelectedSLink( SLink *lk )
         currentSelectedSLink_ = lk;
     }
     selectionList_->append( lk );    
+    // UniqueConnection as well as the guard above: the guard covers one root,
+    // and the wire is per link across all of them.
     QObject::connect( lk, SIGNAL( destroyed() ), 
-                      this, SLOT( unselectSLink() ) );    
+                      this, SLOT( unselectSLink() ),
+                      Qt::UniqueConnection );
     selections_[ activeSelectionRoot_ ].current = currentSelectedSLink_;
 }
 
@@ -287,16 +324,99 @@ void SApplication::unselectSLink( SLink *lk )
 {
     bool wasFound = selectionList_->removeOne( lk );
     if( wasFound ) {
-        QObject::disconnect( 
-            lk, SIGNAL( destroyed() ), 
-            this, SLOT( unselectSLink() ) );        
-        if( selectionList_->count()==1 ) {
-            currentSelectedSLink_ = selectionList_->first();
-        } else {
-            currentSelectedSLink_ = NULL;
+        // THE LINK IS ALIVE HERE -- this is the user-level deselect, so the
+        // destroyed() wire has to go with it. But only once NO root carries
+        // the link any more: the wire is per link, not per root, so dropping
+        // it while another root still holds this link would strand that root
+        // with a pointer nothing purges (QBX-230, the same shape by hand).
+        if( !isSLinkSelectedAnywhere( lk ) ) {
+            QObject::disconnect( 
+                lk, SIGNAL( destroyed() ), 
+                this, SLOT( unselectSLink() ) );        
         }
-        selections_[ activeSelectionRoot_ ].current = currentSelectedSLink_;
+        syncCurrentForActiveRoot();
     }
+}
+
+bool SApplication::selectionCurrentIsConsistent( QString *offending ) const
+{
+    for( auto it = selections_.constBegin(); it != selections_.constEnd(); ++it ) {
+        // contains() compares pointer VALUES and never dereferences, which is
+        // the whole reason this check is safe on a stranded entry (QBX-230).
+        if( it->current && !it->list.contains( it->current ) ) {
+            if( offending ) *offending = it.key();
+            return false;
+        }
+    }
+    return true;
+}
+
+bool SApplication::isSLinkSelectedAnywhere( const SLink *lk ) const
+{
+    for( auto it = selections_.constBegin(); it != selections_.constEnd(); ++it )
+        if( it->list.contains( const_cast<SLink *>( lk ) ) ) return true;
+    return false;
+}
+
+void SApplication::syncCurrentForActiveRoot()
+{
+    if( !selectionList_ ) return;
+    currentSelectedSLink_ = ( selectionList_->count() == 1 )
+                          ? selectionList_->first()
+                          : NULL;
+    selections_[ activeSelectionRoot_ ].current = currentSelectedSLink_;
+}
+
+/**
+ * Remove a DYING link from EVERY root. See the header: a destroyed() handler
+ * may not consult the active root, because a sibling handler on the same dying
+ * object can move it first -- and one does. QBX-230.
+ */
+void SApplication::purgeDestroyedLink( SLink *lk )
+{
+    if( !lk ) return;
+    for( auto it = selections_.begin(); it != selections_.end(); ++it ) {
+        // removeAll, not removeOne: a pre-existing duplicate must not survive
+        // the purge that frees it. Pointer comparison only, no dereference.
+        it->list.removeAll( lk );
+        if( it->current == lk ) {
+            it->current = ( it->list.count() == 1 ) ? it->list.first() : NULL;
+        }
+    }
+    // NO QObject::disconnect HERE. The connection dies with the object, and
+    // calling disconnect() on a link already freed is exactly what faulted in
+    // QBX-230 -- reached when the list had outlived the link.
+    if( currentSelectedSLink_ == lk ) {
+        currentSelectedSLink_ = selectionList_
+                              ? selections_[ activeSelectionRoot_ ].current
+                              : NULL;
+    }
+}
+
+void SApplication::onArrangementUnregistered( const QString &name )
+{
+    // The ROOT may well outlive its registration -- an open tab holds a ref,
+    // so unregisterArrangement()'s removeRef() need not reach zero -- but the
+    // NAME has stopped denoting it, and the entry is keyed by the name. Clear
+    // rather than erase: selectionList_ points INTO the active entry, and
+    // erasing the active one would leave that pointer dangling. Pointer
+    // values only; nothing on the links is touched. QBX-230.
+    auto it = selections_.find( name );
+    if( it == selections_.end() ) return;
+    it->list.clear();
+    it->current = NULL;
+    if( name == activeSelectionRoot_ ) currentSelectedSLink_ = NULL;
+}
+
+void SApplication::clearAllSelections()
+{
+    // Pointer values only: the links may be gone already. Disconnecting is
+    // neither needed nor safe here for the same reason.
+    for( auto it = selections_.begin(); it != selections_.end(); ++it ) {
+        it->list.clear();
+        it->current = NULL;
+    }
+    currentSelectedSLink_ = NULL;
 }
 
 /**
@@ -335,7 +455,11 @@ void SApplication::unselectSLink()
 {
     SLink *sendingLink = (SLink *) (const SLink *) sender();
     if( sendingLink ) {
-        unselectSLink( sendingLink );
+        // The sender is MID-DESTRUCTION: its pointer value is a key and
+        // nothing on it may be touched. Purge it from every root rather than
+        // from the active one, which this very cascade may already have moved
+        // (QBX-230).
+        purgeDestroyedLink( sendingLink );
     } else {
         qWarning( "SApplication::unselectSLink(): Warning: "
                   "Sending object was unset.\n" );

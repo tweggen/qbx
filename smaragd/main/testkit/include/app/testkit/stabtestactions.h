@@ -42,9 +42,21 @@ public:
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
-    QStringList knownAttributes() const override { return { QStringLiteral("paths") }; }
+    QStringList knownAttributes() const override
+    { return { QStringLiteral("paths"), QStringLiteral("root"),
+               QStringLiteral("count") }; }
 private:
     QString paths_;
+    // `root` reads ONE NAMED root's list instead of the active one, and
+    // `count` asserts its SIZE without converting the links to paths.
+    // Both exist for QBX-230, whose claim is about a root that is NOT active:
+    // a size is answerable from pointer values alone, while a path conversion
+    // dereferences every link -- which is undefined behaviour on exactly the
+    // stale entry the gate is there to catch, so it could never be the oracle.
+    QString root_;
+    bool    hasRoot_  = false;
+    int     count_    = 0;
+    bool    hasCount_ = false;
 };
 
 // <assert-view-playhead root="Drums" frame="24000" sounding="true" tolerance="0"/>
