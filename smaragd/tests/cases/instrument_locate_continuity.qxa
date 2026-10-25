@@ -246,24 +246,51 @@
               gives 0.482176 against the 0.4823 recorded in plan/STATE.md on
               2026-08-22 - two unexplained flakes, two months apart, one
               cause.
+
+         CORRECTION, 2026-10-25 (QBX-224). Points 1 to 3 are right and their
+         numbers still hold; the BOUNDS they were written with were not. They
+         were sized at the injection, 1024, when sections (a) and (b) already
+         budget one block of REAL slip and say why ("the engine may emit one
+         silent block when the first callback beats the page it needs"). An
+         injection does not reduce that budget, it adds to it, so this section
+         had no room left for the very slip the case was written to tolerate.
+         On a run where the capture did slip, the onset came to 1985 against a
+         bound of 1024, and the energy window at 1024 fell half into silence
+         and measured 0.272503 - point 3's own number, reached from the other
+         side. The bounds below are now `injection + one block`, and section
+         (d) puts THESE bounds on a file carrying the stacked lead, which is
+         the same question the real slip asks and the only version of it that
+         is deterministic.
          ================================================================== -->
     <set-locator position="96000"/>
     <toggle-playback play="1"/>
     <wait-playhead position="144000" minAdvance="4096" timeoutMs="30000"/>
     <toggle-playback play="0"/>
+    <!-- ONE capture, dumped TWICE with different injections. capturedAudio()
+         is a read, so the two files differ in exactly one thing: how much
+         silence was pasted in front. That is what lets the pair separate "the
+         bound tolerates the injection" from "the bound is DERIVED from the
+         injection", which is the whole of QBX-224. -->
     <dump-playback-capture filename="n303_slipped.wav" minFrames="32768"
                            leadSilenceFrames="1024"/>
+    <dump-playback-capture filename="n303_slipped2.wav" minFrames="32768"
+                           leadSilenceFrames="2048"/>
 
-    <!-- 1. The onset is one block in. The bound is a RANGE and not 1024
-         exactly because the detector's running window is 64 frames wide, so
-         it fires as soon as the window is mostly signal: MEASURED at 961,
-         which is 1024 - (64 - 1) to the frame. The bound is kept loose rather
-         than pinned at 961 so that a change to the verb's default window or
-         threshold moves it without breaking this case for the wrong reason;
-         the verb reports the frame it found either way, which is what makes a
-         slip legible instead of mysterious. -->
+    <!-- 1. The onset is one injected block in, PLUS whatever the real capture
+         slipped by. The bound is a RANGE, and the upper end is `injected +
+         one block` rather than `injected`: the detector's running window is
+         64 frames wide, so it fires as soon as the window is mostly signal,
+         giving 1024 - (64 - 1) = 961 on an aligned capture (MEASURED) and
+         2048 - 63 = 1985 when the capture itself slipped one block (MEASURED
+         on CI run 40162738676, where this bound was still 1024 and failed).
+         Sections (a) and (b) budget one block of real slip and say why; an
+         injection does not reduce that budget, it ADDS to it. The lower end
+         is kept loose rather than pinned so that a change to the verb's
+         default window or threshold moves it without breaking this case for
+         the wrong reason; the verb reports the frame it found either way,
+         which is what makes a slip legible instead of mysterious. -->
     <assert-audio-onset filename="n303_slipped.wav" channel="0"
-                        minFrame="900" maxFrame="1024"/>
+                        minFrame="900" maxFrame="2048"/>
 
     <!-- ...and maxFrame is LIVE too, which nothing else here would show: on
          the aligned captures the onset is 0 and passes any upper bound, so
@@ -271,14 +298,80 @@
     <assert-audio-onset filename="n303_slipped.wav" channel="0"
                         maxFrame="500" expectReject="true"/>
 
-    <!-- 2. ...and the measurement does not care. -->
-    <assert-audio-energy filename="n303_slipped.wav" startFrame="1024" frameCount="2048"
+    <!-- 2. ...and the measurement does not care, because its window starts
+         clear of BOTH slips: file frame 2048 is capture frame 1024 on an
+         aligned capture and capture frame 0 on a slipped one, so [2048, 4096)
+         is all signal either way. It is the same capture window section (b)
+         measures, which is why it carries the same literal band. -->
+    <assert-audio-energy filename="n303_slipped.wav" startFrame="2048" frameCount="2048"
                          channel="0" minRms="0.352754" maxRms="0.431144"/>
 
     <!-- 3. ...while the window this case used to carry would have failed. -->
     <assert-audio-energy filename="n303_slipped.wav" startFrame="0" frameCount="2048"
                          channel="0" minRms="0.352754" maxRms="0.431144"
                          expectReject="true"/>
+
+    <!-- ============ (d) THE STACK, which is what QBX-224 was ==============
+         The same capture, dumped with TWICE the injection, and then asserted
+         with (c)'s OWN BOUNDS rather than with a formula re-evaluated at the
+         larger number.
+
+         That is the whole trick, and it is worth stating plainly: a file with
+         2048 frames of lead is bit-for-bit the shape of (c)'s file when the
+         real capture slipped one block. So asking "do (c)'s bounds hold on
+         this file" IS asking "would (c) survive a real slip" - except that it
+         is deterministic, on every run and on any box, where the real slip
+         reddened CI about one run in six and reproduces on no dev box at all.
+         The two assertions below are (c)'s, copied verbatim, and each one
+         fails if (c)'s bound is put back where QBX-222 left it.
+
+         WHICH MEANS (c) ITSELF IS NOT THE GATE, and that is worth knowing
+         before deleting (d) as a duplicate. On an aligned capture both of
+         (c)'s corrected bounds still pass when reverted: the onset is 961,
+         under the old 1024 as well as the new 2048, and the old energy window
+         at 1024 lands on capture frames [0, 2048) instead of [1024, 3072),
+         which the decay envelope moves by about 1 % against a 10 % band. (c)
+         states the rule and (d) is the only thing that holds it.
+         ================================================================== -->
+    <!-- MEASURED off this very artifact: onset 1985, which is 2048 - 63 and
+         is to the frame what CI reported when (c)'s bound was still 1024.
+         The window reads 0.388957, inside the band, because file frame 2048
+         is capture frame 0 here: the whole of [2048, 4096) is signal, just
+         1024 frames earlier in the decay than the 0.391949 the anchored
+         window gives on an aligned capture. One block of envelope is 0.8 %
+         against a band of 10 %, which is the headroom the move spends. -->
+    <assert-audio-onset filename="n303_slipped2.wav" channel="0"
+                        minFrame="1900" maxFrame="2048"/>
+    <assert-audio-energy filename="n303_slipped2.wav" startFrame="2048" frameCount="2048"
+                         channel="0" minRms="0.352754" maxRms="0.431144"/>
+
+    <!-- ...and here is the regression pinned by its own number. [1024, 3072)
+         on a 2048-lead file is 1024 frames of silence followed by the
+         capture's own first 1024, which is bit-for-bit the window CI reported
+         as 0.272503 on 2026-10-24 and again on 2026-10-25, and MEASURED off
+         this artifact as 0.272503. It refuses, which is what the assertion
+         above being moved off 1024 means.
+
+         THE ARITHMETIC, corrected: this case and the testkit contract both
+         gave it as `golden * sqrt((N - 1024) / N)`, and the contract called
+         that exact. It is not. That form comes to 0.277150, which is 0.0046
+         off and still inside the band's lower half, so it never looked wrong.
+         The displaced half is capture frames [0, 1024), whose own rms is
+         0.385377 and not the 0.391949 of the anchored window [1024, 3072) -
+         the decay envelope is still moving, so the two halves of the window
+         are not samples of one number. The identity is
+
+             rms(capture[0, 1024)) * sqrt(1024/2048) = 0.272503
+
+         i.e. the rms of the surviving half MEASURED WHERE IT LANDS, scaled by
+         the fraction that survives. Close enough to a golden-based formula to
+         have passed for a derivation for two months, and that appearance is
+         part of why these bounds were sized by arithmetic instead of by
+         measurement. -->
+    <assert-audio-energy filename="n303_slipped2.wav" startFrame="1024" frameCount="2048"
+                         channel="0" minRms="0.352754" maxRms="0.431144"
+                         expectReject="true"/>
+
   </actions>
 
   <assertions>
