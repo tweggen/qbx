@@ -158,6 +158,70 @@ and the paths it looked for, was discarded. That is why these two could not be
 diagnosed from the run and had to be guessed at. A green run is as quiet as
 before, because `--output-on-failure` prints nothing for a test that passed.
 
+## `qxa.rec_union_cycle_inside` — reported as a local suite flake, NOT reproduced (QBX-220)
+
+**It has never failed in CI.** It is recorded here anyway so the next person
+does not repeat the measurement, which is the expensive part.
+
+Two failures were seen on a dev box, on two different feature branches, each
+followed by a green re-run on the identical tree:
+
+| when | failing assertion | numbers |
+|---|---|---|
+| QBX-209's gate run | `assert-recorded-clip` | `minPasses="2"` not met |
+| QBX-213's gate run | `assert-audio-energy` | rms 0.111858 against [0.15, 0.21] |
+
+**It did not reproduce on `main` at `77f648d6` in any regime tried**, and the
+measured quantity did not move at all:
+
+| regime | runs | failures | window rms, every run |
+|---|---|---|---|
+| isolated, serial, idle (QBX-220's own report) | 12 | 0 | not recorded |
+| isolated under 36 spinners on 12 cores, load 29 (same) | 12 | 0 | not recorded |
+| isolated, instrumented | 4 | 0 | `0.176362` |
+| full suite `-j4`, quiet box (load < 1.5) | 4 | 0 | `0.176362` |
+| full suite `-j4` under 12 spinners, load ~17 | 4 | 0 | `0.176362` |
+
+`0.176362` is the value to six digits on all 12 instrumented runs, with the
+render 144000 frames and `passes=3` every time. The loaded suite runs were not
+inert — they broke `qxa.metronome_click_while_recording` 3 times in 4 and
+`devices_input_test` once — so the box was genuinely hostile and this case
+still did not move. **Whatever the two original failures were, they are not
+reachable on `main` today, and they are not CPU load.**
+
+### How to triage it if it returns
+
+`smaragd/tests/test_sawtooth.wav` is a per-second LEVEL STAIRCASE — rms
+`0.066650 / 0.176362 / 0.290568 / 0.405489` for seconds 0..3 — and the band
+`[0.15, 0.21]` brackets second 1 exactly. So that assertion does not ask "is
+there energy", it asks **which source second am I reading**, and a failure
+value decodes to a position. Decode it before reading the failure as level
+drift.
+
+The reported `0.111858` decodes two ways and **one number cannot choose**:
+69.7 % second 0 + 30.3 % second 1 (about 33500 frames reading a second early),
+or 28690 frames of silence inside the window. That is why the failing artifact
+matters: `ru_ci.wav`'s per-second profile settles it immediately. A healthy one
+reads `[0.3257, 0.0, 0.1764]` — the silent middle second is correct and
+deliberate, a documented plan 53 deviation in `srecordplanner.cpp` (a cycle
+pass that stopped mid-cycle answers for its whole extent, "silence included —
+which is what a tape machine does").
+
+Note that `assert-audio-energy` **cannot** detect a short render:
+`audio_analysis.cc` divides by the frames actually read, not the requested
+`frameCount`, so a truncated file reports its content at full level. A
+truncation hypothesis for this failure is therefore ruled out, not merely
+unlikely.
+
+### What it is NOT
+
+It is not the QBX-222 capture-head slip, which was the first thing checked. The
+window is 48000 frames, where one 1024-frame device block costs 1.1 %; the
+failure is a 37 % shortfall. **But that family is real and has a live member**:
+`qxa.metronome_click_while_recording` fails about 2 in 3 in isolation at
+loadavg >= 12, because it anchors its grid on a first click the capture start
+truncates. That one reproduces on demand and is filed as QBX-227.
+
 ## Running the comparison yourself
 
 ```bash
