@@ -590,16 +590,36 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     Three things about how it measures, each of which is the difference between
     a gate and a coin toss:
 
-    - **The grid is anchored on the FIRST DETECTED ONSET.** Capture frame 0 is
-      the DEVICE start, and how many blocks the ring took to fill before the
-      first entry was summed is a property of the box. The SPACING is not — it
-      comes from the tempo map — so that is what `intervalFrames` bounds.
+    - **The grid is anchored on the SECOND detected onset** (QBX-227; it was
+      the first until 2026-10-25, and the two bullets below used to contradict
+      each other in place). Capture frame 0 is the DEVICE start, and how many
+      blocks the ring took to fill before the first entry was summed is a
+      property of the box — which is exactly why onset 0 cannot be the anchor.
+      The SPACING is not a property of the box; it comes from the tempo map,
+      so that is what `intervalFrames` bounds, measured between onsets that
+      the tempo map alone placed. Onset 0 is still COUNTED, and `firstFrame`
+      still bounds its position where a case asks; it is simply not a grid
+      point. A case that asks for a grid and has fewer than three onsets is
+      REFUSED rather than passed, since dropping the anchor would leave
+      nothing to compare.
     - **The accent PHASE is searched, and the FIRST onset is excluded from the
       level comparison.** Which beat of the bar the first summed entry carries
       is again the box's business; and the first click of a live-lane session
       sits inside the RT's 2-3 ms fade-in ramp and is attenuated BY CONSTRUCTION
-      (measured 0.2109 against a full 0.4720). Its POSITION is still the anchor;
-      only its level is not a claim.
+      (measured 0.2109 against a full 0.4720).
+
+      > **The correction QBX-227 made.** This bullet used to end "Its POSITION
+      > is still the anchor; only its level is not a claim", one line after the
+      > bullet above called that position a property of the box. Both halves
+      > were right and the conclusion was wrong: an attenuated onset is one the
+      > detector finds wherever the ramp crossed `threshold`, so its position
+      > is as much the box's business as its level. Measured on
+      > `metronome_click_while_recording`, a failing and a passing run of the
+      > same binary at loadavg ~14: onsets 1.. sat at IDENTICAL absolute frames
+      > on an exact 24000 grid, while onset 0 moved from 995 to 0 — its own
+      > distance from the grid 991 then 1986, against a 1024 tolerance. The old
+      > anchoring reported the capture head as a grid error about 2 runs in 3
+      > under load. From onset 1 the same data reads a worst error of 1 frame.
     - **`silenceMaxRms` measures the MIDDLE of each gap.** Without a silence
       assertion "eight clicks" is satisfied by a continuous tone with eight
       louder moments in it; measuring the whole gap would fail on the click's
@@ -1577,8 +1597,10 @@ frame 0 is the DEVICE START, not the locator position playback began from.**
 - **So bound the start with `assert-audio-onset` and begin the measurement
   window one device block in.** 1024 frames is the house tolerance, the same
   one `assert-metronome-clicks` uses and for the same reason; that verb's
-  contract has said so since proposal 21 L5 ("the grid is anchored on the FIRST
-  detected onset, deliberately … a wall-clock quantity of the box").
+  contract has said so since proposal 21 L5 ("a wall-clock quantity of the
+  box"). That verb now anchors its grid on the SECOND onset for the same
+  reason, since the first one's POSITION is that wall-clock quantity and not
+  only its level (QBX-227).
 - **A window at frame 0 with a tight band is the shape to look for.** It cost
   two unexplained flakes two months apart, both on correct builds and both
   reported as though the DSP had moved: `0.4823` against `[0.5401, 0.5735]` on
