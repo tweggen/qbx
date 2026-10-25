@@ -33,6 +33,14 @@ struct twOutputPage;
  * is the audio thread's TRY-lock probe and answers 'not right now' under
  * contention".
  *
+ * That the try-lock is the half which fired there is measured, not assumed.
+ * The same process ended `[SCHED] graph stats: nodesExecuted=72 nodeRetries=0
+ * missPages=0 selfStale=0`: `selfStale` counts exactly the verify-at-publish
+ * re-stale below and it is zero, no bound set missed, and the only production
+ * caller of `retireComponentNodes()` is the live monitor, which that case
+ * never enters. The page was there, current and frozen; the reader could not
+ * see it.
+ *
  * THE SECOND HALF, and why one demand is not enough either. A completed demand
  * does not promise a CURRENT page, BY DESIGN, on two documented paths. Note the
  * shapes differ: the try-lock half above makes a present page look ABSENT,

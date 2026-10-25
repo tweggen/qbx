@@ -1636,7 +1636,11 @@ page uses it rather than re-deriving it:
   wait that fell back to a quiet pass, or to a message about the thing being
   measured, is how this defect survived: the CI failure read
   `assert-clip-channels: no frozen page at 0 for clip "1,0"` and was triaged as
-  a channel-width question on a bit-correct build (run `40096553722`).
+  a channel-width question on a bit-correct build (run `40096553722`, whose
+  `selfStale=0 missPages=0` counters later confirmed the page had been there
+  all along). Read a qbx CI log with
+  `gh api repos/tweggen/qbx/actions/jobs/<job_id>/logs`; `gh run view` answers
+  with nothing on this repository and makes a live log look lost.
 * **Both halves are injectable, because neither reproduces by load.**
   `contendCacheMs` holds the cache lock on another thread across the first read
   — through `twComponent::CacheLockForTests`, a test-only seam, because

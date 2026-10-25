@@ -137,7 +137,12 @@ Invariants:
     looks present and valid (`invalidatePagesInRange` bumps the epoch and
     marks pages stale IN PLACE; it does NOT clear `validAspects`), so a
     consumer that tests only the aspects MEASURES outdated audio and reports a
-    number. `assert-clip-channels` was exposed to both. The rule for such a reader — demand, wait, read blocking,
+    number. `assert-clip-channels` was exposed to both, and run `40096553722`
+    was the try-lock half on the evidence of its own counters: that process
+    ended `nodesExecuted=72 nodeRetries=0 missPages=0 selfStale=0`, so nothing
+    was published from an outdated plan and no bound set missed, while the page
+    the reader could not see was there, current and frozen.
+    The rule for such a reader — demand, wait, read blocking,
     re-demand bounded, then FAIL NAMING THE WAIT — is implemented once in
     `main/testkit/include/app/testkit/sdemandedpage.h`, with the two fault
     injectors (`contendCacheMs`, `staleAfterDemand`) that make each half
