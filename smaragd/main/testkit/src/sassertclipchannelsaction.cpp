@@ -6,6 +6,7 @@
 #include "app/model/sobjectpath.h"
 #include "app/model/sproject.h"
 #include "app/objects/cut/scut.h"
+#include "app/testkit/sdemandedpage.h"
 
 #include "tw/core/twtypes.h"
 #include "tw/graph/twcomponent.h"
@@ -87,17 +88,30 @@ SApplyResult SAssertClipChannelsAction::apply( SProject *project )
                       "exists to exercise)";
         return { false, nullptr };
     }
-    auto demand = reval->requestGraphPages( r.component, pageStart, 1 );
-    if( demand ) demand->wait();
 
-    std::shared_ptr<twOutputPage> page = r.component->getPageIfExists( pageStart );
-    if( !page || page->validAspects.load() == 0 || page->validFrames == 0 ) {
-        qWarning() << "assert-clip-channels: no frozen page at" << (qlonglong) pageStart
+    // ...and reading it back is the discipline sdemandedpage.h documents: the
+    // BLOCKING accessor, and a bounded re-demand when the page does not read
+    // current, because a completed demand does not promise one (QBX-223).
+    sdemandedpage::Options opt;
+    opt.maxDemands       = maxDemands_;
+    opt.contendCacheMs   = contendCacheMs_;
+    opt.staleAfterDemand = staleAfterDemand_;
+    const sdemandedpage::Outcome got =
+        sdemandedpage::read( reval, r.component, pageStart,
+                             "assert-clip-channels", opt );
+    if( !got.page ) {
+        // Never "no frozen page" on its own again: that read as a width defect
+        // on CI while the page was simply not readable yet.
+        qWarning() << "assert-clip-channels FAILED: page not ready at"
+                   << (qlonglong) pageStart
                    << "for clip" << qualifiedToString( pathRoot_, clipPath_ )
                    << "(clip-relative" << (qlonglong) position_
-                   << "-> component" << (qlonglong) r.mappedPos << ")";
+                   << "-> component" << (qlonglong) r.mappedPos << ") -"
+                   << got.why << "- after" << got.demands << "demand(s),"
+                   << got.notProduced << "not produced";
         return { false, nullptr };
     }
+    const std::shared_ptr<twOutputPage> page = got.page;
 
     const int nCh = (int) page->channels();
     const QString where =
@@ -170,6 +184,15 @@ void SAssertClipChannelsAction::writeXml( QDomElement &elem ) const
     if( minDiffRms_ >= 0.0 ) {
         elem.setAttribute( "minDiffRms", QString::number( minDiffRms_, 'f', 6 ) );
     }
+    // Written only when they differ from the default, so every existing case
+    // round-trips byte-identically — which is why the round-trip fixture has
+    // to spell all three out (main/testkit CONTRACT.md inv. 9).
+    if( maxDemands_ != 4 )
+        elem.setAttribute( "maxDemands", QString::number( maxDemands_ ) );
+    if( contendCacheMs_ > 0 )
+        elem.setAttribute( "contendCacheMs", QString::number( contendCacheMs_ ) );
+    if( staleAfterDemand_ )
+        elem.setAttribute( "staleAfterDemand", QStringLiteral( "true" ) );
 }
 
 bool SAssertClipChannelsAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -184,6 +207,11 @@ bool SAssertClipChannelsAction::readXml( const QDomElement &elem, int /*version*
     channelB_       = elem.attribute( "channelB", "1" ).toInt();
     minRmsDelta_    = elem.attribute( "minRmsDelta", "0.01" ).toDouble();
     minDiffRms_     = elem.attribute( "minDiffRms", "-1" ).toDouble();
+    maxDemands_     = elem.attribute( "maxDemands", "4" ).toInt();
+    contendCacheMs_ = elem.attribute( "contendCacheMs", "0" ).toInt();
+    staleAfterDemand_ =
+        elem.attribute( "staleAfterDemand", "0" ) == QStringLiteral( "true" ) ||
+        elem.attribute( "staleAfterDemand", "0" ) == QStringLiteral( "1" );
     return true;
 }
 

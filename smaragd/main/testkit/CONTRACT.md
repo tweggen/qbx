@@ -1605,3 +1605,50 @@ frame 0 is the DEVICE START, not the locator position playback began from.**
   recording.** On an aligned capture the onset is 0 and passes any upper bound,
   so a case that bounds the onset above without also exercising a late one has
   a bound it has never seen refuse.
+
+## Anything that reads a page it DEMANDED (QBX-223)
+
+`assert-clip-channels`, `assert-track-channels` and `assert-master-sums` all
+declare a demand on the project's `CaptureRevalidator` and then read the
+component's cache. Reading it is a discipline of its own, and all three had it
+wrong in the same way until QBX-223. The rule lives once, in
+`include/app/testkit/sdemandedpage.h`, and any new verb that reads a demanded
+page uses it rather than re-deriving it:
+
+* **Never `getPageIfExists()` off the audio thread.** It is a TRY-LOCK that
+  returns `nullptr` whenever another thread holds the cache lock — correct for
+  the audio thread, which outputs silence and tries again next frame, and wrong
+  for an assertion, which has no next frame. Use `getPagesInRange()`, which
+  blocks for the length of a short critical section.
+* **One demand is not a guarantee, and test the EPOCH.** `GraphDemand::wait()`
+  promises the demand is finished, not that a current page is cached:
+  verify-at-publish re-stales a page whose component was edited mid-render
+  (deliberately *before* completing the demand) and a retired node completes its
+  demand as `notProduced()`. A re-staled page is not an absent one —
+  `invalidatePagesInRange()` bumps the component's epoch and marks pages stale
+  in place, leaving `validAspects` set — so a verb that checks only the aspects
+  measures outdated audio and reports a plausible number. The test is
+  `page->contentEpoch < comp->contentEpochNow()`. Spend bounded re-demands —
+  never a sleep-poll; each attempt blocks on the demand itself, so a starved box
+  spends the same number of demands, just slower.
+* **The give-up is loud and names the wait.** `PAGE NOT READY at <pos> after N
+  bounded demand(s) - <what the page looked like> - notProduced <k>`. A bounded
+  wait that fell back to a quiet pass, or to a message about the thing being
+  measured, is how this defect survived: the CI failure read
+  `assert-clip-channels: no frozen page at 0 for clip "1,0"` and was triaged as
+  a channel-width question on a bit-correct build (run `40096553722`).
+* **Both halves are injectable, because neither reproduces by load.**
+  `contendCacheMs` holds the cache lock on another thread across the first read
+  — through `twComponent::CacheLockForTests`, a test-only seam, because
+  contending threads make unavailability LIKELY and a gate needs it CERTAIN —
+  and `staleAfterDemand` re-stales the page the moment its demand completes.
+  Each logs a line that only its own branch produces, so a case `assert-log`s
+  the injector as well as the outcome; `mc_capture_clip_width` section (d) is
+  the worked example, and it asserts on the clip CI actually lost.
+* **A fallback to the legacy pull must announce itself.** `assert-track-channels`
+  keeps one (it is `driver="pull"`'s path and the only one under
+  `SMARAGD_REVAL_WORKERS=0`), but taking it silently means the verb sometimes
+  measures a different path than the one it claims; it now logs
+  `falling back to the legacy pull at <pos>` with the reason.
+  `assert-clip-channels` has no fallback on purpose — the pull's content-epoch
+  caveat is what that verb was written to avoid.
