@@ -84,15 +84,32 @@
       notProduced(). One demand is therefore not a guarantee, bounded
       re-demands are, and the give-up must be loud.
 
-  WHICH OF THE TWO WAS THE CI FAILURE: the try-lock, necessarily. A re-staled
-  page is NOT an absent one — invalidatePagesInRange() bumps the component's
-  epoch and marks pages stale in place, leaving validAspects set — so the stale
-  half could never have produced "no frozen page"; it would have measured the
-  outdated page and reported a plausible 2-channel ladder. That is the quieter
-  defect of the two, and section (d2) is the only place it is visible. Run
-  40096553722's log is no longer retrievable (`gh run view` answers with
-  nothing for it, in either log mode), so that narrowing comes from reading the
-  engine rather than from the run.
+  WHICH OF THE TWO WAS THE CI FAILURE: the try-lock, and this is MEASURED, not
+  inferred. Two independent arguments meet on it.
+
+  From the engine: a re-staled page is NOT an absent one —
+  invalidatePagesInRange() bumps the component's epoch and marks pages stale in
+  place, leaving validAspects set — so the stale half could never have produced
+  "no frozen page". It would have measured the outdated page and reported a
+  plausible 2-channel ladder. That is the quieter defect of the two, and
+  section (d2) is the only place it is visible.
+
+  From run 40096553722's own log, which the same process ended with
+
+      [SCHED] graph stats: nodesExecuted=72 nodeRetries=0 missPages=0 selfStale=0
+
+  selfStale counts exactly the verify-at-publish re-stale and it is ZERO, so no
+  page in that process was published from an outdated plan; missPages is zero,
+  so no bound set missed; and the only production caller of
+  retireComponentNodes() is the live monitor, which this case never enters, so
+  no demand completed as notProduced(). The page was there, current and frozen,
+  and 72 nodes had executed without a retry. The reader simply could not see
+  it, which is what a try-lock does when the cache lock is held.
+
+  (That log reads through `gh api repos/tweggen/qbx/actions/jobs/<job_id>/logs`.
+  `gh run view` answers with nothing on this repository in either of its log
+  modes, which is why an earlier reading of this failure recorded the log as
+  lost.)
 
   Section (d) makes both deterministic with two test-only injectors, because
   neither reproduces on a 12-core dev box: contendCacheMs really holds the lock
