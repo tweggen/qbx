@@ -255,14 +255,18 @@ QString SPluginEffectStrip::trackPathString() const
     SProject *project = SApplication::app().getCurrentProject();
     if (!project) return QString();
 
-    SObject *root = splacements::rootContainer(project);
-    if (!root) return QString();
-
-    // pathOf() returns {} for "the root itself" as well as "not found", but
-    // track_ is an STrack and can never BE the root, so empty means not found.
-    const QList<int> path = strackpath::pathOf(root, track_);
-    if (path.isEmpty()) return QString();
-    return strackpath::pathToString(path);
+    // QUALIFIED by whichever root holds the track (QBX-231). This used to be
+    // pathOf( rootContainer() ), the MASTER only: a track in an arrangement
+    // -- an asset opened in its own arranger -- resolved to "" there, and
+    // every caller below returns early on "", so Add Effect, Remove, Bypass
+    // and Edit all did nothing in that arranger's mixer, without a word.
+    const QString spec = splacements::specOf(project, track_);
+    if (spec.isEmpty() && track_)
+        TW_LOGW("pluginui",
+                "insert strip: track '%s' is reachable from no root of the "
+                "project -- its insert gestures have nothing to address",
+                track_->getSName().toUtf8().constData());
+    return spec;
 }
 
 // PROPOSAL 48 D5a -- see the header.
@@ -881,15 +885,13 @@ SPluginParamEditor *SPluginEffectStrip::ensureParamEditor(int slotIndex,
         // Not a silent nothing (issue a, AC A3): a caller reaching this with
         // an empty path gets NO editor and no explanation, which is exactly
         // the "pressing Edit does nothing" shape the bug report described.
-        // Reachable when track_ is not found under the project's MASTER root
-        // (splacements::rootContainer() never resolves an arrangement) --
-        // today that should not happen through the production Track Detail
-        // dock (attachTrackDetail() follows only the master mixer's own
-        // selectedTrackChanged), but a track removed from the tree between
-        // the strip being built and Edit being pressed reaches it too.
+        // Reachable when track_ is reachable from no root of the project
+        // (since QBX-231 every arrangement and asset root is searched, not
+        // only the master): a track removed from the tree between the strip
+        // being built and Edit being pressed.
         TW_LOGW( "pluginui",
                  "generic editor: track path for slot %d did not resolve (the "
-                 "track is not reachable from the project's master root) -- "
+                 "track is reachable from no root of the project) -- "
                  "Edit has nothing to open", slotIndex );
         return nullptr;
     }

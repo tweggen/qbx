@@ -2083,3 +2083,23 @@ connected, a zero-length range shown. The release's own `rangeChanged` is a
 second defence behind `saveRangeToProject()`'s `propertyChanged` and bites
 nothing alone. Not gated: `locatorAdvanced` under real playback.
 
+## inv. 69 — Track Detail follows the ACTIVE TAB's selection, and a dock that holds a track POINTER addresses it through the root that HOLDS it (QBX-231)
+
+- `attachTrackDetail()` follows `SViewTabs::activeRootChanged` and, through
+  `followTrackDetailRoot_()`, that root's `SStdMixer::selectedTrackChanged` —
+  the mixer pane's rule (proposal 48 D12). It followed the master mixer
+  alone, so a track selected in an arrangement tab (an asset opened in its
+  own arranger) never reached the dock.
+- A widget that holds a track pointer and submits an action about it asks
+  `splacements::specOf()` for the address — never `pathOf( rootContainer() )`,
+  which answers only for the master and came back empty for an arrangement's
+  track. The insert strip, the native editor, and the dock's volume and pan
+  faders (`stimeline::submitRooted`) all take the qualified spelling now.
+- Gated by `arrangement_track_inserts.qxa`; each of the three halves — the
+  strip's path, the dock's following, the fader's root — was sabotaged alone
+  and the case failed each time.
+- NOT GATED: Add Effect / Add Instrument themselves (a modal plugin browser,
+  which no headless case may open — they submit to the same path the gated row
+  commands use), and `restoreOpenEditors()` reopening a native editor on an
+  arrangement's track (it returns at once under `--test-case`). The dock's
+  METER still asks `ssolo::isLaneAudible()` against the master root.

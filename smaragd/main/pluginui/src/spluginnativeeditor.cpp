@@ -375,6 +375,11 @@ void SPluginNativeEditor::restoreOpenEditors( SProject *project,
 
     QList<STrack *> tracks;
     collectTracks( splacements::rootContainer( project ), tracks );
+    // ...and every arrangement's (QBX-231): an asset's tracks hold plugins too,
+    // and a window left open on one is a setting the file carries just the
+    // same. NOT GATED: this function returns at once under --test-case.
+    for( const QString &name : project->arrangementNames() )
+        collectTracks( project->arrangement( name ), tracks );
 
     for( STrack *t : tracks ) {
         SPluginChain *chain = t ? t->getPluginChain() : nullptr;
@@ -816,12 +821,11 @@ QString SPluginNativeEditor::currentTrackPath() const
     if( !track_ ) return QString();
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return QString();
-    SObject *root = splacements::rootContainer( project );
-    if( !root ) return QString();
-    // pathOf() answers {} for "the root itself" as well as "not found"; a track
-    // is never the root, so an empty path here means the track has left the
-    // project and there is nothing to address.
-    return strackpath::pathToString( strackpath::pathOf( root, track_ ) );
+    // Qualified by the root that holds the track, exactly as the strip
+    // addresses it (QBX-231): the master-only pathOf() this was answered ""
+    // for a track in an arrangement, and every edit from the window was lost.
+    // Empty means the track has left the project.
+    return splacements::specOf( project, track_ );
 }
 
 int SPluginNativeEditor::currentSlotIndex() const

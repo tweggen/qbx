@@ -180,12 +180,37 @@ void SMainWindow::attachTrackDetail()
 {
     if( !trackDetailPanel_ ) return;
 
+    // THE DOCK FOLLOWS THE ACTIVE TAB'S ROOT (QBX-231), as the mixer pane
+    // does (D12 below). It followed the MASTER mixer's selection only, so a
+    // track selected in an arrangement tab -- an asset opened in its own
+    // arranger -- never reached it, and the dock went on showing a master
+    // track while the user worked on another.
+    QObject::disconnect( trackDetailRootConn_ );
+    trackDetailRootConn_ = QMetaObject::Connection();
+    SObject *root = nullptr;
+    if( SViewTabs *tabs = viewTabs() ) {
+        trackDetailRootConn_ = connect( tabs, &SViewTabs::activeRootChanged,
+                                        trackDetailPanel_, [this]( SObject *r ) {
+                                            followTrackDetailRoot_( r );
+                                        } );
+        root = tabs->activeRoot();
+    }
+    // The same fallback attachMixerPane() needs, for the same reason: the tabs
+    // have no active root until an editor is installed.
+    if( !root )
+        if( SProject *proj = SApplication::app().getCurrentProject() )
+            root = proj->getRootComponent();
+    followTrackDetailRoot_( root );
+}
+
+void SMainWindow::followTrackDetailRoot_( SObject *root )
+{
+    if( !trackDetailPanel_ ) return;
     // One mixer at a time: drop whatever we were following first.
     QObject::disconnect( trackDetailConn_ );
+    trackDetailConn_ = QMetaObject::Connection();
 
-    SStdMixer *mixer = currentProject_
-        ? qobject_cast<SStdMixer*>( currentProject_->getRootComponent() )
-        : nullptr;
+    SStdMixer *mixer = qobject_cast<SStdMixer*>( root );
     if( !mixer ) {
         trackDetailPanel_->setTrack( nullptr );
         return;
@@ -194,6 +219,31 @@ void SMainWindow::attachTrackDetail()
     trackDetailConn_ = connect( mixer, &SStdMixer::selectedTrackChanged,
                                 trackDetailPanel_, &STrackDetailPanel::setTrack );
     trackDetailPanel_->setTrack( mixer->getSelectedTrack() );
+}
+
+QString SMainWindow::describeTrackDetailDock()
+{
+    if( !trackDetailPanel_ ) return QString();
+    // ATTACH ONCE, NEVER AGAIN. A scripted run never goes through the attach
+    // sites (the project is adopted by SApplication, not openProjectFile()),
+    // so the first call is where the dock starts following. Every later call
+    // reads what the signals put there: re-attaching here would re-read the
+    // selection and hide a dock that had stopped following.
+    if( !trackDetailRootConn_ ) {
+        ensureArranger_();
+        attachTrackDetail();
+    }
+    STrack *t = trackDetailPanel_->track();
+    SProject *proj = SApplication::app().getCurrentProject();
+    QString d = QStringLiteral( "track=%1|path=%2" )
+        .arg( t ? t->getSName() : QString(),
+              t ? splacements::specOf( proj, t ) : QString() );
+    const SPluginEffectStrip *strip =
+        trackDetailPanel_->findChild<SPluginEffectStrip *>();
+    const int rows = strip ? strip->slotRowCount() : -1;
+    d += QStringLiteral( "|rows=%1" ).arg( rows );
+    if( rows > 0 ) d += QStringLiteral( "|slot0=" ) + strip->describeSlot( 0 );
+    return d;
 }
 
 // PROPOSAL 48 D12 -- THE PANE FOLLOWS THE ACTIVE TAB'S ROOT, so what it shows
@@ -555,6 +605,8 @@ void SMainWindow::detachTrackDetail()
 {
     QObject::disconnect( trackDetailConn_ );
     trackDetailConn_ = QMetaObject::Connection();
+    QObject::disconnect( trackDetailRootConn_ );
+    trackDetailRootConn_ = QMetaObject::Connection();
     // Release the STrack pointer (and its plugin strip) BEFORE the project is
     // deleted — the panel holds a raw pointer into the project's object graph.
     if( trackDetailPanel_ ) trackDetailPanel_->setTrack( nullptr );
@@ -4411,10 +4463,10 @@ bool SMainWindow::doubleClickDetailControl( const QString &which,
     // differs (proposal 49 M4 added the pan one).
     if( which == QLatin1String( "track-volume" )
         || which == QLatin1String( "track-pan" ) ) {
-        SObject *root = splacements::rootContainer( proj );
-        SObject *lane =
-            splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
-        STrack *track = dynamic_cast<STrack *>( lane );
+        // A qualified path ("Drums:0") reaches an arrangement's track, whose
+        // fader is the one QBX-231 rooted at its own arrangement.
+        STrack *track = dynamic_cast<STrack *>(
+            splacements::laneAtQualified( proj, trackPath ) );
         if( !track ) return false;
         STrackDetailPanel panel( nullptr );
         panel.setTrack( track );

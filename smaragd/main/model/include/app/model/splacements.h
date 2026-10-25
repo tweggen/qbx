@@ -84,6 +84,20 @@ inline SObject *laneAt( SObject *root, const QList<int> &path )
 SObject *laneBySpec( SProject *project, const QString &spec,
                      QString &rootInOut, SObject **rootOut = nullptr );
 
+// THE INVERSE OF laneBySpec (QBX-231): the spelling that addresses `obj`, with
+// the root qualifier of whichever root actually holds it -- "0,1" in the
+// master, "Drums:0" in the arrangement Drums, "Riff:1" inside the asset
+// fragment Riff. Empty when no root reaches it (it has left the project).
+//
+// A widget that holds a track POINTER and must submit an action addressing it
+// asks this, never pathOf( rootContainer() ): that answers only for the master,
+// so in an arrangement tab it came back empty and the insert strip's every
+// gesture -- Add Effect, Remove, Bypass, Edit -- returned without a word.
+// Roots are tried in the order rootNamed() resolves names (master, then
+// arrangements, then assets), so the spelling produced is one that resolves
+// back to the same object.
+QString specOf( SProject *project, SObject *obj );
+
 SObject *placementLaneAt( SObject *root, const QList<int> &path,
                           const char *verb );
 

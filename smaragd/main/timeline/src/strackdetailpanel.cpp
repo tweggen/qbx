@@ -436,14 +436,17 @@ void STrackDetailPanel::applyVolumeDb(double dB)
     // a top-level index: this used to scan the mixer's DIRECT children only, so
     // for a track nested in a folder it resolved -1 and this fader silently took
     // the non-undoable fallback below. That scan helper is now deleted.
+    //
+    // ROOTED AT THE TRACK'S OWN ARRANGEMENT (QBX-231). The dock follows the
+    // active tab's selection, so the track may live in an arrangement; the
+    // master-only pathOf() this was answered {} there and took the fallback.
     SProject *proj = SApplication::app().getCurrentProject();
-    SObject *root = splacements::rootContainer(proj);
-    const QList<int> trackPath =
-        root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
-    if (!trackPath.isEmpty()) {
-        SSetTrackVolumeAction *act = new SSetTrackVolumeAction(trackPath, dB);
+    const strackpath::QualifiedPath where =
+        strackpath::parseQualified(splacements::specOf(proj, currentTrack_));
+    if (!where.idx.isEmpty()) {
+        SSetTrackVolumeAction *act = new SSetTrackVolumeAction(where.idx, dB);
         act->setGesture(volumeGesture_);
-        stimeline::submitActive(act);
+        stimeline::submitRooted(act, where.root);
     } else {
         currentTrack_->setVolume(dB);
         if (SProject *p = SApplication::app().getCurrentProject())
@@ -459,13 +462,12 @@ void STrackDetailPanel::applyPan(double pan)
     panLabel_->setText(sPanText(pan));
 
     SProject *proj = SApplication::app().getCurrentProject();
-    SObject *root = splacements::rootContainer(proj);
-    const QList<int> trackPath =
-        root ? strackpath::pathOf(root, currentTrack_) : QList<int>();
-    if (!trackPath.isEmpty()) {
-        SSetTrackPanAction *act = new SSetTrackPanAction(trackPath, pan);
+    const strackpath::QualifiedPath where =
+        strackpath::parseQualified(splacements::specOf(proj, currentTrack_));
+    if (!where.idx.isEmpty()) {
+        SSetTrackPanAction *act = new SSetTrackPanAction(where.idx, pan);
         act->setGesture(panGesture_);
-        stimeline::submitActive(act);
+        stimeline::submitRooted(act, where.root);
     } else {
         currentTrack_->setPan(pan);
         if (SProject *p = SApplication::app().getCurrentProject())

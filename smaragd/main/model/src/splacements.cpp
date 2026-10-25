@@ -2,7 +2,34 @@
 
 #include "tw/core/twlog.h"
 
+#include <algorithm>
+
 namespace splacements {
+
+QString specOf( SProject *project, SObject *obj )
+{
+    if( !project || !obj ) return QString();
+    // pathOf() answers {} both for "the root itself" and for "not found"; a
+    // root is never what a caller here addresses, so {} means "not in it".
+    if( SObject *master = rootContainer( project ) ) {
+        const QList<int> p = strackpath::pathOf( master, obj );
+        if( !p.isEmpty() ) return strackpath::pathToString( p );
+    }
+    // Each name through rootNamed() itself, so a name an arrangement and an
+    // asset share yields the root that name RESOLVES to -- the spelling
+    // returned must lead back to `obj`, not merely mention a root holding it.
+    QList<QString> names = project->arrangementNames();
+    QList<QString> assets = project->assetNames();
+    std::sort( assets.begin(), assets.end() );   // a QHash's keys: fix the order
+    names += assets;
+    for( const QString &name : names ) {
+        SObject *root = rootNamed( project, name );
+        if( !root ) continue;
+        const QList<int> p = strackpath::pathOf( root, obj );
+        if( !p.isEmpty() ) return strackpath::qualifiedToString( name, p );
+    }
+    return QString();
+}
 
 bool refuseSystemLane( SObject *obj, const char *verb )
 {
