@@ -367,6 +367,32 @@ public:
     // Safe for real-time threads because it uses only atomic reads.
     std::shared_ptr<twOutputPage> getPageIfExists(offset_t startPos);
 
+    // ...and that try-lock is exactly why getPageIfExists is the WRONG reader
+    // off the audio thread: it answers "not right now" whenever another thread
+    // holds the cache lock, which a caller that has just waited for a demand
+    // reads as "the page was never frozen" (QBX-223). Such a caller wants
+    // getPagesInRange(), which blocks for as long as the short critical
+    // section lasts. capture_revalidator.cc's own self-stale check says the
+    // same thing about itself.
+
+    // TEST-ONLY SEAM (QBX-223). Holds this component's state mutex -- the one
+    // guarding the page cache -- for as long as the object lives, so a
+    // try-lock probe is GUARANTEED to miss and a blocking reader is
+    // GUARANTEED to wait. Contending threads make unavailability LIKELY, not
+    // certain, which is how a gate for a non-blocking path comes back green on
+    // a build that blocks.
+    //
+    // Construct it on a thread that will NOT then touch this component: it
+    // blocks every other accessor, the revalidator's workers included, until
+    // it is destroyed. Never on the audio thread. It takes mutex() and nothing
+    // else, so it cannot invert the cursorMutex_ -> mutex() order.
+    class CacheLockForTests {
+    public:
+        explicit CacheLockForTests(const twComponent &c) : lock_(c.mutex()) {}
+    private:
+        std::lock_guard<std::mutex> lock_;
+    };
+
     // Release pages outside of a time retention window (memory management).
     // Frees pages whose [startPos, startPos + FRAME_CAPACITY) range ends before
     // keepAfterPos. keepAfterPos and startPos are both FRAME positions; the

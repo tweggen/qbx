@@ -115,6 +115,35 @@ Invariants:
    freed under a worker tends to surface as a fault in Qt's per-thread
    teardown, nowhere near the object.
 
+12. **A COMPLETED DEMAND DOES NOT PROMISE A PAGE, and a non-RT consumer reads
+    it with the BLOCKING accessor** (QBX-223). Two halves, both of them this
+    file's own doing. First, `GraphDemand::wait()` returns when the demand is
+    finished, which is not the same as "a current page is in the cache":
+    invariant 7's self-stale half publishes a page and re-stales it
+    *deliberately before* completing the demand, and invariant 10 completes a
+    retired node's demand as `notProduced()`. The engine's own consumer answers
+    by RE-DEMANDING the position (AudioEngine's epoch-scoped readahead
+    supersession), so a consumer that treats one demand as a guarantee has
+    written a race. Second, `twComponent::getPageIfExists()` is the AUDIO
+    THREAD's accessor — a try-lock that answers "not right now" whenever
+    another thread holds the cache lock, which the audio thread handles by
+    outputting silence and trying again next frame. Anything with no next frame
+    must use `getPagesInRange()`, as processGraphNode's own self-stale check
+    does for exactly this reason. **The two halves fail differently**, which is
+    worth knowing before triaging one: the try-lock makes a page that IS there
+    look absent, so the symptom is a load-dependent "no frozen page" on a
+    correct build — that is what turned CI red on run `40096553722`, with a
+    message about channel width — whereas the stale half leaves a page that
+    looks present and valid (`invalidatePagesInRange` bumps the epoch and
+    marks pages stale IN PLACE; it does NOT clear `validAspects`), so a
+    consumer that tests only the aspects MEASURES outdated audio and reports a
+    number. `assert-clip-channels` was exposed to both. The rule for such a reader — demand, wait, read blocking,
+    re-demand bounded, then FAIL NAMING THE WAIT — is implemented once in
+    `main/testkit/include/app/testkit/sdemandedpage.h`, with the two fault
+    injectors (`contendCacheMs`, `staleAfterDemand`) that make each half
+    deterministic; `twComponent::CacheLockForTests` is the test-only seam that
+    makes the lock genuinely unavailable instead of merely contended.
+
 How to test: `ctest -R schedule_test` (retireObject and retireComponentNodes lifetime/retirement — including 100
 randomized interleavings of a retirement against a running demand — the
 dependency-

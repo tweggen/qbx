@@ -60,6 +60,46 @@
   and that is right rather than a leak: the capture is 48000 frames and the page
   is 65536, so the trailing 17536 frames are silence and
   0.5 * sqrt(48000/65536) = 0.4279. The ladder is intact; the window is not full.
+
+  READING A DEMANDED PAGE (section d, QBX-223). This case turned CI red on run
+  40096553722 (main at 59ca0dfa) with
+
+      assert-clip-channels: no frozen page at 0 for clip "1,0"
+
+  on a correct build: the sibling assertion on clip 0,0 had passed 0.176 s
+  earlier reporting a full page, and clip 3,0 passed after it. The message was
+  about channel width and the defect was in the READ. Two separate reasons, both
+  documented in the engine, both now covered by sdemandedpage.h:
+
+    * the verb read the component's cache with getPageIfExists(), which is the
+      AUDIO THREAD's try-lock accessor and answers "not available right now"
+      whenever another thread holds the cache lock. The audio thread has a next
+      frame to try again on; an assertion that has just waited for its demand
+      does not. capture_revalidator.cc says the same of itself at the
+      self-stale check: "getPagesInRange(), NOT getPageIfExists()";
+    * a COMPLETED demand does not promise a CURRENT page. Verify-at-publish
+      re-stales a page whose component was edited during the render, on purpose
+      BEFORE completing the demand, and the engine's own consumer answers by
+      re-demanding the position. A retired node completes a demand as
+      notProduced(). One demand is therefore not a guarantee, bounded
+      re-demands are, and the give-up must be loud.
+
+  WHICH OF THE TWO WAS THE CI FAILURE: the try-lock, necessarily. A re-staled
+  page is NOT an absent one — invalidatePagesInRange() bumps the component's
+  epoch and marks pages stale in place, leaving validAspects set — so the stale
+  half could never have produced "no frozen page"; it would have measured the
+  outdated page and reported a plausible 2-channel ladder. That is the quieter
+  defect of the two, and section (d2) is the only place it is visible. Run
+  40096553722's log is no longer retrievable (`gh run view` answers with
+  nothing for it, in either log mode), so that narrowing comes from reading the
+  engine rather than from the run.
+
+  Section (d) makes both deterministic with two test-only injectors, because
+  neither reproduces on a 12-core dev box: contendCacheMs really holds the lock
+  on another thread (contention makes unavailability likely, not certain, which
+  is how a gate for a non-blocking read comes back green on a build that
+  blocks), and staleAfterDemand re-stales the page the moment its demand ends.
+  Section (d) asserts on clip 1,0 deliberately: that is the clip CI lost.
 -->
 <SActionScript version="1" name="mc_capture_clip_width">
 
@@ -174,6 +214,51 @@
                          startFrame="148000" frameCount="40000"
                          channel="2" minRms="0.0" maxRms="1.0"
                          expectReject="true"/>
+
+    <!-- ====== section (d) — QBX-223, reading a DEMANDED page ========== -->
+    <!-- (d1) THE CI FAILURE, REPRODUCED. A thread genuinely holds clip 1,0's
+         page-cache lock across the read, so the try-lock probe this verb used
+         until QBX-223 would miss and report "no frozen page" — the exact line
+         run 40096553722 failed on. The blocking read waits the holder out, so
+         the assertion that was red there passes here.
+
+         THE ASSERT-LOG PAIR IS NOT DECORATION, measured: with the try-lock
+         read put back, the clip assertion below still PASSES, because the
+         bounded re-demand reads again on attempt 2 and the injector only
+         contends the first read. So the retry alone would have hidden the
+         wrong reader, and the pair is the only thing that pins WHICH reader
+         ran. Keep both lines: one requires the blocking read's own message,
+         the other forbids the try-lock's. -->
+    <assert-clip-channels clip="1,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"
+                          contendCacheMs="300"/>
+    <assert-log contains="blocking page read waited"/>
+    <assert-log contains="page read did NOT wait" minCount="0" maxCount="0"/>
+
+    <!-- (d2) THE OTHER HALF. The page is published and immediately re-staled,
+         which is what verify-at-publish does to a node whose component was
+         edited mid-render. One demand does not get a page here; the bounded
+         re-demand does, on attempt 2, exactly as the readahead's epoch-scoped
+         supersession re-demands the position. -->
+    <assert-clip-channels clip="1,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"
+                          staleAfterDemand="true"/>
+    <assert-log contains="a fresh demand produced it on attempt"/>
+
+    <!-- (d3) ...and the bound GIVES UP LOUDLY rather than waiting forever or
+         passing quietly: one demand, spent on a page the injector re-stales,
+         fails naming the wait and the page's state. Without this the retry
+         could mask a page that is never frozen, which is the one thing a
+         bounded wait must not be able to do. -->
+    <assert-clip-channels clip="1,0" position="0" expectChannels="2"
+                          channelA="0" channelB="1"
+                          minRmsDelta="0.20" minDiffRms="0.20"
+                          staleAfterDemand="true" maxDemands="1"
+                          expectReject="true"/>
+    <assert-log contains="PAGE NOT READY"/>
+    <assert-log contains="bounded demand(s)"/>
 
     <report-page-memory label="mc_capture_clip_width after render"/>
   </actions>

@@ -8,6 +8,7 @@
 #include "app/model/ssolorules.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
+#include "app/testkit/sdemandedpage.h"
 
 #include "tw/core/twtypes.h"
 #include "tw/graph/twcomponent.h"
@@ -61,19 +62,25 @@ STrack *laneAtPath( SProject *project, const QString &pathRoot_,
 std::shared_ptr<twOutputPage> materialize( SProject *project,
                                            const std::shared_ptr<twComponent> &comp,
                                            offset_t pageStart,
-                                           bool useScheduler )
+                                           bool useScheduler,
+                                           const char *verb )
 {
     if( !comp ) return nullptr;
 
     CaptureRevalidator *reval = useScheduler ? project->getRevalidator() : nullptr;
     if( reval ) {
-        auto demand = reval->requestGraphPages( comp, pageStart, 1 );
-        if( demand ) demand->wait();
-        std::shared_ptr<twOutputPage> page = comp->getPageIfExists( pageStart );
-        if( page && page->validAspects.load() != 0 ) return page;
-        // Fall through to the pull: a demand can legitimately come back with
-        // nothing (a plan miss), and a verb that reported "no page" there would
-        // be measuring the scheduler rather than the width.
+        // sdemandedpage::read, not a try-lock probe and not one demand: this
+        // used to read the cache with the audio thread's getPageIfExists(), so
+        // a held cache lock sent it down the PULL below — silently measuring
+        // the other path, under load, which is the quiet half of QBX-223.
+        const sdemandedpage::Outcome got =
+            sdemandedpage::read( reval, comp, pageStart, verb );
+        if( got.page ) return got.page;
+        // Only now the pull. A demand can still legitimately come back with
+        // nothing (a plan miss, a retired node), and a verb that reported "no
+        // page" there would be measuring the scheduler rather than the width.
+        qWarning() << verb << ": falling back to the legacy pull at"
+                   << (qlonglong) pageStart << "-" << got.why;
     }
 
     return comp->requestPage( pageStart, nullptr, 0,
@@ -110,7 +117,8 @@ SApplyResult SAssertTrackChannelsAction::apply( SProject *project )
                                                  Qt::CaseInsensitive ) != 0 );
 
     std::shared_ptr<twOutputPage> page =
-        materialize( project, tap, pageStart, useScheduler );
+        materialize( project, tap, pageStart, useScheduler,
+                     "assert-track-channels" );
 
     if( !page || page->validAspects.load() == 0 || page->validFrames == 0 ) {
         qWarning() << "assert-track-channels: no frozen page at"
@@ -234,7 +242,8 @@ SApplyResult SAssertMasterSumsAction::apply( SProject *project )
     const offset_t pageStart = twFloorAlign( (offset_t) position_, CAP );
 
     std::shared_ptr<twOutputPage> master =
-        materialize( project, mixer->getRootComponent(), pageStart, true );
+        materialize( project, mixer->getRootComponent(), pageStart, true,
+                     "assert-master-sums" );
     if( !master || master->validAspects.load() == 0 || master->validFrames == 0 ) {
         qWarning() << "assert-master-sums: no master page at" << (qlonglong) pageStart;
         return { false, nullptr };
@@ -251,7 +260,8 @@ SApplyResult SAssertMasterSumsAction::apply( SProject *project )
         if( !ssolo::isLaneAudible( mixer, &so, anySolo ) ) continue;
         std::shared_ptr<twComponent> comp = lk->getRootComponent();
         if( !comp ) continue;
-        std::shared_ptr<twOutputPage> p = materialize( project, comp, pageStart, true );
+        std::shared_ptr<twOutputPage> p =
+            materialize( project, comp, pageStart, true, "assert-master-sums" );
         if( !p || p->validAspects.load() == 0 ) {
             qWarning() << "assert-master-sums: a track produced no page at"
                        << (qlonglong) pageStart;

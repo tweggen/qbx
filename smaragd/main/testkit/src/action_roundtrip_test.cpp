@@ -78,11 +78,14 @@ const Fixture kFixtures[] = {
       " minRmsDelta='0.250000' minDiffRms='0.100000' startFrame='4000'"
       " frameCount='4000'/>" },
     // Same shape (minDiffRms only written when >= 0), plus a clip path, which a
-    // default instance does not have.
+    // default instance does not have. maxDemands, contendCacheMs and
+    // staleAfterDemand are also written only when non-default (QBX-223 added
+    // all three), so the fixture spells each one out or they are not audited.
     { "assert-clip-channels",
       "<assert-clip-channels clip='0,0' position='4096' expectChannels='2'"
       " channelA='0' channelB='1' minRmsDelta='0.150000'"
-      " minDiffRms='0.150000'/>" },
+      " minDiffRms='0.150000' maxDemands='2' contendCacheMs='120'"
+      " staleAfterDemand='true'/>" },
     // Proposal 36 B4. minDiffRms/minRms are only written when >= 0, and the
     // driver is always written (its default is meaningful: "scheduler" and
     // "pull" exercise two different halves of the engine).
