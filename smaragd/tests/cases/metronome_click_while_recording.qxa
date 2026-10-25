@@ -90,6 +90,64 @@
     <assert-metronome-clicks filename="click_off.wav" channel="0"
                              threshold="0.05" window="64" count="0"/>
 
+    <!-- ===== THE ANCHOR, deterministically (QBX-227) =====================
+         The two takes above are LIVE: whether onset 0 lands near the grid or
+         a block away from it is the box's business, so they could not gate
+         the anchoring rule. This section does, on a committed fixture whose
+         bytes ARE the measured failure.
+
+         `../test_clicks_head_blip.wav` carries the shape of the failing run,
+         and `../tools/gen_clicks_head_blip_fixture.py` regenerates it, for the
+         reason that generator's own header gives: a fixture nobody can
+         regenerate is a fixture nobody can reason about. It is:
+         one attenuated onset at frame 0 that is NOT on the grid, then eight
+         clicks on an exact 24000 one. Measured off the fixture itself:
+
+             onsets  0, 25930, 49930, 73930, 97930, 121930, 145930, 169930, 193930
+             peaks   0.2006, then 0.3329 eight times
+             grid anchored on onset 0  ->  worst error 1930, over the 1024 bound
+             grid anchored on onset 1  ->  worst error 0
+
+         So this is the sabotage target: put the anchor back on onset 0 and
+         this element fails, while both live takes above still pass. The live
+         halves say the clicks happen; this says the grid is measured from a
+         click the capture did not place.
+
+         The bound stays 1024, the house device-block tolerance. It is NOT the
+         defect and widening it to 2048 would admit a real 8 % timing error at
+         interval 24000. Note the headroom this opens: the honest worst error
+         on real data is now 1 frame, so the bound could be tightened a long
+         way - deliberately left for its own ticket, since it would be a new
+         claim about every caller rather than a fix for this one. -->
+    <assert-metronome-clicks filename="../test_clicks_head_blip.wav" channel="0"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             count="9"
+                             intervalFrames="24000" toleranceFrames="1024"/>
+
+    <!-- ...and the grid check is LIVE, which the element above cannot show on
+         its own: it reports worst error 0, so it would pass any bound. A
+         WRONG interval against the same fixture must refuse, or "anchored on
+         onset 1" would be indistinguishable from "not checked at all". 23000
+         puts each successive click another 1000 frames out, so the last
+         one is 7000 off. -->
+    <assert-metronome-clicks filename="../test_clicks_head_blip.wav" channel="0"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             count="9"
+                             intervalFrames="23000" toleranceFrames="1024"
+                             expectReject="true"/>
+
+    <!-- ...and the too-few-onsets REFUSAL is live as well. Dropping onset 0
+         from the grid means a two-onset file has one anchor and one point,
+         which is no grid at all - and passing that quietly is how a gate ends
+         up resting on nothing. `startFrame` past the seventh click leaves
+         exactly two onsets in range, so this must refuse. Found by sabotage:
+         making the refusal a quiet pass left every case green. -->
+    <assert-metronome-clicks filename="../test_clicks_head_blip.wav" channel="0"
+                             threshold="0.05" window="64" minGapFrames="4800"
+                             startFrame="169000" count="2"
+                             intervalFrames="24000" toleranceFrames="1024"
+                             expectReject="true"/>
+
     <!-- This case OWNS metronome/clickWhileRecording; put it back. ......... -->
     <set-option key="metronome/clickWhileRecording" value="true"/>
     <metronome-disable/>

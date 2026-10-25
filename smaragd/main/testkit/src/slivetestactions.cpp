@@ -635,21 +635,57 @@ SApplyResult SAssertMetronomeClicksAction::apply( SProject *project )
         }
     }
 
-    // THE GRID, anchored on the first onset (see the header for why).
-    if( intervalFrames_ > 0 && onsets.size() >= 2 ) {
+    // THE GRID, anchored on the SECOND onset (QBX-227). It used to anchor on
+    // the first, which made the whole grid rest on the one onset the capture
+    // start places. The accent check below already skips onset 0 and says why
+    // -- "the first click of a live-lane session sits inside the RT's fade-in
+    // ramp and is attenuated by construction" -- and an attenuated onset is
+    // one whose DETECTED POSITION is partly the box's business: the running
+    // window crosses `threshold` wherever the ramp happens to have reached it.
+    //
+    // MEASURED on metronome_click_while_recording, a failing and a passing run
+    // of the same binary at loadavg ~14:
+    //
+    //   FAILED  0@0   (pk 0.2109), 1@25986, 2@49986, 3@73986, 4@97985, ...
+    //   PASSED  0@995 (pk 0.2109), 1@25986, 2@49986, 3@73986, 4@97985, ...
+    //
+    // Onsets 1.. are an EXACT 24000 grid in both (24000, 24000, 23999, 24001)
+    // and sit at the same absolute frames; only onset 0 moves, and its own
+    // distance from that grid is 991 in one run and 1986 in the other against
+    // a 1024 tolerance. So the old anchoring reported the capture head as a
+    // grid error, and the remedy is the anchor rather than the tolerance --
+    // widening to 2048 would admit a real 8 % timing defect at interval 24000.
+    //
+    // From the second onset the measurement is what it claims to be: the same
+    // data now reads a worst error of 1 frame.
+    if( intervalFrames_ > 0 ) {
+        // ONE anchor plus at least two points, so dropping onset 0 cannot
+        // leave a grid with nothing in it. A case that asked for a grid and
+        // got too few clicks is told so, rather than passing on no evidence.
+        if( onsets.size() < 3 ) {
+            qWarning() << "assert-metronome-clicks: intervalFrames needs at"
+                       << "least 3 onsets (the grid is anchored on the SECOND,"
+                       << "so onset 0 is not a grid point); found"
+                       << (qint64) onsets.size();
+            return { false, nullptr };
+        }
+        const std::size_t anchor = 1;
         qint64 worst = 0;
         QStringList errs;
-        for( std::size_t k = 1; k < onsets.size(); ++k ) {
-            const qint64 ideal = onsets[0] + (qint64) k * intervalFrames_;
+        for( std::size_t k = anchor + 1; k < onsets.size(); ++k ) {
+            const qint64 ideal = onsets[anchor]
+                               + (qint64) ( k - anchor ) * intervalFrames_;
             const qint64 e     = onsets[k] - ideal;
             errs << QString::number( e );
             worst = std::max( worst, std::llabs( e ) );
         }
         qInfo().noquote() << QStringLiteral(
             "assert-metronome-clicks: grid errors (frames) = [%1], worst |%2| "
-            "against %3" )
+            "against %3, anchored on onset %4 @ %5 (onset 0 @ %6 is NOT a grid "
+            "point: the capture start places it)" )
             .arg( errs.join( QStringLiteral( ", " ) ) )
-            .arg( worst ).arg( tolerance_ );
+            .arg( worst ).arg( tolerance_ )
+            .arg( (qint64) anchor ).arg( onsets[anchor] ).arg( onsets[0] );
         if( worst > tolerance_ ) {
             qWarning() << "assert-metronome-clicks: worst grid error" << worst
                        << ">" << tolerance_;
