@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-232. A TRACK THAT LEAVES A MIXER'S TREE LEAVES THAT MIXER'S SELECTION.
+
+  THE DEFECT. SStdMixer holds its selection in QPointers (selectedTrack_,
+  selectedTracks_). A QPointer clears itself when its object is DELETED, which
+  is what happens to a track that is plainly removed: nothing re-refs it, the
+  count reaches zero and it is deleteLater'd. A track that is MOVED is a
+  different story: the destination has already added a ref, so the track stays
+  alive and the QPointer never clears. After extract-arrangement the master
+  therefore went on selecting a lane that now lives in the arrangement, and
+  Track Detail, which follows the master's selection while the Arrangement tab
+  is active, showed a lane absent from the arrangement on screen (QBX-231's
+  arrangement_track_inserts read path=Drums:1 off the master).
+
+  WHY THE FIX IS NOT IN removeTrack(), where a departure looks like it belongs.
+  Two measurements said otherwise, and sections (c) and (d) below are each one
+  of them:
+
+    - every mover is remove-THEN-insert (sextractarrangementaction.cpp:227,
+      sdissolvearrangementaction.cpp:138, sreparenttrackaction.cpp:115), so
+      mid-move the track is in NEITHER tree and "has it left?" has no truthful
+      answer yet;
+    - a track whose parent is a FOLDER rather than the mixer is detached with
+      `delete ownLink` and never reaches removeTrack() at all;
+    - selection is TREE-WIDE, because strackpath::pathOf recurses into path
+      containers, so a track reparented into a folder of the SAME root never
+      leaves the tree and must STAY selected.
+
+  So the question is REACHABILITY, asked once the move has settled:
+  SStdMixer::pruneSelectionToTree(), called by extract-arrangement and
+  dissolve-arrangement. reparent-track deliberately does not call it, and says
+  so at the call site it does not make.
+
+  THE ORACLE. assert-track-selection already reports a selected track that is
+  no longer in the mixer's tree as "<detached>" rather than dropping it
+  silently, so the broken state is directly assertable and the fixed one is an
+  empty set. No new verb, and no assertion that needs the stale pointer
+  dereferenced beyond the pathOf walk the verb already does on a live object.
+-->
+<SActionScript version="1" name="extract_leaves_master_selection">
+  <actions>
+    <!-- Track 3 is added clip-free on purpose: it becomes the FOLDER in (c),
+         and strackpath addresses a lane's clips and its child lanes in ONE
+         index space, so a folder carrying its own clip puts that clip at 0,0
+         and the nested lane at 0,1. Measured, after a first attempt indexed a
+         clip as though it were the track. Every index below is pinned with an
+         assert-track-name at the moment it is used, so a renumbering shows up
+         as a name mismatch rather than as a silent wrong target. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="2" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-track-name trackPath="1" name="Mover"/>
+    <set-track-name trackPath="2" name="Keep"/>
+
+    <!-- ===== (a) A TOP-LEVEL TRACK LEAVES THE MASTER ===================
+         Two tracks selected, and the PRIMARY is the one that will move, so
+         both halves are pinned: the mover leaves the set, and the primary
+         passes on to who is left (as toggleTrackSelection does). -->
+    <select-track trackPath="2"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <assert-track-selection paths="1;2" primary="1"/>
+
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <!-- The asset lane lands where the topmost extracted track was, so the
+         master reads [0] original, [1] the Drums lane, [2] Keep. On the
+         pre-fix binary this assertion read ["<detached>", "2"] and the primary
+         resolved to the empty path. -->
+    <assert-track-name trackPath="2" name="Keep"/>
+    <assert-track-selection paths="2" primary="2"/>
+
+    <!-- ===== (b) UNDO LEAVES NOTHING DANGLING =========================
+         extract-arrangement's inverse is dissolve-arrangement, which moves the
+         track back. Restoring the selection is explicitly NOT required; what
+         matters is that nothing dangles, so Keep is still the whole selection
+         and the returned track is not in it. -->
+    <!-- Add the ASSET LANE the extraction just made to the selection, so the
+         dissolve has a selected track to REMOVE and its own prune is gated:
+         the lane is deleted once it empties (sdissolvearrangementaction.cpp),
+         and nothing re-refs it, so its QPointer would clear itself eventually
+         but not before the next read. Ctrl, so Keep stays in the set and both
+         claims below are live at once. -->
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <assert-track-selection paths="1;2" primary="1"/>
+
+    <undo/>
+    <assert-track-count arrangement="" count="3"/>
+    <assert-track-name trackPath="1" name="Mover"/>
+    <!-- The asset lane is gone from the set and the primary passed to Keep;
+         the returned Mover is NOT selected. Without the dissolve's prune this
+         read ["<detached>", "2"]. -->
+    <assert-track-selection paths="2" primary="2"/>
+
+    <!-- ===== (c) A NESTED TRACK LEAVES THE MASTER ======================
+         THE SHAPE A removeTrack() DROP CANNOT SEE. Mover becomes a child of a
+         clip-free folder, so its parent is a folder STrack and not the mixer:
+         the extraction detaches it with `delete ownLink` and removeTrack() is
+         never called at all. Selecting it first also proves the selection is
+         TREE-WIDE, which is what makes (d) a real risk and not a
+         hypothetical. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Folder"/>
+    <reparent-track source="1" destParent="3" destIndex="-1"/>
+    <assert-track-count arrangement="" count="3"/>
+    <assert-track-name trackPath="2" name="Folder"/>
+    <assert-track-name trackPath="2,0" name="Mover"/>
+
+    <select-track trackPath="2,0"/>
+    <assert-track-selection paths="2,0" primary="2,0"/>
+    <extract-arrangement trackPaths="2,0" rangeStart="0" rangeEnd="192000"
+                         name="Nested" window="range" placeAt="0"/>
+    <assert-track-selection paths="" primary=""/>
+
+    <!-- ===== (d) A REPARENT KEEPS THE SELECTION ========================
+         THE REGRESSION A removeTrack() DROP WOULD CAUSE. reparent-track moves
+         a track WITHIN one root, so it never leaves the mixer's tree and must
+         stay selected at its new, nested path. A drop inside removeTrack()
+         reads the detach half as a departure and deselects a folder drag. -->
+    <assert-track-count arrangement="" count="4"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Dragged"/>
+    <set-track-name trackPath="5" name="DropFolder"/>
+    <assert-track-count arrangement="" count="6"/>
+
+    <select-track trackPath="4"/>
+    <assert-track-selection paths="4" primary="4"/>
+    <!-- reparent-track resolves BOTH paths before the detach (measured: (c)'s
+         destParent="3" resolved with source="1" still in place), so
+         destParent="5" is DropFolder and not what index 5 becomes after the
+         move. The detach renumbers the top level, leaving DropFolder at 4. -->
+    <reparent-track source="4" destParent="5" destIndex="-1"/>
+    <assert-track-count arrangement="" count="5"/>
+    <assert-track-name trackPath="4" name="DropFolder"/>
+    <assert-track-name trackPath="4,0" name="Dragged"/>
+    <!-- STILL SELECTED, at its new nested path. This is the assertion a drop
+         inside removeTrack() fails: it sees the detach half, finds the track
+         absent from the mixer's children and deselects a track that never left
+         the tree. -->
+    <assert-track-selection paths="4,0" primary="4,0"/>
+  </actions>
+</SActionScript>

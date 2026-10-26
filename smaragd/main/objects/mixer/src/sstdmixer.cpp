@@ -1209,6 +1209,26 @@ void SStdMixer::setSelectedTracks( const QList<STrack *> &tracks, STrack *primar
     if( primaryChanged ) emit selectedTrackChanged( nextPrimary );
 }
 
+int SStdMixer::pruneSelectionToTree()
+{
+    // pathOf() answers {} both for "not in this tree" AND for the root itself;
+    // a track is never the root mixer, so the ambiguity cannot arise here.
+    QList<STrack *> keep;
+    int dropped = 0;
+    for( STrack *t : getSelectedTracks() ) {
+        if( strackpath::pathOf( this, t ).isEmpty() ) { ++dropped; continue; }
+        keep.append( t );
+    }
+    if( !dropped ) return 0;
+    // The primary passes on only if it was one of the dropped: setSelectedTracks
+    // keeps it when it is still a member.
+    STrack *primary = selectedTrack_.data();
+    const bool primaryKept = primary && keep.contains( primary );
+    setSelectedTracks( keep, primaryKept ? primary
+                                         : ( keep.isEmpty() ? nullptr : keep.last() ) );
+    return dropped;
+}
+
 void SStdMixer::toggleTrackSelection( STrack *track )
 {
     if( !track ) return;

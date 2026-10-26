@@ -29,6 +29,30 @@ Invariants:
    gesture acts on (app/timeline/CONTRACT.md inv. 12). Selection is NOT
    serialized and is not an action — it is view state.
 
+   **The QPointer is not the whole lifetime story (QBX-232).** It clears on
+   DELETE, which covers a removed track, but NOT on a MOVE: the destination
+   adds its ref before the source drops one, so a moved track stays alive and
+   the selection keeps pointing at it. After `extract-arrangement` the master
+   therefore went on selecting a lane that now lived in the arrangement.
+   A verb that MOVES tracks calls `pruneSelectionToTree()` once the move has
+   settled, which drops every selected track no longer REACHABLE here.
+
+   Reachability, not membership of `childLinks()`: selection is TREE-WIDE,
+   because `strackpath::pathOf` recurses into path containers, so a nested
+   lane is addressable and selectable at `2,0`. (That same index space holds a
+   lane's CLIPS, so a folder carrying its own clip puts the clip at `2,0` and
+   the child lane at `2,1`.)
+
+   And deliberately NOT inside `removeTrack()`, though that is where a
+   departure looks like it belongs. Every mover is remove-THEN-insert, so
+   mid-move the track is in neither tree and "has it left?" has no truthful
+   answer; a track whose parent is a FOLDER is detached with `delete ownLink`
+   and never reaches `removeTrack()` at all; and `reparent-track` moves within
+   one root, so its track never leaves the tree and must stay selected.
+   Measured: a drop inside `removeTrack()` both misses the nested extraction
+   and deselects a folder drag — `extract_leaves_master_selection.qxa`
+   sections (c) and (d) are each one of those.
+
 Self-registration (Phase 5): sstdmixer.cpp and spluginchain.cpp register
 "SStdMixer" / "SPluginChain" with SProjectLoader from static initializers.
 
