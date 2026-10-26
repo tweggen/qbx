@@ -33,6 +33,34 @@ SApplyResult SAssertAudioEnergyAction::apply(SProject *project)
 
     QString fullPath = resolveTestFilePath(filename_, outputDir, project);
 
+    // THE WINDOW, ANCHORED OR ABSOLUTE (QBX-228).
+    //
+    // With anchorOnset, `startFrame` is an offset FROM where energy begins
+    // rather than a position in the file, because captured frame 0 is the
+    // DEVICE START and the leading silence in front of it is a wall-clock
+    // quantity of the machine. The resolved absolute window is LOGGED either
+    // way on a failure: "out of range" without saying where it measured is
+    // what made master_closure_linear_ring cost two sessions.
+    int64_t windowStart = startFrame_;
+    int64_t onsetFrame  = -1;
+    if (anchorOnset_) {
+        std::string onsetErr;
+        if (!audio::findOnsetFrame(fullPath.toStdString(), 0, channel_,
+                                   onsetThreshold_, onsetWindow_,
+                                   onsetFrame, onsetErr)) {
+            qWarning() << "SAssertAudioEnergyAction: anchorOnset: cannot read"
+                       << fullPath << ":" << QString::fromStdString(onsetErr);
+            return {false, nullptr};
+        }
+        if (onsetFrame < 0) {
+            qWarning() << "SAssertAudioEnergyAction: anchorOnset:" << filename_
+                       << "never reaches RMS" << onsetThreshold_
+                       << "- there is no onset to anchor on";
+            return {false, nullptr};
+        }
+        windowStart = onsetFrame + startFrame_;
+    }
+
     // Analyze the audio file. ONE call, region or not: the whole-file path used
     // to be a separate call that hard-coded channel = -1, so `channel=` was
     // silently ignored whenever frameCount was omitted. A
@@ -41,7 +69,7 @@ SApplyResult SAssertAudioEnergyAction::apply(SProject *project)
     std::string error;
     audio::AcousticMetrics metrics =
         audio::analyzeWavFileRegion(fullPath.toStdString(),
-                                    startFrame_, frameCount_,
+                                    windowStart, frameCount_,
                                     channel_, error);
 
     if (!error.empty()) {
@@ -58,7 +86,16 @@ SApplyResult SAssertAudioEnergyAction::apply(SProject *project)
                    << "channel" << channel_ << "(-1 = all pooled)"
                    << "RMS energy out of range"
                    << "expected [" << minRms_ << ", " << maxRms_ << "]"
-                   << "got" << metrics.rmsEnergy;
+                   << "got" << metrics.rmsEnergy
+                   // WHERE it measured, so a red CI run is diagnosable from
+                   // its own log. With an anchor the onset is the quantity
+                   // that differs between machines, so it is named too.
+                   << "over [" << windowStart << ","
+                   << ( frameCount_ < 0 ? -1 : windowStart + frameCount_ ) << ")"
+                   << ( anchorOnset_
+                            ? QStringLiteral( "anchored on onset %1 + %2" )
+                                  .arg( onsetFrame ).arg( startFrame_ )
+                            : QStringLiteral( "absolute" ) );
         return {false, nullptr};
     }
 
@@ -82,6 +119,11 @@ void SAssertAudioEnergyAction::writeXml(QDomElement &elem) const
     if (channel_ != -1) {
         elem.setAttribute("channel", QString::number(channel_));
     }
+    if (anchorOnset_) {
+        elem.setAttribute("anchorOnset", "1");
+        elem.setAttribute("onsetThreshold", QString::number(onsetThreshold_, 'f', 6));
+        elem.setAttribute("onsetWindow", QString::number(onsetWindow_));
+    }
 }
 
 bool SAssertAudioEnergyAction::readXml(const QDomElement &elem, int /*version*/)
@@ -97,6 +139,15 @@ bool SAssertAudioEnergyAction::readXml(const QDomElement &elem, int /*version*/)
     startFrame_ = elem.attribute("startFrame", "0").toLongLong(&ok3);
     frameCount_ = elem.attribute("frameCount", "-1").toLongLong(&ok4);
     channel_ = elem.attribute("channel", "-1").toInt(&ok5);
+
+    bool ok6, ok7;
+    anchorOnset_    = elem.attribute("anchorOnset", "0").toInt() != 0;
+    onsetThreshold_ = elem.attribute("onsetThreshold", "0.02").toDouble(&ok6);
+    onsetWindow_    = elem.attribute("onsetWindow", "64").toLongLong(&ok7);
+    if (!ok6 || !ok7) {
+        qWarning() << "SAssertAudioEnergyAction::readXml: invalid onset attributes";
+        return false;
+    }
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5) {
         qWarning() << "SAssertAudioEnergyAction::readXml: invalid numeric attributes";

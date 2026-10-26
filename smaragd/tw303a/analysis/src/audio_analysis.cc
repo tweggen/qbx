@@ -38,6 +38,30 @@ AcousticMetrics analyzeWavFile(const std::string &filename, std::string &error,
     return analyzeWavFileRegion(filename, 0, -1, channelIndex, error);
 }
 
+bool findOnsetFrame(const std::string &filename, int64_t startFrame,
+                    int channelIndex, double threshold, int64_t window,
+                    int64_t &onset, std::string &error, int *sampleRate)
+{
+    onset = -1;
+    const int64_t w = (window > 0) ? window : 64;
+    std::vector<float> pcm;
+    int rate = 0;
+    if (!readAudioRegion(filename, startFrame, -1, channelIndex, pcm, rate,
+                         error))
+        return false;
+    if (sampleRate) *sampleRate = rate;
+    for (int64_t i = 0; i + w <= (int64_t)pcm.size(); ++i) {
+        double sum = 0.0;
+        for (int64_t k = 0; k < w; ++k)
+            sum += (double)pcm[i + k] * (double)pcm[i + k];
+        if (std::sqrt(sum / (double)w) >= threshold) {
+            onset = startFrame + i;
+            return true;
+        }
+    }
+    return true;   // read fine, no onset: onset stays -1
+}
+
 AcousticMetrics analyzeWavFileRegion(const std::string &filename,
                                      int64_t startFrame, int64_t frameCount,
                                      int channelIndex, std::string &error)

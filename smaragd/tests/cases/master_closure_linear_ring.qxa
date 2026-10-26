@@ -59,7 +59,66 @@
   runs past the end of the material, halves one source, and reads exactly like
   the other source alone; that artifact was very nearly written up as an
   engine defect. Hence: the fixture is placed TWICE for 8 s and the window is
-  [168000, 216000) - 3.5 to 4.5 s.
+  2.861 s after the onset, which on this box is [168000, 216000) - 3.5 to
+  4.5 s.
+
+  ...AND THE PRIMING LAG CAME BACK ANYWAY (QBX-228). Moving the window past
+  the lag did not remove the lag; it made it smaller than the band ON THIS BOX
+  and not on CI. The window was ABSOLUTE, and captured frame 0 is the DEVICE
+  START rather than the locator position, so the leading silence in front of
+  it is a wall-clock quantity of the machine - which is precisely what
+  sdumpplaybackcaptureaction.h says at length, ending "Anything measured over
+  this file must do the same: bound the start with assert-audio-onset, and
+  begin the measurement window one device block in." This case did not, and
+  that is the whole defect.
+
+  THE BAND WAS A POSITIONAL TOLERANCE IN DISGUISE. Over RAMPING material a
+  displaced window reads as an amplitude difference, and the sweep says how
+  much: the +/- 3 % band admits -2028..+2008 frames of head slip, so CI's
+  2044-frame displacement missed it by SIXTEEN FRAMES' worth. Widening the
+  band was therefore exactly the wrong remedy - at 3 % it already tolerates
+  two capture blocks, and widening it to admit 2044 would have admitted any
+  displacement at all up to ~2050, retiring most of what the window is
+  positioned to detect.
+
+  WHAT THE CI FAILURES ACTUALLY WERE. The failing value was BIT-IDENTICAL on
+  two different commits a day apart - 0.0845199 on PR #296 (a docs-only
+  change) and again on PR #302 - while a re-run of the SAME commit passed.
+  Two exactly reproducible outcomes is a DISCRETE state difference, not
+  jitter, which rules out a numerical difference between the runners' builds
+  (that could not pass on a re-run) and any fixed slip. The frame counts were
+  identical both sides, 256000, because the dump length is fixed and the HEAD
+  moves inside it - which is why QBX-222's frame-count triage misses this one.
+  The window is now anchored on the onset and the displacement is injected
+  below, so the failure reproduces locally and deterministically instead of
+  waiting for a runner to show it.
+
+  AND IT IS NOT CI-ONLY, which is where the ticket's own premise was wrong.
+  While fixing this, master_closure_heard_ring switched modes BETWEEN ctest
+  rounds on the dev box: its absolute window went from 0.164143 to 0.169044 -
+  exactly the -2048-frame value the sweep predicts - and then read 0.169044
+  four runs running, bit-stable in the new mode. Its ceiling is 0.1691, so it
+  passed by 0.00006. So the displacement happens here too; CI is not special,
+  it just lands in the mode that misses the band. "Bit-stable locally" was
+  true of each MODE and said nothing about which mode a run would get.
+
+  THE ANCHOR WAS THEN VALIDATED ON THAT REAL SWITCH, not only on the injected
+  one: over the displaced capture the absolute window reads 0.169044 (+2.98 %)
+  while the anchored window reads 0.164666 (+0.32 %), a ninefold reduction.
+  The residual is the anchor's own under-correction - the 0.02 crossing moved
+  1826 frames where the material moved about 2048 - and 0.32 % sits well
+  inside a 3 % band.
+
+  WHY THE DEFAULT 0.02 THRESHOLD AND NOT A LOWER ONE. A lower threshold looks
+  better in principle: it should land nearer the device start, where the
+  landmark is a timing quantity rather than a level crossing on this ramping
+  material. Measured, it is worse. At 0.0005 the two modes put heard_ring's
+  onset at 4097 and 2196 - moving the OPPOSITE way to the material, because
+  the displaced head carries quiet junk that crosses a low line early while
+  the real material arrives late. The 0.02 crossing moved +1826, i.e. WITH the
+  material, which is the only direction that corrects anything. The house
+  default is also what assert-metronome-clicks anchors its grid on, so the
+  two surfaces agree on where an onset is.
 
   THE SOURCES ARE UNCORRELATED ON PURPOSE: the root carries test_autosaw.wav
   and the ring test_sawtooth.wav, so their sum is sqrt of the sum of squares
@@ -101,8 +160,90 @@
     <wait-ms ms="5200"/>
     <toggle-playback play="0"/>
     <dump-playback-capture filename="master_closure_linear_ring.wav" minFrames="216000"/>
-    <assert-audio-energy filename="master_closure_linear_ring.wav" startFrame="168000" frameCount="48000"
+
+    <!-- BOUND AND REPORT THE ONSET, which is the house rule
+         sdumpplaybackcaptureaction.h states for anything measured over this
+         file: "bound the start with assert-audio-onset, and begin the
+         measurement window one device block in". The bound is also what keeps
+         the anchored window INSIDE the capture: onset + 185320 must stay
+         under the 256000 frames captured, so an onset past 65536 would make
+         the analyser read a short region and the band would mean something
+         else. assert-audio-onset reports the number whether the bounds pass
+         or fail, so a future red run names the quantity that moved. -->
+    <assert-audio-onset filename="master_closure_linear_ring.wav" channel="0"
+                        maxFrame="40000"/>
+
+    <!-- ANCHORED ON THE ONSET, not on frame 0 (QBX-228). 137320 = the old
+         absolute 168000 minus this box's onset of 30680, so the window covers
+         the same 2.861 s-after-audio-starts it always did. What changed is
+         that it now follows the capture head instead of assuming it. -->
+    <assert-audio-energy filename="master_closure_linear_ring.wav"
+                         anchorOnset="1" startFrame="137320" frameCount="48000"
                          channel="0" minRms="0.0796" maxRms="0.0845"/>
+
+    <!-- ===== THE DISPLACEMENT, INJECTED =============================
+         The same captured audio, dumped again with leading silence in front
+         of it (QBX-222's leadSilenceFrames, which exists for exactly this).
+         The capture is cumulative and playback has stopped, so every file
+         below carries identical audio and differs only in where its head sits.
+
+         This is what makes the anchor a gate rather than a hope: it
+         reproduces CI's failure LOCALLY and DETERMINISTICALLY. Measured:
+
+           absolute window, head displaced 2048 frames    0.0845219
+           CI's failing value, twice, on two commits      0.0845199
+           anchored window, same displaced file           0.0820714
+           anchored window, clean file                    0.0820714
+
+         The first two agree to the resolution of the measurement; the last
+         two are bit-identical, because the onset moved 30680 to 32728 -
+         exactly the 2048 injected - and the window followed.
+
+         TWO INJECTIONS, AND NEITHER SIZE IS ARBITRARY.
+
+         4096 is the one with a usable RMS MARGIN. The material plateaus below
+         the window, so displacement does not buy proportionally more level: at
+         2048 the absolute window reads +2.99 % and at 48000 only +3.02 %, both
+         of them a hair over the 0.0845 ceiling. At 4096 it reads 0.0868246,
+         +5.79 %, which is out of band by a real distance rather than by a
+         rounding digit.
+
+         48000 is the one that proves the INJECTION HAPPENED, independently of
+         any band. The clean capture's onset is bounded above by 40000 frames
+         six lines up, so an onset at or past 40000 in the padded file can only
+         have come from the injection - whatever mode the box is in. That
+         matters because the box has its own 2048-frame modes: a displacement
+         that small can be mimicked by one, so an expectReject over a 2048
+         injection alone could be satisfied by a run that injected nothing.
+         Measured, exactly that way round: a sabotage disabling the injection
+         left this case GREEN because the box happened to be in the displaced
+         mode that run.
+         ================================================================= -->
+    <dump-playback-capture filename="mclr_head_4096.wav"
+                           minFrames="216000" leadSilenceFrames="4096"/>
+
+    <!-- The anchor absorbs it: same band, same audio, head moved. -->
+    <assert-audio-energy filename="mclr_head_4096.wav"
+                         anchorOnset="1" startFrame="137320" frameCount="48000"
+                         channel="0" minRms="0.0796" maxRms="0.0845"/>
+
+    <!-- ...and the ABSOLUTE window does not, by 5.79 %. Without this line the
+         case could not tell an anchor that works from a displacement that
+         never happened. -->
+    <assert-audio-energy filename="mclr_head_4096.wav"
+                         startFrame="168000" frameCount="48000" channel="0"
+                         minRms="0.0796" maxRms="0.0845" expectReject="true"/>
+
+    <!-- A FAR larger displacement, to pin that the injection is real and that
+         the anchor tracks an arbitrary one rather than a tuned one. -->
+    <dump-playback-capture filename="mclr_head_48000.wav"
+                           minFrames="216000" leadSilenceFrames="48000"/>
+    <assert-audio-onset filename="mclr_head_48000.wav" channel="0"
+                        minFrame="40000"/>
+    <assert-audio-energy filename="mclr_head_48000.wav"
+                         anchorOnset="1" startFrame="137320" frameCount="48000"
+                         channel="0" minRms="0.0796" maxRms="0.0845"/>
+
     <arm-track trackPath="0" armed="0"/>
 
     <!-- AC3.4: nobody rendered where they were not allowed to. Under Closure

@@ -441,35 +441,28 @@ SApplyResult SAssertAudioOnsetAction::apply( SProject *project )
     if( !resolveOrReject( filename_, project, "assert-audio-onset", path ) )
         return { false, nullptr };
 
+    // THE SHARED ONSET DEFINITION (QBX-228). This scan used to live here, and
+    // assert-audio-energy's `anchorOnset` now needs the same answer: a window
+    // anchored on the onset and an assertion about the onset that disagreed on
+    // where it is would be the one thing a capture gate must not do. The
+    // running-RMS reasoning is on audio::findOnsetFrame.
     std::string err;
+    int64_t absOnsetRaw = -1;
     int rate = 0;
-    std::vector<float> pcm;
-    if( !audio::readAudioRegion( path.toStdString(), startFrame_, -1, channel_,
-                                 pcm, rate, err )
-        || pcm.empty() ) {
+    if( !audio::findOnsetFrame( path.toStdString(), startFrame_, channel_,
+                                threshold_, window_, absOnsetRaw, err,
+                                &rate ) ) {
         qWarning() << "assert-audio-onset: cannot read" << path
                    << QString::fromStdString( err );
         return { false, nullptr };
     }
-
-    const qint64 w = window_ > 0 ? window_ : 64;
-    qint64 onset = -1;
-    // A RUNNING window rather than a per-sample threshold: a single sample
-    // above the line is a click or a dither bit, and an onset that a case can
-    // reason about is where ENERGY begins.
-    for( qint64 i = 0; i + w <= (qint64) pcm.size(); ++i ) {
-        double sum = 0.0;
-        for( qint64 k = 0; k < w; ++k ) sum += (double) pcm[i + k] * pcm[i + k];
-        if( std::sqrt( sum / (double) w ) >= threshold_ ) { onset = i; break; }
-    }
-    if( onset < 0 ) {
+    if( absOnsetRaw < 0 ) {
         qWarning() << "assert-audio-onset:" << filename_
                    << "never reaches RMS" << threshold_
-                   << "- no onset in" << (qint64) pcm.size() << "frames from"
-                   << startFrame_;
+                   << "- no onset from frame" << startFrame_;
         return { false, nullptr };
     }
-    const qint64 absOnset = startFrame_ + onset;
+    const qint64 absOnset = (qint64) absOnsetRaw;
 
     qint64 measured = absOnset;
     QString what = QStringLiteral( "onset" );

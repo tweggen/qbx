@@ -83,7 +83,39 @@
     <wait-ms ms="5200"/>
     <toggle-playback play="0"/>
     <dump-playback-capture filename="master_closure_heard_ring.wav" minFrames="216000"/>
-    <assert-audio-energy filename="master_closure_heard_ring.wav" startFrame="168000" frameCount="48000"
+
+    <!-- BOUND AND REPORT THE ONSET, the house rule in
+         sdumpplaybackcaptureaction.h, and the bound that keeps the anchored
+         window inside the capture: onset + 150522 + 48000 must stay under the
+         256000 frames captured. -->
+    <assert-audio-onset filename="master_closure_heard_ring.wav" channel="0" maxFrame="40000"/>
+
+    <!-- ANCHORED ON THE ONSET, not on frame 0 (QBX-228). 150522 = the old
+         absolute 168000 minus this case's own onset of 17478, so the window
+         covers the material it always did; what changed is that it follows
+         the capture head instead of assuming it.
+
+         THIS CASE WAS NOT THE ONE THAT WENT RED, and it is anchored anyway,
+         because its exposure was MEASURED and because the mechanism is the
+         same one. It switched modes between two ctest rounds on the dev box:
+         0.164143 to 0.169044, which is EXACTLY what sweeping the clean
+         capture to -2048 frames predicts, and then read 0.169044 four runs
+         running. The ceiling is 0.1691, so it passed by 0.00006 - a margin
+         that is not a margin. Anchored, the same displaced capture reads
+         0.164666: 2.98 % down to 0.32 %.
+
+         ONLY TWO OF THE FOUR ARE ANCHORED, and that is a measurement rather
+         than an oversight. This case and master_closure_linear_ring vary by a
+         pure capture-head displacement, which an onset anchor removes. The
+         two ROOT cases do not: master_closure_heard_root has two modes whose
+         difference an onset-shifted window does not recover, so anchoring
+         made it WORSE (-1.56 % to -3.37 %) and was reverted. That is QBX-239.
+
+         The displacement itself is gated ONCE, in
+         master_closure_linear_ring, with leadSilenceFrames: it is one
+         mechanism and a second copy of the proof would be noise. -->
+    <assert-audio-energy filename="master_closure_heard_ring.wav"
+                         anchorOnset="1" startFrame="150522" frameCount="48000"
                          channel="0" minRms="0.1592" maxRms="0.1691"/>
     <arm-track trackPath="0" armed="0"/>
 
