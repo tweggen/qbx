@@ -158,7 +158,13 @@ public:
      * runs the builder; `describeMenu` reads what the user would see;
      * `tkTriggerMenu` performs one item BY NAME.
      */
-    void    tkAimMenu( STrack *track, offset_t at, SLink *clip );
+    // `takeRow` < 0 aims the track's own composite lane; >= 0 aims the
+    // sub-lane showing that take, which exists only while the track's take
+    // lanes are shown. It sets `lastClickTrackIdx_` either way (QBX-211):
+    // every item the builder gates on the clicked ROW was unreachable while
+    // the seam left that index holding a previous interaction's value.
+    void    tkAimMenu( STrack *track, offset_t at, SLink *clip,
+                       int takeRow = -1 );
     QString describeMenu() const;
     bool    tkTriggerMenu( const QString &item );
     QPoint getLastClickPos() const { return lastClickPos_; }
@@ -739,7 +745,8 @@ public:
     bool tkSendFaderKey( STrack *t, const QString &key );
     /// QBX-207: the arranger context menu's three seams, forwarded to the
     /// content view that owns the menu and the click state.
-    void    tkAimMenu( STrack *track, offset_t at, SLink *clip );
+    void    tkAimMenu( STrack *track, offset_t at, SLink *clip,
+                       int takeRow = -1 );
     QString describeMenu() const;
     bool    tkTriggerMenu( const QString &item );
     /**
@@ -845,6 +852,10 @@ public:
     double trackHeightScale( const STrack * ) const;
     void setTrackHeightScale( STrack *, double scale );
     int rowIndexOfTrack( const STrack * ) const;
+    // The sub-lane showing take `takeRow` of that track, which
+    // rowIndexOfTrack cannot answer: it returns the composite lane, the first
+    // row carrying the track, and the take rows follow it.
+    int rowIndexOfTakeRow( const STrack *, int takeRow ) const;
     // Fold state now lives ON the track (STrack::isCollapsed(), fix/
     // track-list-polish m) so it survives save/load and needs no pruning of
     // its own — it dies with the object instead of outliving it in a

@@ -1517,19 +1517,41 @@ static QString sMenuKeyOf( const QAction *a )
     return t;
 }
 
-void SMVActualView::tkAimMenu( STrack *track, offset_t at, SLink *clip )
+void SMVActualView::tkAimMenu( STrack *track, offset_t at, SLink *clip,
+                               int takeRow )
 {
     // Exactly the state a right-click leaves behind, so the builder below
     // takes the branches it would really take.
     lastClickTrack_  = track;
     lastClickSLink_  = clip;
     lastClickOffset_ = at;
+    // AND THE ROW (QBX-211). A real press sets this from `rowAtViewY()`, and
+    // until now the seam left it holding whatever the last interaction put
+    // there -- which in a headless run is its constructed value. So every
+    // item the builder gates on the clicked ROW rather than the clicked TRACK
+    // was still unreachable from a script after QBX-207 opened the seam:
+    // "Play <take> alone" is built only inside `rowAt( lastClickTrackIdx_ )`
+    // with `takeRow >= 0`, so it was never offered to a gate at all. Aiming
+    // it is not a convenience for one item; a stale row is a seam that lies.
+    //
+    // takeRow < 0 means the track's own composite lane, which is what
+    // `rowIndexOfTrack` finds (it answers the FIRST row carrying the track,
+    // and take rows follow it). takeRow >= 0 addresses the sub-lane showing
+    // that take, which exists only while the track's take lanes are SHOWN --
+    // `set-lane-view toggleTakesRow=` in a case. No such row means aim at the
+    // composite lane rather than silently at row -1: the item then greys or
+    // vanishes for the reason the model gives, not because the seam missed.
+    int row = -1;
+    if( takeRow >= 0 ) row = smv_.rowIndexOfTakeRow( track, takeRow );
+    if( row < 0 )      row = smv_.rowIndexOfTrack( track );
+    lastClickTrackIdx_ = row;
     ctGlobalShow();
 }
 
 QString SMVActualView::describeMenu() const
 {
     QStringList out;
+    QStringList labels;
     int n = 0;
     for( QAction *a : qGlobalPopup_->actions() ) {
         if( a->isSeparator() ) continue;
@@ -1538,8 +1560,32 @@ QString SMVActualView::describeMenu() const
                    .arg( sMenuKeyOf( a ) )
                    .arg( a->isEnabled() ? 1 : 0 )
                    .arg( a->isChecked() ? QStringLiteral( "*" ) : QString() );
+        // THE LABEL, for an item whose key is an objectName (QBX-211).
+        //
+        // Giving an item a stable key TAKES ITS LABEL OUT of the line above,
+        // because the objectName displaces it -- and for several items on
+        // this menu the label is where the REASON lives ("(no take columns)",
+        // "(select a range first)", "(covers the whole column)"). A greyed
+        // item that says why is the behaviour; without this half, naming the
+        // items would have made that behaviour unassertable, which is the
+        // opposite of what naming them is for.
+        //
+        // Only objectName-carrying items appear here: for every other item
+        // `sMenuKeyOf` already IS the label, so a second copy would double
+        // the string and say nothing.
+        //
+        // APPENDED AFTER EVERYTHING, and separated by ':' where the half
+        // above uses '=', so the two cannot be confused by a substring match
+        // and no existing `contains=` assertion can be reached by a label.
+        if( !a->objectName().isEmpty() )
+            labels << QStringLiteral( "%1:%2" )
+                          .arg( a->objectName() ).arg( a->text() );
     }
-    return QStringLiteral( "items=%1|" ).arg( n ) + out.join( QLatin1Char( '|' ) );
+    QString d = QStringLiteral( "items=%1|" ).arg( n )
+              + out.join( QLatin1Char( '|' ) );
+    if( !labels.isEmpty() )
+        d += QStringLiteral( "|labels|" ) + labels.join( QLatin1Char( '|' ) );
+    return d;
 }
 
 bool SMVActualView::tkTriggerMenu( const QString &item )
@@ -1784,6 +1830,11 @@ void SMVActualView::ctGlobalShow()
                 if( !offered )
                     label += QStringLiteral( "  (covers the whole column)" );
                 QAction *aSolo = qGlobalPopup_->addAction( label );
+                // A STABLE KEY (QBX-211). This label carries the take's NAME
+                // or its index, so it is different text on every column and
+                // was never a handle a gate could hold. The reason suffix
+                // stays assertable through describeMenu's labels half.
+                aSolo->setObjectName( QStringLiteral( "play-take-alone" ) );
                 aSolo->setEnabled( offered );
                 // By QPointer, like "New track" above: the lane or the
                 // placement could be gone by the time the action fires, and
@@ -1825,6 +1876,11 @@ void SMVActualView::ctGlobalShow()
             if( nColumns == 0 ) label += QStringLiteral( " (no take columns)" );
             QAction *aClean = qGlobalPopup_->addAction(
                 label, &smv_, SLOT( ctCleanupTakesTracks() ) );
+            // A STABLE KEY (QBX-211). This label carries TWO parentheticals
+            // that vary with the project -- the "(N tracks)" multi-selection
+            // suffix and the "(no take columns)" reason -- so it is the worst
+            // possible handle and the best possible argument for naming it.
+            aClean->setObjectName( QStringLiteral( "clean-up-takes" ) );
             aClean->setEnabled( nColumns > 0 );
         }
         // Per-track lane height, as a factor of the base (zoomed) height, so
@@ -1879,6 +1935,9 @@ void SMVActualView::ctGlobalShow()
         // a range; disabled (with a hint) when none is selected.
         QAction *aAsset = qGlobalPopup_->addAction(
             "Create &asset from range", this, SLOT( ctCreateAssetFromTrack() ) );
+        // A STABLE KEY (QBX-211), so the assertion does not rest on the
+        // mnemonic's position or on the reason suffix below.
+        aAsset->setObjectName( QStringLiteral( "create-asset-from-range" ) );
         aAsset->setEnabled( hasRange() );
         if( !hasRange() )
             aAsset->setText( "Create &asset from range  (select a range first)" );
@@ -2302,9 +2361,10 @@ bool SStdMixerView::tkSendFaderKey( STrack *t, const QString &key )
     return false;      // no head for that track (it is inside a collapsed folder)
 }
 
-void SStdMixerView::tkAimMenu( STrack *track, offset_t at, SLink *clip )
+void SStdMixerView::tkAimMenu( STrack *track, offset_t at, SLink *clip,
+                               int takeRow )
 {
-    if( qContent_ ) qContent_->tkAimMenu( track, at, clip );
+    if( qContent_ ) qContent_->tkAimMenu( track, at, clip, takeRow );
 }
 
 QString SStdMixerView::describeMenu() const
@@ -5388,6 +5448,19 @@ int SStdMixerView::rowIndexOfTrack( const STrack *t ) const
 {
     for( int i=0; i<rows_.size(); ++i ) {
         if( rows_.at( i ).track == t ) return i;
+    }
+    return -1;
+}
+
+// The SUB-LANE showing take `k` of `t`, which rowIndexOfTrack cannot answer:
+// it returns the FIRST row carrying the track, i.e. the composite lane, and
+// the take rows follow it. Exists only while the track's take lanes are shown.
+int SStdMixerView::rowIndexOfTakeRow( const STrack *t, int takeRow ) const
+{
+    if( takeRow < 0 ) return rowIndexOfTrack( t );
+    for( int i=0; i<rows_.size(); ++i ) {
+        const STrackRow &r = rows_.at( i );
+        if( r.track == t && r.takeRow == takeRow ) return i;
     }
     return -1;
 }

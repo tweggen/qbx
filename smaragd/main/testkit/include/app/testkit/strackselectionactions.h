@@ -118,7 +118,7 @@ class SArrangerMenuAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "arranger-menu" ); }
     QStringList knownAttributes() const override
-    { return { "trackPath", "at", "clip", "item" }; }
+    { return { "trackPath", "at", "clip", "takeRow", "item" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -127,6 +127,9 @@ private:
     QString trackPath_ = QStringLiteral( "0" );
     qint64  at_        = 0;    // timeline FRAMES, the click position
     int     clip_      = -1;   // < 0 = the pointer was on the lane, not a clip
+    // >= 0 aims the SUB-LANE showing that take rather than the track's own
+    // lane, which is the only state where "Play <take> alone" is offered.
+    int     takeRow_   = -1;
     QString item_;
 };
 
@@ -170,6 +173,16 @@ private:
  * `items=<n>|<key>=<0|1>[*]|...` in menu order, 1 enabled and 0 greyed, `*`
  * checked. Keys are as `arranger-menu`'s `item`.
  *
+ * ...and then, for every item carrying an `objectName`, a LABELS HALF
+ * (QBX-211): `|labels|<objectName>:<label>|...`. Giving an item a stable key
+ * takes its LABEL out of the first half, and for several items on this menu
+ * the label is where the REASON lives -- "(no take columns)", "(select a
+ * range first)", "(covers the whole column)". Without this half, naming the
+ * items would have made the greyed item's reason unassertable. The halves use
+ * different separators (`=` and `:`) so a substring match cannot cross from
+ * one to the other, and the labels half is APPENDED last so no existing
+ * assertion moves.
+ *
  * It exists because `arranger-menu` alone cannot tell "the item is missing"
  * from "the item is greyed" -- both are a refusal -- and those are different
  * bugs.
@@ -179,7 +192,7 @@ public:
     QString name() const override
     { return QStringLiteral( "assert-arranger-menu" ); }
     QStringList knownAttributes() const override
-    { return { "trackPath", "at", "clip", "contains", "absent" }; }
+    { return { "trackPath", "at", "clip", "takeRow", "contains", "absent" }; }
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
@@ -188,6 +201,7 @@ private:
     QString trackPath_ = QStringLiteral( "0" );
     qint64  at_        = 0;
     int     clip_      = -1;
+    int     takeRow_   = -1;
     QString contains_;
     QString absent_;
 };
