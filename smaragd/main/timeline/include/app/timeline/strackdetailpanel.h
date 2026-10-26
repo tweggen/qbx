@@ -34,6 +34,12 @@ public:
     void setTrack(STrack *track);
     STrack *track() const { return currentTrack_; }
 
+    // THE METER'S AUDIBILITY DECISION, as one function with two readers: the
+    // meter itself and describeTrackDetailDock's `audible=` field. A gate must
+    // read the decision the meter MAKES -- a second copy of the rule in the
+    // describe would let a gate pass while the meter stayed wrong. QBX-233.
+    bool meterAudible() const;
+
     // Size constraint (50% of screen, max 450px; small when empty)
     QSize sizeHint() const override;
 
