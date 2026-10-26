@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-210. THE ARRANGER'S CONTEXT MENU OFFERS NO ITEM THAT DOES NOTHING.
+
+  It offered one. "Delete sample" was enabled and clickable and its handler
+  was, in full:
+
+      void SStdMixerView::ctDeleteSample()
+      {
+      }
+
+  No edit, no message, not even a log line. The reasonable reading of a dead
+  menu item is that deletion is broken, not that this one item was never
+  finished.
+
+  MEASURED, not assumed, while removing it: of the fifteen ct* slots this menu
+  wires plus its lambda-connected items, ctDeleteSample was the ONLY empty
+  body. ctCleanupTakes, ctCleanupTakesTracks and ctAddTrack are one statement
+  each and all three delegate to a real worker.
+
+  WHY IT WAS INVISIBLE UNTIL NOW. Nothing could build this popup off screen
+  before QBX-207, so no gate could have said "this menu offers an item that
+  does nothing" about any of the twenty items on it.
+
+  RETIRED RATHER THAN REPOINTED, and section (a) pins that CHOICE rather than
+  just the absence of a dead handler. QBX-197 concluded the opposite for
+  "Cleanup..." and the difference is the reason that rule rests on: there the
+  entry point was the only discoverable answer to the user's question, so it
+  was kept and renamed. Here the answer is "Remove sample", one line above it
+  in the same menu, bound to Delete and widened to MIDI clips by QBX-202.
+  "Remove" versus "Delete" is not a distinction this model makes; there is one
+  removal verb. Section (c) is what makes that claim checkable instead of
+  asserted: the surviving item really removes a clip, so nothing became less
+  reachable. Should a later ticket decide a real Delete/Remove distinction
+  exists, (a) is the assertion to change deliberately.
+
+  NOT GATED HERE, deliberately:
+
+    - the ITEM COUNT. `items=<n>` would catch any future do-nothing item
+      generically, but it also fails on every legitimate addition to a menu
+      that is still growing, so it would be noise rather than a gate. What
+      replaces it is the audit above, recorded here because a future reader
+      can repeat it in one command and cannot recover it from the diff.
+    - the empty handler as a CLASS. There is no seam that can ask a QAction
+      whether its slot does anything, so "offers no item that does nothing"
+      is gated one named item at a time. This is that one.
+
+  SECTION (c) TURNED OUT TO BE WORTH MORE THAN THE ABSENCE IT WAS WRITTEN FOR,
+  and the measurement was a sabotage arm that failed to be noisy. S3 makes
+  ctRemoveSample() return immediately; of the six cases run it failed exactly
+  ONE, this one. delete_clip_in_group, comp_map_survives_duplicate and the rest
+  all reach removal through the `remove-sample` VERB, which submits
+  SRemoveSampleAction directly and never enters the slot.
+
+  So ctRemoveSample() HAD NO GATE AT ALL: the slot behind both this menu item
+  and the Delete/Backspace shortcut, which is the user's actual clip-deletion
+  gesture. And the slot is where the interesting code is, not the action: the
+  flat-index bug that made Delete do nothing on a grouped track, QBX-202's MIDI
+  widening, and the autoUi_->deleteSelection() precedence rule all live there
+  and nowhere else. Section (c) is the first gate on that gesture.
+
+  Still ungated, and a separate claim from this one's: that precedence rule. A
+  marquee of automation points is deleted BEFORE the clip, because a shortcut
+  outranks a keyPressEvent, and only the SHORTCUT path can carry a marquee. No
+  menu click reaches that branch, so this case structurally cannot.
+
+  ONE NOTE FOR WHOEVER NAMES THESE ITEMS NEXT. Section (b) keys the surviving
+  item by its LABEL, "Remove sample", because `actRemoveSample_` carries no
+  objectName today and `sMenuKeyOf` falls back to the text. A ticket that gives
+  it one moves that key, and this assertion has to move with it; the key is not
+  a stable handle until the objectName exists.
+
+  120 BPM, 4/4, 48 kHz. test_sawtooth.wav is 192000 frames.
+-->
+<SActionScript version="1" name="arranger_menu_no_dead_items">
+
+  <setup project="new"/>
+
+  <actions>
+    <snap-to-grid-disable/>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+
+    <!-- =================================================================
+         (a) THE DEAD ITEM IS GONE, in BOTH shapes of this menu.
+
+             It was built inside the `if( lastClickTrack_ )` block, not the
+             clip block, so it was offered on a bare lane as well as over a
+             clip and the absence has to be asserted in both: a right-click
+             on empty lane space and a right-click on a clip build different
+             menus from the same function.
+         ================================================================= -->
+    <assert-arranger-menu trackPath="0" at="1000"
+                          absent="Delete sample"/>
+    <assert-arranger-menu trackPath="0" at="1000" clip="0"
+                          absent="Delete sample"/>
+
+    <!-- ...and the menu refuses it as MISSING rather than offering it
+         greyed. `arranger-menu` alone cannot tell those apart, which is why
+         the pair above and below exists; this line is the half that says no
+         script can reach a handler there any more. -->
+    <arranger-menu trackPath="0" at="1000" clip="0" item="Delete sample"
+                   expectReject="true"/>
+
+    <!-- =================================================================
+         (b) THE SURVIVING ANSWER IS STILL OFFERED, AND ENABLED.
+
+             This is the QBX-197 condition stated as an assertion: retiring
+             a command is only safe while the question it answered still has
+             a discoverable answer. If "Remove sample" were ever greyed or
+             dropped here, removing "Delete sample" would have cost the user
+             the gesture, and this line is what would say so.
+         ================================================================= -->
+    <assert-arranger-menu trackPath="0" at="1000" clip="0"
+                          contains="Remove sample=1"/>
+
+    <!-- =================================================================
+         (c) ...AND IT REALLY REMOVES THE CLIP.
+
+             Offered and enabled is not the same as working, and an absence
+             assertion on its own cannot distinguish "the duplicate was
+             retired" from "the whole gesture was". This goes through the
+             MENU, not through `remove-sample`, so what runs is the handler
+             the retired item should have been pointing at all along.
+         ================================================================= -->
+    <arranger-menu trackPath="0" at="1000" clip="0" item="Remove sample"/>
+    <assert-clip-window clip="0,0" expectReject="true"/>
+
+    <!-- Undoable, like every other edit on this menu. -->
+    <undo count="1"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

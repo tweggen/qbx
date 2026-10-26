@@ -1042,7 +1042,6 @@ public slots:
     // `insert-midi-clip` VERB and is therefore undoable.
     void ctNewMidiClip();
     void ctRemoveSample();
-    void ctDeleteSample();
     void ctSplitSample();
     // --- clean up takes (plan 53 §6.3, QBX-195) -------------------------
     //
