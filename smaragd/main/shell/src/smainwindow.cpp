@@ -243,6 +243,18 @@ QString SMainWindow::describeTrackDetailDock()
     const int rows = strip ? strip->slotRowCount() : -1;
     d += QStringLiteral( "|rows=%1" ).arg( rows );
     if( rows > 0 ) d += QStringLiteral( "|slot0=" ) + strip->describeSlot( 0 );
+    // The METER'S OWN audibility decision, not a second copy of the rule:
+    // STrackDetailPanel::meterAudible() is what onMeterTick calls. The meter
+    // only runs while live and visible, so this field is the only way a
+    // headless gate can see the decision at all. QBX-233.
+    //
+    // APPENDED LAST, deliberately. assert-track-detail-dock matches
+    // SUBSTRINGS, and arrangement_track_inserts.qxa asserts
+    // "|path=Drums:0|rows=1|" -- inserting a field between two existing ones
+    // breaks every assertion that spans the seam, so a new field goes on the
+    // END where it cannot.
+    d += QStringLiteral( "|audible=%1" )
+             .arg( trackDetailPanel_->meterAudible() ? 1 : 0 );
     return d;
 }
 

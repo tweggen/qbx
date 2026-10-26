@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-233. THE TRACK DETAIL METER ASKS THE SOLO RULE ABOUT THE TRACK'S OWN
+  ROOT, not about the master.
+
+  THE DEFECT. ssolo::isLaneAudible is scoped to ONE summing container: it asks
+  whether anything is soloed in THAT root, whether the lane is soloed, and
+  whether the lane sits under a soloed ancestor of THAT root. Track Detail
+  passed splacements::rootContainer(proj) – the master – unconditionally.
+  That was harmless while the dock only ever showed a master track; QBX-231
+  made it follow the active tab's root, so since then:
+    - a solo anywhere in the master idled an arrangement track whose own tree
+      has no solo at all;
+    - a solo inside the arrangement was ignored, so a non-soloed sibling there
+      kept metering;
+    - underSoloedAncestor walked the master and never found the track's real
+      folder ancestors.
+
+  THE SEMANTICS WERE NOT A PRODUCT CHOICE. The ticket asked whether the dock
+  should follow the holding root's solo state or "what the user hears through
+  the master placement". The codebase answers it: of the twelve
+  isLaneAudible call sites, ELEVEN pass the container that holds the lane –
+  SStdMixer passes `this`, the arrangement's mixer view passes its own model,
+  and smixerstrip's meter (the sibling of this one) passes its own mixer. This
+  site was the only one passing the master, and it is the one that was not
+  updated when QBX-231 landed. An asset fragment settles the alternative
+  independently: its tracks may have NO placement in the master, or several, so
+  "what you hear through the placement" has no answer there while this one
+  always does.
+
+  THE SEAM. The meter only runs while LIVE and VISIBLE, so a headless case
+  cannot watch it. describeTrackDetailDock's `audible=` field reports
+  STrackDetailPanel::meterAudible(), which is the function onMeterTick itself
+  calls – not a second copy of the rule, which would let this case pass over a
+  meter that stayed wrong.
+
+  WHY TWO CLAIMS IN OPPOSITE DIRECTIONS. (a) expects audible=1 where the old
+  code gave 0, and (b) expects audible=0 where it gave 1. A sabotage cannot
+  satisfy both by reporting a constant, and neither claim alone would notice a
+  rule that had simply been inverted.
+-->
+<SActionScript version="1" name="track_detail_meter_solo_scope">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The FIRST read ATTACHES the dock: a scripted run never reaches the
+         attach sites, so it has to come before the gestures it must follow. -->
+    <assert-track-detail-dock contains="|rows="/>
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+
+    <!-- TWO DIFFERENT ROOTING RULES ARE IN PLAY HERE, and mixing them up is
+         what a first draft of this case did. `set-track-solo` reads its path
+         with parseInto, so a BARE path is MASTER-rooted whatever tab is
+         active, and an arrangement lane must be named "Drums:1" explicitly.
+         `select-track` is a view GESTURE and follows the ACTIVE TAB, so a bare
+         "0" there means Drums:0 while the Drums tab is active. Both spellings
+         below are deliberate. -->
+
+    <!-- ===== (a) A MASTER SOLO DOES NOT IDLE AN ARRANGEMENT TRACK =====
+         Master lane 0 is soloed; the dock then shows an arrangement track
+         whose own tree has no solo at all, so it is audible there. The old
+         master-scoped read answered "something is soloed and this lane is not
+         it" and idled the meter. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <select-track trackPath="0"/>
+    <assert-track-detail-dock contains="|path=Drums:0"/>
+    <assert-track-detail-dock contains="|audible=1"/>
+
+    <!-- ===== (b) A SOLO INSIDE THE ARRANGEMENT IS HONOURED =============
+         The master solo is cleared and Drums:1 is soloed instead, with the
+         dock still on Drums:0. The master now holds no solo at all, so the old
+         read answered "nothing is soloed, everything is audible" and reported
+         a lit meter for a track its own root silences. -->
+    <set-track-solo trackPath="0" solo="0"/>
+    <set-track-solo trackPath="Drums:1" solo="1"/>
+    <assert-track-detail-dock contains="|path=Drums:0"/>
+    <assert-track-detail-dock contains="|audible=0"/>
+
+    <!-- ...and the soloed sibling itself IS audible, so (b) cannot be
+         satisfied by a rule that simply darkens the whole arrangement. -->
+    <select-track trackPath="1"/>
+    <assert-track-detail-dock contains="|path=Drums:1"/>
+    <assert-track-detail-dock contains="|audible=1"/>
+  </actions>
+</SActionScript>

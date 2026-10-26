@@ -516,19 +516,45 @@ void STrackDetailPanel::syncVolumeEnabled()
                                      "0.0 dB."));
 }
 
+bool STrackDetailPanel::meterAudible() const
+{
+    if (!currentTrack_) return false;
+    SProject *proj = SApplication::app().getCurrentProject();
+
+    // THE shared rule (app/model/ssolorules.h), the same one the mixer routes
+    // by and the track head applies — nested lanes included.
+    //
+    // ROOTED AT THE TRACK'S OWN ROOT (QBX-233), resolved exactly as applyVolume
+    // and applyPan do since QBX-231. Solo is a property of ONE summing
+    // container, and every other isLaneAudible caller passes the container that
+    // HOLDS the lane: SStdMixer passes `this`, the arrangement's mixer view
+    // passes its own model (ssmvmixercontrol.cpp), and smixerstrip's meter
+    // passes its own mixer. This site was the only one of twelve passing the
+    // master unconditionally, which stopped being harmless when QBX-231 let the
+    // dock show a track inside an arrangement or an asset fragment: a solo
+    // anywhere in the master idled an arrangement track whose own tree had no
+    // solo, a solo inside the arrangement was ignored, and underSoloedAncestor
+    // walked the master and never found the track's real folder ancestors.
+    //
+    // An asset fragment settles the alternative reading ("what you hear through
+    // the master placement"): its tracks may have NO placement, or several, so
+    // that question has no answer there while this one always does.
+    const strackpath::QualifiedPath where =
+        strackpath::parseQualified(splacements::specOf(proj, currentTrack_));
+    SObject *soloRoot = splacements::rootNamed(proj, where.root);
+    // specOf answers empty for a track no root reaches any more; the master is
+    // the only honest fallback, and a detached track is not metered anyway.
+    if (!soloRoot) soloRoot = splacements::rootContainer(proj);
+    return ssolo::isLaneAudible(soloRoot, currentTrack_);
+}
+
 void STrackDetailPanel::onMeterTick(offset_t pos, qint64 nowMs, bool live)
 {
     if (!meter_ || !meter_->isVisible()) return;   // hidden dock does no work
 
     if (!live || !currentTrack_) { meter_->pushIdle(nowMs); return; }
 
-    // THE shared rule (app/model/ssolorules.h), the same one the mixer routes by
-    // and the track head applies — nested lanes included.
-    SProject *proj = SApplication::app().getCurrentProject();
-    if (!ssolo::isLaneAudible(splacements::rootContainer(proj), currentTrack_)) {
-        meter_->pushIdle(nowMs);
-        return;
-    }
+    if (!meterAudible()) { meter_->pushIdle(nowMs); return; }
 
     // EVERY CHANNEL (proposal 36 B8). This is the mount that does not cap: the
     // dock has the room, so it is where a user sees all six lanes of a
