@@ -1873,6 +1873,49 @@ reason that varies with the project — "Clean up takes (3 tracks)". Naming all
 twenty at once would be a wide change in a menu that otherwise needed none; a
 later ticket names the one it needs.
 
+**THE MENU OFFERS NO ITEM THAT DOES NOTHING (QBX-210)**, and that is now a
+gate rather than a hope. It offered one: `"Delete sample"` was enabled and
+clickable with `ctDeleteSample()` an empty function body — no edit, no message,
+not even a log line. Both are gone. Of the fifteen `ct*` slots this builder
+wires plus its lambda-connected items, that was the ONLY empty one; the three
+one-statement slots (`ctCleanupTakes`, `ctCleanupTakesTracks`, `ctAddTrack`)
+each delegate to a real worker.
+
+It was RETIRED RATHER THAN REPOINTED, which is the opposite of QBX-197's
+conclusion for "Cleanup..." and turns on the reason that rule rests on. There
+the entry point was the only discoverable answer to the user's question, so it
+was kept and renamed; here the answer is `actRemoveSample_`, one line above in
+the same menu, bound to Delete and widened to MIDI clips by QBX-202. "Remove"
+versus "Delete" is not a distinction this model makes — there is one removal
+verb. `arranger_menu_no_dead_items.qxa` asserts the absence in BOTH shapes of
+the menu (a bare lane and a clicked clip build different menus from the same
+function) AND that the surviving item still removes a clip, because an absence
+assertion alone cannot tell "the duplicate was retired" from "the whole gesture
+was". Its sabotage S2 is the rejected alternative itself — the item back,
+wired to the WORKING slot — so the case pins the DECISION and not merely the
+absence of an empty handler.
+
+**AND THE CASE GATES MORE THAN ITS NAME SAYS.** Sabotage S3, which stops
+`ctRemoveSample()` from removing anything, failed exactly ONE of the six cases
+run — this one. Every other removal case reaches the edit through the
+`remove-sample` **verb**, which submits `SRemoveSampleAction` directly and never
+enters the slot. So `ctRemoveSample()` — the slot behind both the menu item and
+the Delete/Backspace shortcut, i.e. the user's real clip-deletion gesture — had
+**no gate at all**, and the slot is where the interesting code lives: the
+flat-index bug that made Delete do nothing on a grouped track, QBX-202's MIDI
+widening, and the `autoUi_->deleteSelection()` precedence rule are all here and
+nowhere else. A verb-level case cannot see any of them.
+
+**STILL NOT GATED: that precedence rule.** A marquee of automation points is
+deleted BEFORE the clip, because a shortcut outranks a `keyPressEvent` — and
+only the SHORTCUT path can carry a marquee, so no menu click reaches the branch
+and `arranger_menu_no_dead_items.qxa` structurally cannot gate it.
+
+Note what it took to see any of this: **nothing could build this popup off
+screen before QBX-207**, so no gate could have said "this menu offers an item
+that does nothing" about any of its twenty items. The seam did not just enable
+new assertions; it made a years-old dead item visible.
+
 **"NEW MIDI CLIP (2 BARS)" GOES THROUGH THE VERB.** `ctNewMidiClip()` submits
 `insert-midi-clip`, so a new clip is undoable. Two bars comes from
 `twTempoMap::barTicks()` in TICKS, never a frame count, so the clip keeps its

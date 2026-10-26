@@ -965,10 +965,6 @@ void SStdMixerView::ctRemoveSample()
     );
 }
 
-void SStdMixerView::ctDeleteSample()
-{
-}
-
 // QBX-207: a TWO-BAR MIDI clip on the clicked lane, at the clicked position.
 //
 // Through the `insert-midi-clip` VERB. A new clip created from a menu is an
@@ -1693,7 +1689,23 @@ void SMVActualView::ctGlobalShow()
             }
         }
         qGlobalPopup_->addAction( smv_.actRemoveSample_ );
-        qGlobalPopup_->addAction( "Delete sample", &smv_, SLOT( ctDeleteSample() ) );
+        // "DELETE SAMPLE" IS GONE, and so is ctDeleteSample() (QBX-210). It
+        // was an enabled, clickable item whose handler was an empty function
+        // body: no edit, no message, not even a log line. The user's
+        // reasonable reading of a dead menu item is that deletion is broken.
+        //
+        // RETIRED RATHER THAN REPOINTED, which is the opposite of what QBX-197
+        // concluded for "Cleanup..." -- and for the reason that rule actually
+        // rests on. There the entry point was kept because it was the only
+        // discoverable answer to the user's question; here the answer is
+        // `actRemoveSample_`, on the line directly above, bound to Delete and
+        // widened to MIDI clips by QBX-202. "Remove" versus "Delete" is not a
+        // distinction this model makes: there is one removal verb. So nothing
+        // became less reachable, and the menu is one spelling shorter.
+        //
+        // Gated by arranger_menu_no_dead_items.qxa, which asserts the absence
+        // AND that the surviving item still removes a clip -- the absence
+        // alone would not say that anything was lost.
         qGlobalPopup_->addSeparator();
     }
     // "New track" from THIS menu goes below the lane the menu was opened on —

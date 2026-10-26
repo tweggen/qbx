@@ -8719,6 +8719,14 @@ split/resize/move); `SActionHistory::onRejected_` still has a `// TODO: Log erro
 and notify UI`, which is *why* the whole class of bug reads as "nothing happens";
 and `ctDeleteSample()` is an empty stub wired to a live "Delete sample" menu item.
 
+> **Correction, 2026-10-26 (QBX-210).** The last of those is no longer true. The
+> "Delete sample" item and `ctDeleteSample()` are both gone: "Remove sample" sat
+> one line above it in the same menu and is the one removal verb this model has,
+> so the item was a third spelling of a gesture the menu already offered twice.
+> Gated by `arranger_menu_no_dead_items.qxa`, which asserts the absence AND that
+> the surviving item still removes a clip. It took QBX-207's menu seam to make
+> any of this assertable: nothing could build that popup off screen before it.
+
 ---
 
 ## 2026-08-09 — A clip edited on a NESTED lane is finally heard (stale held page)
