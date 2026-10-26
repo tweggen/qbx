@@ -143,6 +143,29 @@ void SApplication::setCurrentProject( SProject *cp )
         connect( cp, &SProject::arrangementUnregistered, this,
                  &SApplication::onArrangementUnregistered,
                  Qt::UniqueConnection );
+    // ...AND THE MASTER ROOT NEEDS THE BOUNDARY ITSELF (QBX-234). The wire
+    // above is keyed by NAME, and the master's key is QString(): it is never
+    // registered, so it is never unregistered, so nothing above ever clears
+    // it. The other boundary -- setCurrentProject calling clearAllSelections
+    // on a real pointer change -- does not fire either, because a load goes
+    // INTO this same SProject and the pointer never changes.
+    //
+    // So after opening a project the master root still held the PREVIOUS
+    // document's link: alive but orphaned (clearArrangements only
+    // removeRef()s, and an open tab holds a ref), resolving to the empty path
+    // "". Stale state rather than a use-after-free -- a destroyed link would
+    // have been purged by purgeDestroyedLink -- but the app believed a clip
+    // from the closed document was selected, and anything acting on the
+    // selection acted on an orphan.
+    //
+    // clearAllSelections() and not a master-only clear: it is the same answer
+    // the pointer-change boundary gives, and one function for both boundaries
+    // cannot drift. The named roots are already empty by the time this runs,
+    // so clearing them again costs a hash walk and keeps one rule.
+    if( cp )
+        connect( cp, &SProject::arrangementsCleared, this,
+                 &SApplication::clearAllSelections,
+                 Qt::UniqueConnection );
     if( cp )
         connect( cp, &SProject::propertyChanged, this,
                  &SApplication::onProjectPropertyChangedForLive,

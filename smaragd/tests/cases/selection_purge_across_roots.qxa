@@ -58,7 +58,15 @@
           it passed the whole case before that block existed, since with two
           links selected a root's `current` is null by construction
     S5  SApplication stops listening to SProject::arrangementUnregistered
-          GATED by section (c)
+          GATED by section (c), and ONLY by section (c) since QBX-234. It used
+          to be gated by the load in section (d); the load-boundary listener
+          added for the master root clears EVERY root, so (d) alone now passes
+          without this wire (measured, sabotage S7: eight cases green). That is
+          why section (c) exists at all
+    S6  SApplication stops listening to SProject::arrangementsCleared, the
+        load-boundary signal QBX-234 added
+          GATED by section (d)'s master-root assertion, and by nothing else:
+          it is the ONLY defence that reaches a root with no name
     S4  setCurrentProject stops calling clearAllSelections()
           NOT GATED, and no .qxa can gate it: a load goes INTO the same
           SProject, so setCurrentProject is never called with a different
@@ -67,7 +75,7 @@
           regardless: the sabotage shows only that no SCRIPT reaches it, not
           that anything else covers it.
 
-  WHAT SECTION (c) ACTUALLY REPRODUCES, which is not what it was written for.
+  WHAT SECTION (d) ACTUALLY REPRODUCES, which is not what it was written for.
   It was meant to strand a FREED link through the reporter's save/load path. It
   does not, and the fix itself is the proof: a destroyed link is necessarily
   purged by purgeDestroyedLink, so an entry that SURVIVES a load belongs to a
@@ -79,6 +87,20 @@
   reachable in the registered tree). Stale state, therefore, not a
   use-after-free. That is a second, lesser defect of the same family, and S5 is
   its fix.
+
+  THE MASTER HALF OF THAT SAME DEFECT WAS LEFT MEASURED AND UNASSERTED, and
+  QBX-234 is where it closed. S5's wire is keyed by arrangement NAME, and the
+  master root's key is QString(): never registered, therefore never
+  unregistered, therefore never reached by the per-name signal – and a project
+  with no arrangements at all unregisters nothing while still crossing the
+  boundary. setCurrentProject's clearAllSelections() does not cover it either,
+  because a load goes INTO the same SProject and the pointer never changes.
+  `SProject::arrangementsCleared` is the boundary announced ONCE, emitted from
+  clearArrangements() after the per-name unregistrations; clearArrangements has
+  exactly one caller, the load, so it IS the document boundary rather than a
+  proxy for it. The listener is clearAllSelections() – the same function the
+  pointer-change boundary already called – so the two boundaries cannot answer
+  differently.
 
 -->
 <SActionScript version="1" name="selection_purge_across_roots">
@@ -168,7 +190,80 @@
     <assert-selection root="" count="1"/>
     <assert-selection paths="0,0" root=""/>
 
-    <!-- ===== (c) THE REPORTER'S SCENARIO: OPENING A SAVED PROJECT =======
+    <!-- ===== (c) ONE ARRANGEMENT GOES, MID-SESSION ====================
+         NO DOCUMENT BOUNDARY IS CROSSED HERE, and that is the whole point of
+         the section. `dissolve-arrangement` moves the tracks back and
+         unregisters the root, so `arrangementUnregistered` fires for that one
+         name while `arrangementsCleared` does not fire at all; a load is the
+         other way round. Only QBX-230's per-name wire can empty this entry.
+
+         IT EXISTS BECAUSE QBX-234 TOOK THE OTHER GATE AWAY. Section (d)'s
+         load used to be the only thing pinning the per-name wire, and the
+         load-boundary listener added for the master root clears EVERY root,
+         so (d) now passes with the per-name wire removed. Measured, as
+         sabotage S7: all eight cases green without it. Without this section,
+         closing the master half of the defect would have silently un-gated
+         the named half.
+
+         The clip link SURVIVES the dissolve. The track moves to the master
+         carrying its children, so the entry under "Drums" holds a LIVE
+         pointer that no destroyed() wire will ever reach, and clearing it is
+         the listener's job alone.
+         ================================================================= -->
+    <!-- A track of this section's OWN, so (a), (b) and (d) are untouched:
+         extracting the master's track 0 would move the clip (b) just selected
+         and the claims would start interacting. Everything added here is
+         undone again at the end of the section, so (d) saves the shape it
+         expects. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- extract-arrangement, so the dissolve below has the restore plan it
+         needs: a `create-arrangement` root was never extracted and carries
+         none, and `remove-arrangement` refuses a root that still holds lanes,
+         so extract-then-undo is the only self-contained way a case can
+         unregister ONE root that holds a selected clip. -->
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Riff" window="range" placeAt="0"/>
+    <open-arrangement-tab name="Riff"/>
+    <activate-tab name="Riff"/>
+    <select-all/>
+    <assert-selection root="Riff" count="1"/>
+
+    <!-- DISSOLVED EXPLICITLY, not by undoing the extraction, and the
+         difference is not cosmetic: `select-all` IS an undoable action, so an
+         `undo count="1"` here takes back the SELECTION and never reaches the
+         extract. Measured on the first draft of this section - the master
+         still carried the "Riff" asset lane afterwards, and the assertion
+         below passed because the selection had been undone rather than
+         cleared. It would have gated nothing at all.
+
+         `dissolve-arrangement` with no restorePlan falls back to the plan the
+         extraction recorded in the project property store, which is why the
+         section extracts rather than using create-arrangement. It moves the
+         track back and unregisters the root, firing arrangementUnregistered
+         for "Riff" and nothing else. -->
+    <dissolve-arrangement name="Riff"/>
+    <assert-selection root="Riff" count="0"/>
+
+    <!-- ...and back to the shape (d) expects, by removing the returned track
+         EXPLICITLY rather than by counting undos: the stack here holds
+         add-track, add-sample, extract, select-all and dissolve, and a count
+         that has to step over a selection action is a count that breaks the
+         next time one is added. -->
+    <activate-tab name="Arrangement"/>
+    <remove-track trackPath="1"/>
+    <!-- `count`, not `equals`. There are TWO assert-track-counts: the VERB
+         here (SAssertTrackCountAction, attributes `arrangement` and `count`)
+         and the trailing <assertions> block's declarative one
+         (SActionRunner::assertTrackCount_, attribute `equals`). Same name,
+         two implementations; `equals` on the verb is an unknown attribute,
+         silently ignored, and the verb then compares against its -1 default
+         and fails with "expected -1". The block below is the other one and
+         keeps `equals` for that reason. -->
+    <assert-track-count count="1"/>
+
+    <!-- ===== (d) THE REPORTER'S SCENARIO: OPENING A SAVED PROJECT =======
          A load runs SProject::clearArrangements, which unregisters every
          arrangement and drops the registry's reference: "may reach 0 ->
          deleteLater". So the old roots die on a LATER event loop turn, after
@@ -199,21 +294,26 @@
          fix that merely swapped which single root gets purged would leave one
          of these two non-empty. -->
     <assert-selection root="Drums" count="0"/>
-    <!-- THE MASTER ROOT IS NOT ASSERTED HERE, and that is a gap rather than
-         an oversight. Drums empties because `clearArrangements()` unregisters
-         the name and SApplication now listens to arrangementUnregistered. No
-         signal says the same about the MASTER root: it is never unregistered,
-         and the document boundary that would clear it (setCurrentProject ->
-         clearAllSelections) does not fire, because load-project loads INTO
-         the same SProject. Measured after the load: the master entry still
-         holds one link, resolving to the empty path "" – alive but orphaned,
-         so stale state and not a use-after-free. Asserting count="1" would
-         pin that staleness as intended, and asserting 0 fails, so the case
-         asserts neither and the gap is filed instead. -->
+    <!-- ...AND THE MASTER ROOT TOO, which this case could not assert until
+         QBX-234. Drums empties because `clearArrangements()` unregisters the
+         name and SApplication listens to arrangementUnregistered. That wire
+         is keyed by NAME and the master's key is QString(): never registered,
+         so never unregistered, so nothing on it ever reached the master. The
+         other boundary, setCurrentProject -> clearAllSelections, does not
+         fire either, because load-project loads INTO the same SProject and
+         the pointer never changes. Measured before the fix: the master entry
+         still held one link, resolving to the empty path "" – alive but
+         orphaned, so stale state and not a use-after-free. This line is what
+         `SProject::arrangementsCleared` bought, and S6 below is its sabotage.
+
+         Both roots, not just the one that moved: the cascade puts the active
+         root on the master, so a fix that merely swapped which single root
+         gets cleared would still leave one of these two non-empty. -->
+    <assert-selection root="" count="0"/>
   </actions>
 
   <assertions>
-    <!-- The FIXTURE's shape (see section (c)): the master's one track. -->
+    <!-- The FIXTURE's shape (see section (d)): the master's one track. -->
     <assert-track-count equals="1"/>
   </assertions>
 
