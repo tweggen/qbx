@@ -83,6 +83,33 @@
     <wait-ms ms="5200"/>
     <toggle-playback play="0"/>
     <dump-playback-capture filename="master_closure_heard_root_raised.wav" minFrames="216000"/>
+
+    <!-- BOUND AND REPORT THE ONSET, which is the house rule
+         sdumpplaybackcaptureaction.h states for anything measured over this
+         file. Pure diagnosis here: it makes a future red run name the
+         quantity that moved instead of leaving a bare number.
+
+         THE WINDOW IS DELIBERATELY NOT ANCHORED (QBX-228), unlike
+         master_closure_linear_ring's and master_closure_heard_ring's. Those
+         two vary by a pure CAPTURE-HEAD DISPLACEMENT – heard_ring's displaced
+         reading of 0.169044 is exactly what sweeping the clean capture to
+         -2048 predicts – so anchoring on the onset removes it, measured
+         2.98 % down to 0.32 %.
+
+         THIS CASE DOES NOT BEHAVE THAT WAY, and anchoring it made it WORSE.
+         Measured over six runs, it has two modes: onset 2056 reading
+         0.204219, and onset ~4075 reading 0.201039. If the second were the
+         first displaced by the ~2019 frames the onset moved, a window shifted
+         by that much would recover 0.204219. It reads 0.197326 – further
+         away, and from -1.56 % to -3.37 % against a band whose floor is
+         0.1950. So either the two modes differ in CONTENT rather than
+         position, or the onset mis-measures the displacement; either way an
+         onset anchor does not correct this case, and shipping one would have
+         moved it closer to failing while looking like a fix.
+
+         Filed separately rather than guessed at here: QBX-239. -->
+    <assert-audio-onset filename="master_closure_heard_root_raised.wav" channel="0" maxFrame="40000"/>
+
     <assert-audio-energy filename="master_closure_heard_root_raised.wav" startFrame="168000" frameCount="48000"
                          channel="0" minRms="0.2753" maxRms="0.2923"/>
     <arm-track trackPath="0" armed="0"/>

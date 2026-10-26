@@ -65,6 +65,28 @@ bool readAudioRegion(const std::string &filename, int64_t startFrame,
                      std::string &error);
 
 /**
+ * WHERE ENERGY BEGINS in a file, in absolute frames, or -1 if it never does.
+ *
+ * A RUNNING RMS window of `window` frames rather than a per-sample threshold:
+ * a single sample above the line is a click or a dither bit, and the onset a
+ * test can reason about is where energy begins. `window <= 0` means 64.
+ *
+ * THIS IS THE ONE DEFINITION (QBX-228). It was inline in
+ * SAssertAudioOnsetAction and is now shared with assert-audio-energy's
+ * `anchorOnset`, because a window ANCHORED on the onset and an assertion
+ * ABOUT the onset that disagreed on where it is would be the one thing a
+ * capture gate must not do.
+ *
+ * @return false only when the file cannot be read; `error` then says why.
+ *         A file that never reaches the threshold is not an error: `onset`
+ *         comes back -1.
+ */
+bool findOnsetFrame(const std::string &filename, int64_t startFrame,
+                    int channelIndex, double threshold, int64_t window,
+                    int64_t &onset, std::string &error,
+                    int *sampleRate = nullptr);
+
+/**
  * Read a WAV file and analyze acoustic properties.
  *
  * `channelIndex` defaults to -1 (all channels pooled), which is what this

@@ -158,6 +158,70 @@ and the paths it looked for, was discarded. That is why these two could not be
 diagnosed from the run and had to be guessed at. A green run is as quiet as
 before, because `--output-on-failure` prints nothing for a test that passed.
 
+## `qxa.master_closure_linear_ring` — MECHANISM ESTABLISHED, and it was never CI-only (QBX-228)
+
+**Not excluded, and no longer expected to flake.** This case went red in CI on
+two unrelated PRs — #296, a docs-only change, and #302 — and the per-platform
+record previously had it filed with `devices_input_test` as a load-sensitive
+timing flake. That attribution was wrong in both halves.
+
+**What it was.** The measurement window was ABSOLUTE
+(`startFrame="168000"`), and captured frame 0 is the **device start**, not the
+locator position. The leading silence in front of it is a wall-clock quantity of
+the machine, which `sdumpplaybackcaptureaction.h` states at length and ends by
+requiring that "anything measured over this file … bound the start with
+`assert-audio-onset`, and begin the measurement window one device block in".
+This case did not. Over the RAMPING material it measures, a displaced window
+reads as an amplitude difference.
+
+**The numbers, all measured:**
+
+| | |
+|---|---|
+| this box, in the usual mode | `0.0820714` |
+| CI's failing value, **identically on both PRs** | `0.0845199` (+2.98 %) |
+| the same window displaced by **2048 frames** locally | `0.0845219` |
+| frames of slip the ±3 % band admits | **−2028 .. +2008** |
+
+So the band was a **positional tolerance in disguise**, CI missed it by sixteen
+frames' worth, and widening it would have been the one wrong remedy: at 3 % it
+already tolerated two capture blocks.
+
+**It is NOT CI-only.** While this was being fixed, the sibling case
+`master_closure_heard_ring` switched modes between two `ctest` rounds on the dev
+box: `0.164143` → `0.169044`, exactly the −2048 value, then bit-stable in the new
+mode for four consecutive runs. Its ceiling is `0.1691`, so it passed by
+`0.00006`. "Bit-stable locally" was true of each MODE and said nothing about
+which mode a run would get. CI is not special; it lands in the mode that misses
+the band.
+
+**TWO of the four are anchored, and that split is a measurement rather than an
+oversight.** `master_closure_linear_ring` and `master_closure_heard_ring` vary
+by a pure capture-head displacement — `heard_ring`'s displaced reading of
+`0.169044` is exactly what sweeping its clean capture to −2048 frames predicts —
+so an onset anchor removes it, measured 2.98 % → 0.32 %. Both are now anchored
+with `assert-audio-energy anchorOnset="1"`, and `linear_ring` gates the
+mechanism with injected displacements (`leadSilenceFrames` at 4096 for a usable
+RMS margin and at 48000 for a mode-independent proof that the injection is
+real), so the failure reproduces locally and deterministically instead of
+waiting for a runner.
+
+**The two ROOT cases are deliberately NOT anchored**, because anchoring one of
+them made it worse. `master_closure_heard_root` has two modes over six measured
+runs — onset 2056 reading `0.204219`, and onset ~4075 reading `0.201039` — and
+if the second were the first displaced by the ~2019 frames the onset moved,
+shifting the window by that much would recover `0.204219`. It reads `0.197326`:
+further away, −1.56 % becoming −3.37 % against a floor of `0.1950`. So that
+case's variation is **not** a head displacement, an onset anchor does not
+correct it, and shipping one would have moved it closer to failing while looking
+like a fix. Filed as **QBX-239**. Both root cases keep their absolute window and
+gain an `assert-audio-onset ... maxFrame="40000"` bound, which is pure
+diagnosis.
+
+**If it returns**, the assertion now names where it measured and what it
+anchored on — `over [ 169826 , 217826 ) "anchored on onset 19304 + 150522"` —
+so one failing log line is enough to tell a displacement from a level change.
+
 ## `qxa.rec_union_cycle_inside` — reported as a local suite flake, NOT reproduced (QBX-220)
 
 **It has never failed in CI.** It is recorded here anyway so the next person

@@ -49,7 +49,10 @@ public:
     QStringList knownAttributes() const override {
         return {QStringLiteral("filename"), QStringLiteral("minRms"),
                 QStringLiteral("maxRms"), QStringLiteral("startFrame"),
-                QStringLiteral("frameCount"), QStringLiteral("channel")};
+                QStringLiteral("frameCount"), QStringLiteral("channel"),
+                QStringLiteral("anchorOnset"),
+                QStringLiteral("onsetThreshold"),
+                QStringLiteral("onsetWindow")};
     }
     SApplyResult apply(SProject *project) override;
     void writeXml(QDomElement &elem) const override;
@@ -62,6 +65,23 @@ private:
     int64_t startFrame_ = 0;
     int64_t frameCount_ = -1;
     int channel_ = -1;
+    // ANCHOR THE WINDOW ON THE ONSET instead of on frame 0 (QBX-228), which
+    // makes `startFrame` an offset FROM where energy begins rather than an
+    // absolute position in the file.
+    //
+    // Captured frame 0 is the DEVICE START, not the locator position, and the
+    // leading silence in front of it is a wall-clock quantity of the machine
+    // (sdumpplaybackcaptureaction.h states this at length). An absolute
+    // window therefore measures a different span of the material on a
+    // different box, and over RAMPING material that reads as an amplitude
+    // difference: master_closure_linear_ring was red on CI and bit-stable
+    // locally because CI's window sat 2044 frames -- two capture blocks --
+    // earlier in the ramp, which is +2.98 % and sixteen frames past the band.
+    //
+    // Default OFF, so every existing assertion means exactly what it meant.
+    bool    anchorOnset_    = false;
+    double  onsetThreshold_ = 0.02;   // assert-audio-onset's defaults, so the
+    int64_t onsetWindow_    = 64;     // two verbs agree on where the onset is
 };
 
 #endif
