@@ -1,8 +1,8 @@
 # Proposal 56 — NassauDigital: the sampler as a native instrument (track Q)
 
 Status: proposed. Owner: unassigned. Ticket: QBX-240.
-Touches: a new engine module `tw303a/sampler/`, a new git submodule
-`smaragd/third_party/nassau-digital`, a new app slice `main/objects/sampler/`,
+Touches: a new engine module `tw303a/sampler/`, a locator for the core
+(`smaragd/cmake/NassauDigital.cmake`, no submodule), a new app slice `main/objects/sampler/`,
 a new UI slice `main/samplerui/`, and small seams in `tw303a/plugins/`
 (registry, slot processor), `main/objects/track/` (SPluginSlot),
 `main/shell/` (run barrier, recorder), `main/pluginui/` (editor routing),
@@ -78,8 +78,9 @@ headless tests — and none of it can reach an instrument today:
   render would make a render of two generations.
 * **qbx has no sibling-repository dependency.** It has git submodules, but
   only third-party header SDKs (`.gitmodules`: `third_party/clap`,
-  `third_party/vst3_pluginterfaces`). A Nassau core as a submodule is new, for
-  the build, for CI and for nassau-suite's release pinning.
+  `third_party/vst3_pluginterfaces`). A Nassau core qbx compiles is new, for
+  the build, for CI and for nassau-suite's release pinning; §4.1 takes it the
+  way the plugin repos take nassau-plugin-sdk, by a locator, not a submodule.
 
 This proposal designs the qbx side so that track Q can be built gate by gate,
 each gate one qbx PR held to `./ci/gates.sh` as well as to its ACs.
@@ -142,7 +143,7 @@ costlier than DESIGN.md says, §10 and §9 say so.
 | # | Decision | DESIGN.md |
 |---|---|---|
 | A1 | A dependency-free core in nassau-digital; the first front end native in qbx, as a `tw`-format instrument | "Where it lives" |
-| A2 | The core is a **git submodule** of qbx, because the engine must build from one checkout | §9.2 |
+| A2 | ~~The core is a git submodule of qbx~~ — **superseded 2026-10-26 by the author (Q-3, answered):** the core is pinned **once, as a top-level nassau-suite submodule**, like nassau-plugin-sdk; qbx finds it through a locator (explicit `NASSAU_DIGITAL_DIR`, sibling `../nassau-digital`, pinned fetch) and carries **no** nested submodule | §9.2, as amended; §11 |
 | A3 | Programs are model data, not a state blob: the slot's state holds a **reference**, the program lives in the model | §9.1, §9.2 |
 | A4 | **One XML grammar, owned by the core**; qbx hands it the element subtree as text | §9.2, §12 |
 | A5 | `.qxa` verbs with the same syntax; the command field takes the XML itself, no shorthand | §9.3 |
@@ -163,7 +164,7 @@ costlier than DESIGN.md says, §10 and §9 say so.
 
 | # | Proposal | Why |
 |---|---|---|
-| B1 | The submodule lives at `smaragd/third_party/nassau-digital`, beside clap and vst3, and is **required**: configure fails with the command that fixes it, instead of degrading like CLAP | A2 says the engine builds from one checkout; a sampler that silently vanishes from a build would take its `.qxa` cases with it and pass CI testing less than it claims, which is exactly what `ci.yml:39-42` warns about for CLAP |
+| B1 | The core is **required**: when the locator finds it nowhere (no explicit dir, no sibling, fetch off or failing), configure fails with the command that fixes it, instead of degrading like CLAP | A sampler that silently vanishes from a build would take its `.qxa` cases with it and pass CI testing less than it claims, which is exactly what `ci.yml:39-42` warns about for CLAP |
 | B2 | `tw/sampler` registers the instrument through a **new explicit registration call** into `twPluginRegistry`, made by the composition root (`SApplication`) and by tests; never a static initializer | The registry cannot name a module that depends on it (§1); inv. 1 forbids static-init self-registration, not an explicit call |
 | B3 | Every mutation of a live sampler instance goes through **one new processor entry point that runs under `mutex_`** and bumps the param epoch, plus an **instance initializer** the slot applies to every instance its factory makes | The only reach the app has today is a raw pointer outside the lock (`twpluginslotproc.h:262-263`), and a rebuild discards every instance (`twpluginslotproc.cc:392-394`), so a snapshot pushed once would be lost on the next channel-count change |
 | B4 | The program model object is an `SObject` child of the `SPluginSlot`, serialized through the slot's existing `SLink`-children loop; an asset-backed layer is an `SLink` to the asset body | A3 and DESIGN §9.2's "an ordinary link to the asset"; the loader resolves `SLink` by object id within the file, so a link survives a rename where a name would not |
@@ -178,25 +179,45 @@ costlier than DESIGN.md says, §10 and §9 say so.
 
 ## 4. Design
 
-### 4.1 The submodule, the build and CI
+### 4.1 Finding the core, the build and CI
 
-**Where.** `smaragd/third_party/nassau-digital`, URL
-`https://github.com/tweggen/nassau-digital.git` (public, as qbx is). From C5 on
-the core takes `nassau-dsp` as its own submodule, so qbx's checkout is
-**nested**: `qbx → nassau-digital → nassau-dsp`. Every place below says
-`--recursive` for that reason.
+**One pin, in nassau-suite (A2, the author's decision of 2026-10-26).** A
+Nassau repo that other Nassau repos consume is pinned **once**, as a top-level
+submodule of nassau-suite, exactly as nassau-plugin-sdk is, and never as a
+nested submodule of a consumer: a second pin is a second answer to "which core
+shipped?", and nassau-suite's `ci/release.sh` reads only its own `.gitmodules`,
+so a nested pin would also go untagged. nassau-digital and the shared
+`nassau-dsp` it uses from core gate C5 on are therefore both suite submodules
+(nassau-dsp joins in nassau-suite#33; nassau-digital joins with Q0). qbx has
+**no** `.gitmodules` entry for either.
+
+**The locator.** `smaragd/cmake/NassauDigital.cmake` is a verbatim copy of a
+canonical locator kept in nassau-digital (`cmake/bootstrap/`, as nassau-dsp
+keeps `cmake/bootstrap/NassauDSP.cmake` and nassau-plugin-sdk keeps
+`NassauSDK.cmake`). It resolves, in one order:
+
+1. an explicit `-DNASSAU_DIGITAL_DIR=` — what the nassau-suite superbuild
+   passes, so a release builds exactly the pinned core;
+2. a sibling checkout `../nassau-digital` beside the qbx checkout (the
+   workspace layout, and what an IDE opened on the workspace sees);
+3. a FetchContent of `NASSAU_DIGITAL_GIT_REF`, a **commit or tag, never a
+   branch**, pinned in `smaragd/tw303a/CMakeLists.txt`, so a bare clone of qbx
+   and qbx's own CI still build. The repo is public; no token.
+
+Every configure logs the route taken and the commit built ("report the
+outcome, not the option"). Inside the core, nassau-dsp is found the same way
+by the core's own `cmake/NassauDSP.cmake`; the suite passes
+`-DNASSAU_DSP_DIR` to qbx as well, so the core and nassau-analogue are built
+against the one pinned nassau-dsp.
 
 **CMake.** The core builds as a plain static library from its own
 `CMakeLists.txt`, added from `smaragd/tw303a/CMakeLists.txt` with
-`add_subdirectory(${TW_ND_DIR} nassau-digital EXCLUDE_FROM_ALL)`, where
-`TW_ND_DIR` defaults to `../third_party/nassau-digital` and may be overridden
-with `-DNASSAU_DIGITAL_DIR=` (so a developer can point qbx at a sibling
-checkout while working across both repos; the default stays the pinned
-submodule, which is what CI and nassau-suite build). The core's own test and
-CI targets are not built inside qbx. If `${TW_ND_DIR}/CMakeLists.txt` is
-missing, configure stops with `FATAL_ERROR` naming
-`git submodule update --init --recursive` (B1) — the opposite of the CLAP
-block's `WARNING` (`tw303a/CMakeLists.txt:294`), on purpose.
+`add_subdirectory(${NASSAU_DIGITAL_DIR} nassau-digital EXCLUDE_FROM_ALL)` once
+the locator has resolved it. The core's own test and CI targets are not built
+inside qbx (the core adds them only as the top-level project). If the locator
+finds nothing, configure stops with `FATAL_ERROR` naming the clone command
+(B1) — the opposite of the CLAP block's `WARNING`
+(`tw303a/CMakeLists.txt:294`), on purpose.
 
 The core target is linked **PRIVATE** into `tw_sampler` only, the discipline
 the CLAP block states for its headers (`tw303a/CMakeLists.txt:234-237`): no
@@ -211,39 +232,28 @@ Compile flags: the core is built with qbx's flags, and R7 forbids
 A future qbx flag change that adds either would break R7 silently for the core,
 so `tw_sampler`'s block asserts their absence at configure time.
 
-**`_env.sh`.** `ensure_submodules` checks one sentinel, CLAP's header
-(`_env.sh:426-427`). A checkout cloned before this proposal has CLAP and not
-nassau-digital, so it would never fetch the new submodule. The function gains a
-second sentinel, `smaragd/third_party/nassau-digital/CMakeLists.txt`, and runs
-the (already recursive) update when **either** is missing.
+**`_env.sh` and CI.** Nothing changes in `ensure_submodules`
+(`_env.sh:426-427`): there is no new submodule. qbx's CI takes route 3, the
+pinned fetch, so the build job needs network access to github.com, which it
+already has for its checkout; nassau-digital and nassau-dsp are public. The
+static job is unaffected: `check_layering.py` walks only
+`smaragd/tw303a/<module>` and `smaragd/main/<module>`.
 
-**CI.** The build job already checks out `submodules: recursive`
-(`ci.yml:37-43`); nested submodules are covered by that and need no token,
-because nassau-digital and nassau-dsp are public. The static job checks out
-without submodules and stays that way: `--static` needs only python3
-(`ci/gates.sh:15`), and `check_layering.py` walks only `smaragd/tw303a/<module>`
-and `smaragd/main/<module>`, never `third_party/`. `ci/clean.sh` already keeps
-"every submodule checkout" (`ci/clean.sh:19-20`, `:87`).
+**A core bump is its own qbx PR**, `chore`-sized: it moves
+`NASSAU_DIGITAL_GIT_REF`, and is gated by the full suite. A bump that changes
+sound changes the sampler's goldens, and the PR says which and why; a bump that
+changes no sampler golden is evidence it changed no sound. For a release, the
+**suite's** pin is the authority, and a suite pin bump of nassau-digital is the
+release-side counterpart.
 
-**A core bump is its own qbx PR**, `chore`-sized, gated by the full suite. A
-bump that changes sound changes the sampler's goldens, and the PR says which
-and why; a bump that changes no sampler golden is evidence it changed no sound.
-
-**nassau-suite.** The suite pins qbx; qbx pins nassau-digital; the suite's
-`ci/build.sh` runs `git submodule update --init --recursive`, so a suite build
-gets exactly the core commit qbx pins, with no change to the suite. Two things
-do change, and one is the author's (Q-3):
-
-* The suite's release script reads only the suite's own `.gitmodules`, so its
-  "same tag on every component at the pinned commit" rule does not reach a
-  nested pin. Whether nassau-digital (and nassau-dsp) carry the release tag at
-  the commit qbx pins is open.
-* The suite convention that each component exists both as a sibling clone and
-  as a submodule checkout now applies one level down: a developer with a
-  sibling `nassau-digital/` and qbx's own `third_party/nassau-digital/` has two
-  working copies. `NASSAU_DIGITAL_DIR` is the one switch between them, and the
-  configure summary prints which one was used (the "report the outcome, not
-  the option" rule).
+**nassau-suite.** The suite adds `nassau-digital` to its `.gitmodules` with
+Q0 and passes `-DNASSAU_DIGITAL_DIR` and `-DNASSAU_DSP_DIR` to qbx's
+ExternalProject. `ci/release.sh` then tags nassau-digital and nassau-dsp at the
+commits the suite pins, with no change to the script (Q-3, answered). One
+honest consequence: qbx's own `NASSAU_DIGITAL_GIT_REF` (what a bare clone
+builds) and the suite's pin are two different numbers, as qbx's and the
+suite's SDK refs are today; the suite build never uses qbx's, and the
+configure log says which commit was built.
 
 ### 4.2 `tw/sampler` — the engine module
 
@@ -689,7 +699,7 @@ measured numbers (R10), in a nassau-digital PR of its own.
 rate fold, play modes, pan law, determinism, per-voice cost), and C0/C1 before
 it. Scope: §4.1, §4.2, §4.3.
 
-* **Q0.1** The core is a submodule; `tw/sampler` builds it and registers
+* **Q0.1** The core is found by the locator (§4.1; never a submodule of qbx); `tw/sampler` builds it and registers
   `tw.native.nassaudigital` through `registerBuiltin`; `check_layering.py` is
   clean.
 * **Q0.2** `twSamplerHost` is reached by capability; `setProgram`, `setSample`
@@ -702,9 +712,11 @@ it. Scope: §4.1, §4.2, §4.3.
   (`assert-file-identical`).
 * **Q0.4** The slot's saved state holds the reference only: the project file
   grows by less than 1 KB when a 10 MB sample is added.
-* **Q0.q1** A configure without the submodule stops with the fix in the
-  message; `ensure_submodules` fetches it on a checkout that has CLAP and lacks
-  it.
+* **Q0.q1** Each locator route is exercised at configure: an explicit
+  `NASSAU_DIGITAL_DIR`, a sibling checkout, and the pinned fetch each log their
+  route and commit; with no checkout and the fetch off, configure stops with
+  the clone command in the message; an explicit directory holding no core stops
+  rather than falling back.
 * **Q0.q2** A `setChannelCount` change (a 2 → 1 channel project) keeps the
   program and samples: the render after it is the `GenFold` of the render
   before it (invariant 4).
@@ -847,9 +859,9 @@ and core C6. Scope: §4.12.
   rate and generation, a voice engine taking chunk events, absolute position,
   tempo, routed mask and a round-robin cell size. A mismatch is fixed in
   nassau-digital first, never adapted around in qbx.
-* **The nested submodule is new to every clone.** A stale `_env.sh` sentinel or
-  a non-recursive clone leaves a tree that does not configure (B1 makes that
-  loud rather than silent).
+* **A bare clone of qbx now needs the network once** to fetch the core at its
+  pinned ref (or a sibling checkout). Offline, with neither, configure stops
+  with the fix (B1), loudly rather than silently.
 * **The settle blocks the main thread** for as long as a stretch or a bounce
   takes. It is bounded and logged; a long asset under a fresh tempo can still
   make an interactive render feel slow to start.
@@ -860,8 +872,9 @@ and core C6. Scope: §4.12.
 * **The pre-roll.** A sampler voice held across a page start re-renders up to
   4 s of pre-roll per page (inv. 40); long one-shots on a dense map make page
   renders dearer than the 303's.
-* **Two working copies of the core** (sibling and submodule) can diverge
-  silently for a developer; the configure summary names the one in use.
+* **A sibling checkout wins over the pinned ref** for a developer, by design
+  (route 2 before 3), so a stale sibling builds stale core code; the configure
+  log names the route and commit in use.
 
 ---
 
@@ -898,10 +911,11 @@ and core C6. Scope: §4.12.
   go, and parameter ids must be append-only (R4). Are only program-level
   quantities (level, tune, bus drives) parameters, or are zone parameters
   exposed under ids derived from the stable zone id?
-* **Q-3 — Release tags on nested pins.** nassau-suite's release script tags
-  the components the suite pins directly. Does nassau-digital (and nassau-dsp)
-  carry the release tag at the commit qbx pins, and does the script learn to
-  read nested gitlinks?
+* **Q-3 — Release tags on nested pins. ANSWERED by the author, 2026-10-26:**
+  no nested pins at all. nassau-digital and nassau-dsp become top-level
+  nassau-suite submodules, like nassau-plugin-sdk; the suite passes their paths
+  to the components; consumers find them by explicit dir, sibling, pinned
+  fetch. `ci/release.sh` then tags them unchanged. Applied in A2, B1 and §4.1.
 * **Q-4 — "Stored as a project asset".** DESIGN §6 item 2 stores a recording
   "as a project asset". In qbx an asset is a registered body windowing a
   container (`sproject.h:230-236`). This proposal stores the recording as a
@@ -935,7 +949,7 @@ line or two off. These do not:
 | REVIEW.md says | What is true |
 |---|---|
 | Finding 8c: a 2-output sampler takes "`GenFold` on a mono project, `WideGen` on 6" | `WideGen` is 0→M with **M > C**. Two outputs on six channels is **1 < M < C: Unsupported**, transparent and silent (`plugins/CONTRACT.md:259-262`), gated by `instrument_stereo_render`'s refused row (`:271`). DESIGN §9.3 inherited the error ("spreads them on a wider one") — Q-7 |
-| Finding 3: "qbx has no precedent for an external source dependency"; `tw303a/CMakeLists.txt` has no fetch of a sibling repo, "only vcpkg packages" | No sibling-repo dependency, true — but qbx already builds two git submodules from source, `third_party/clap` and `third_party/vst3_pluginterfaces` (`.gitmodules`; `tw303a/CMakeLists.txt:239-251`, `:316`), with CI checking them out recursively (`ci.yml:37-43`) and `_env.sh` fetching them (`:426-449`). §4.1 follows that precedent and notes where it must differ (required, not optional; a second sentinel) |
+| Finding 3: "qbx has no precedent for an external source dependency"; `tw303a/CMakeLists.txt` has no fetch of a sibling repo, "only vcpkg packages" | No sibling-repo dependency, true — but qbx already builds two git submodules from source, `third_party/clap` and `third_party/vst3_pluginterfaces` (`.gitmodules`; `tw303a/CMakeLists.txt:239-251`, `:316`), with CI checking them out recursively (`ci.yml:37-43`) and `_env.sh` fetching them (`:426-449`). §4.1 first followed that precedent; after the author's Q-3 answer it follows the nassau-plugin-sdk one instead (a locator, the suite holds the only pin), and keeps "required, not optional" |
 | Finding 4 / G5: the fix is "a `PassVerbs` implementation for the sampler (`place-sampler-recording`)" | `PassVerbs` is the seam a LANE planner emits through, reading a lane snapshot (`recplan/CONTRACT.md:30-60`). A take landing in an instrument has no lane to plan against; `place-sampler-recording` is a sibling verb of `place-recording` submitted by the recorder, not a `PassVerbs` (§4.10) |
 | Finding 2: `twSamplerHost` swapped "under the processor mutex", reachable by `dynamic_cast` from the app | True that the app may include `tw/plugins` from `objects/track` (`check_layering.py:383`), but the app has **no way to take that mutex**: `mutex_` is private and `plugin()`/`plugins()` hand out bare pointers (`twpluginslotproc.h:262-263`, `:392`). A new locked entry point is needed (§4.3), and so is an instance initializer, because a rebuild re-instantiates every instance and would drop a pushed snapshot (`twpluginslotproc.cc:392-394`) |
 | Finding 9: hand selection "needs a UI tap on the device side" — implying new device work | The tap exists: `MidiInFanout` hands out up to 8 private sinks per port (`midi_in_fanout.h:39-66`). The editor acquires one (§4.11) |
