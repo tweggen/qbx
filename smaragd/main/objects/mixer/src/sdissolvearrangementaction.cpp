@@ -156,6 +156,21 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
     project->unregisterArrangement( arrName_ );
     project->setProp( planKey, QVariant() );   // the plan died with the root
 
+    // The ASSET LANE was removed from the master above once it had emptied,
+    // and it may have been the selected one. Its QPointer would clear itself
+    // eventually (nothing re-refs it, so it is deleteLater'd) but not before
+    // the next read, so prune over the settled tree for the same reason the
+    // extraction does. The arrangement root's own selection entry needs no
+    // prune: it dies with the root. QBX-232.
+
+    // The ASSET LANE was removed from the master above once it had emptied,
+    // and it may have been the selected one. Its QPointer would clear itself
+    // eventually (nothing re-refs it, so it is deleteLater'd) but not before
+    // the next read, so prune over the settled tree for the same reason the
+    // extraction does. The arrangement root's own selection entry needs no
+    // prune: it dies with the root. QBX-232.
+    masterMixer->pruneSelectionToTree();
+
     // Same reason as the extraction's: the master's summed pages predate the
     // tracks coming back.
     masterMixer->applyAudibility();

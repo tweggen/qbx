@@ -234,6 +234,26 @@ public:
     // when the primary leaves, the last remaining member takes over.
     void toggleTrackSelection( STrack *track );
 
+    // Drop every selected track that is no longer reachable in THIS mixer's
+    // tree, passing the primary on as toggleTrackSelection does. Returns how
+    // many were dropped. A verb that MOVES tracks calls this once the move has
+    // settled; it is idempotent and costs one pathOf() per selected track, so
+    // calling it after a move that kept everything is free and harmless.
+    //
+    // Why not inside removeTrack(), which is where a departure looks like it
+    // belongs (QBX-232):
+    //   - every mover is remove-THEN-insert, so mid-move the track is in
+    //     NEITHER tree and "has it left?" has no truthful answer yet. Dropping
+    //     there would also deselect a reparent-track into a folder of this
+    //     same root, where the track never leaves the tree at all;
+    //   - a track whose parent is a FOLDER rather than the mixer is detached
+    //     with `delete ownLink` and never reaches removeTrack(), so a nested
+    //     extraction would not be covered by a drop there.
+    // Selection is TREE-WIDE here, not direct children only: strackpath::pathOf
+    // recurses into path containers, which is why reachability is the question
+    // and membership of childLinks() is not.
+    int pruneSelectionToTree();
+
     // Scoped invalidation (proposal 15): the mixer's rewire is the engine's
     // synthOutput_ — its cached pages hold the summed mix and go stale on any
     // contained edit.
@@ -403,6 +423,14 @@ private:
 
     // See the selection block above. selectedTracks_ always contains
     // selectedTrack_ while the latter is non-null.
+    //
+    // These are QPointers, so they clear themselves when a track is DELETED.
+    // They do NOT clear when a track is MOVED to another root, because it
+    // stays alive -- so the master went on selecting a track that now lives in
+    // an arrangement. A verb that moves tracks calls pruneSelectionToTree()
+    // when it is done. Do not read the QPointer as the whole lifetime story,
+    // and do not prune from inside removeTrack(): see pruneSelectionToTree()
+    // for why neither is enough (QBX-232).
     // The master lane and our reference to it (see masterLane()). The lane is
     // a Qt child of SProject; this link is what keeps it alive, so deleting it
     // in ~SStdMixer is what stops a removed arrangement leaving an orphan lane

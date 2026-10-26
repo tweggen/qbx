@@ -234,6 +234,17 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
         tk->removeRef();                       // the new link holds it now
     }
 
+    // THE MASTER'S SELECTION, over the settled tree. selectedTracks_ holds
+    // QPointers, which clear only on DELETE, and a moved track stays alive, so
+    // without this the master went on selecting a lane that now lives in the
+    // arrangement -- Track Detail, which follows the master's selection while
+    // the Arrangement tab is active, showed a lane absent from the arrangement
+    // on screen. Here and not in removeTrack() for the two reasons given at
+    // pruneSelectionToTree(): mid-move the track is in neither tree, and a
+    // track detached from a FOLDER never reaches removeTrack() at all, which
+    // is the nested case this loop handles with `delete ownLink`. QBX-232.
+    if( masterMixer ) masterMixer->pruneSelectionToTree();
+
     // --- the window --------------------------------------------------------
     const offset_t winBegin = wholeExtent ? 0 : rangeStart_;
     const offset_t winEnd   = wholeExtent ? (offset_t) arrRoot->getDuration()

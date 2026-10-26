@@ -154,6 +154,14 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
     // parentless, so re-apply the rule once over the settled tree.
     rootMixer->applyAudibility();
 
+    // NO pruneSelectionToTree() here, deliberately. This verb moves a track
+    // WITHIN one root (docs/ACTIONS.md: a destParent naming another
+    // arrangement is resolved against source's root rather than refused), and
+    // selection is tree-wide because strackpath::pathOf recurses into path
+    // containers -- so a track reparented into a folder never leaves the
+    // mixer's tree and must STAY selected. Pruning here would deselect a
+    // folder drag. QBX-232.
+
     // Detach fired a mid-operation view refresh (track briefly parentless) and
     // the folder-side attach emits no mixer signal; announce the final tree so
     // views rebuild against the completed state.
