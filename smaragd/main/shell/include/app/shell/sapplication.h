@@ -109,6 +109,15 @@ public:
     // states the rule this answers: anything held in a by-name registry rather
     // than in the object tree has to be dropped explicitly, or it is inherited
     // by the document being opened (proposal 09 M1). QBX-230.
+    //
+    // CALLED AT BOTH DOCUMENT BOUNDARIES, which is the whole of QBX-234.
+    // There are two and only two: the project POINTER changes
+    // (setCurrentProject), or a load replaces the contents IN PLACE
+    // (SProject::arrangementsCleared). The second one is the master root's
+    // only hope -- `selections_` is keyed by arrangement NAME, the master's
+    // key is QString(), and a nameless root is never unregistered -- and a
+    // load never crosses the first, because it loads INTO the same SProject.
+    // One function for both, so the two boundaries cannot answer differently.
     void clearAllSelections();
 
     bool isSelectionEmpty() const;

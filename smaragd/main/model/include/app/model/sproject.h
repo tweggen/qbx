@@ -377,6 +377,19 @@ signals:
     void assetRemoved( const QString &name );
     void arrangementRegistered( const QString &name, SObject &root );
     void arrangementUnregistered( const QString &name );
+    // THE DOCUMENT BOUNDARY, announced once (QBX-234). clearArrangements()
+    // has exactly one caller -- SLoadProjectAction -- so it IS the moment one
+    // document replaces another IN PLACE, and its own comment already states
+    // the rule that makes this signal necessary: anything held in a by-name
+    // registry rather than in the object tree has to be dropped explicitly or
+    // it is inherited by the document being opened (proposal 09 M1).
+    //
+    // WHY NOT arrangementUnregistered, WHICH FIRES PER NAME. Because the
+    // registry it empties is keyed by name and the MASTER root has no name:
+    // its key is QString(), it is never registered and so never unregistered,
+    // and a project with no arrangements at all unregisters nothing while
+    // still crossing the boundary. This fires either way, after the names.
+    void arrangementsCleared();
     // Any applied action; consumers that cache rendered audio drop their cache.
     void arrangementChanged();
     // An async capture revalidation landed (preview/metadata fresh); views

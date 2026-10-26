@@ -584,6 +584,12 @@ void SProject::clearArrangements()
 {
     const QList<QString> names = arrangementDict_.keys();
     for( const QString &n : names ) unregisterArrangement( n );
+    // AFTER the per-name unregistrations, so a listener that acts on both
+    // sees the named roots already dealt with. Emitted even when there was
+    // nothing to unregister: the boundary is crossed either way, and the
+    // nameless master root is exactly the case where the loop above runs zero
+    // times and something still has to be dropped (QBX-234).
+    emit arrangementsCleared();
 }
 
 QList<QString> SProject::arrangementNames() const
