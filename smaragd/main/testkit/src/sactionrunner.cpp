@@ -233,7 +233,8 @@ bool SActionRunner::assertTrackCount_(const SActionScript::Assertion &a, SProjec
     }
 
     // Get the root mixer and count tracks.
-    SObject *root = project->getRootComponent();
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    SObject *root = project->masterRoot();
     SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
     if (!mixer) {
         failures.append("assert-track-count: root is not a mixer");
@@ -301,7 +302,8 @@ bool SActionRunner::verifyUndo_(SProject *project, SApplication &app, QStringLis
     }
 
     // Capture the final state: track count at the end.
-    SObject *root = project->getRootComponent();
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    SObject *root = project->masterRoot();
     SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
     if (!mixer) {
         failures.append("verify-undo: root is not a mixer");

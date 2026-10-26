@@ -44,7 +44,8 @@ static void collectPlacedContent( SProject *project,
                                   QSet<const SObject *> &out )
 {
     if( !project ) return;
-    if( SObject *master = project->getRootComponent() )
+    // check_root_resolution: master -- enumerates EVERY root -- the master here, then project->arrangements() below
+    if( SObject *master = project->masterRoot() )
         collectPlaced_( master, out );
     for( SObject *arr : project->arrangements() )
         if( arr ) collectPlaced_( arr, out );

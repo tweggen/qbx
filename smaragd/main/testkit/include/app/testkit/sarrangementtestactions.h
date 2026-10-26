@@ -12,7 +12,7 @@
 // action list has run. So an assertion kind cannot be interleaved with undo,
 // with an edit, or with anything else — and the existing `assert-track-count`
 // kind additionally reads attribute `equals` (not `count`) and resolves
-// `project->getRootComponent()` through a `dynamic_cast<SStdMixer*>`, so it can
+// `project->masterRoot()` through a `dynamic_cast<SStdMixer*>`, so it can
 // only ever see the MASTER root's top-level lanes.
 //
 // Every gate in this proposal needs the opposite of all three: mid-script,

@@ -685,8 +685,10 @@ bool SAutomationLaneUi::tkDrag( const QList<int> &ownerPath, const QString &targ
         if( trackPath.isEmpty() ) return false;
         trackPath.removeLast();
         SLink *link = splacements::placementAt(
+            // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
             splacements::rootContainer( proj ), ownerPath );
         STrack *track = dynamic_cast<STrack *>(
+            // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
             splacements::laneAt( splacements::rootContainer( proj ), trackPath ) );
         if( !link || !track ) return false;
         rowIdx = view_.rowIndexOfTrack( track );

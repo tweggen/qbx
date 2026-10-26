@@ -12,6 +12,7 @@ using namespace strackpath;
 
 SApplyResult SSetFeelFlowModeAction::apply( SProject *project )
 {
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( project );
     SObject *lane = splacements::laneAt( root, trackPath_ );
     STrack *track = dynamic_cast<STrack *>( lane );

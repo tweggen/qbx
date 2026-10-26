@@ -33,7 +33,7 @@ SApplyResult SRemoveAssetAction::apply( SProject *project )
     if( cut ) {
         SObject &content = cut->getContent();
         // WHICH ROOT the content lives under (proposal 09 D17). This used to
-        // be `pathOf( project->getRootComponent(), &content )` unconditionally
+        // be `pathOf( project->masterRoot(), &content )` unconditionally
         // — and for a content object under a detached ARRANGEMENT root that
         // walk finds nothing and returns the EMPTY path, which does not mean
         // "not found": it means THE ROOT ITSELF. So the inverse of removing an
@@ -46,7 +46,8 @@ SApplyResult SRemoveAssetAction::apply( SProject *project )
         QString containerRoot = project->arrangementNameOf( &content );
         QList<int> containerPath;
         if( containerRoot.isEmpty() ) {
-            SObject *master = project->getRootComponent();
+            // check_root_resolution: master -- the master is the fallback container, and an empty path REFUSES rather than meaning the master
+            SObject *master = project->masterRoot();
             if( &content != master ) {
                 containerPath = pathOf( master, &content );
                 // Still empty => genuinely unreachable. REFUSE to build an

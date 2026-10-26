@@ -85,7 +85,8 @@ SMainWindow *mainWindowForStrip_()
 STrack *trackAt( SProject *project, int index )
 {
     if( !project ) return nullptr;
-    SStdMixer *mixer = dynamic_cast<SStdMixer *>( project->getRootComponent() );
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    SStdMixer *mixer = dynamic_cast<SStdMixer *>( project->masterRoot() );
     if( !mixer ) return nullptr;
     if( index < 0 || index >= mixer->getNTracks() ) return nullptr;
     SLink *link = mixer->getTrackAt( index );

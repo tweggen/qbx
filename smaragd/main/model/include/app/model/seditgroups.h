@@ -87,6 +87,7 @@ inline QList<QList<int>> expandClipPaths( SProject *project,
 {
     QList<QList<int>> out;
     out.append( clipPath );
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( project );
     if( !root || clipPath.isEmpty() ) return out;
     QList<int> lanePath = clipPath;

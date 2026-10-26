@@ -24,7 +24,8 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
 {
     if( !project || arrName_.isEmpty() ) return { false, nullptr };
 
-    SObject *master = project->getRootComponent();
+    // check_root_resolution: master -- dissolve returns tracks TO the master; that is where they go by definition
+    SObject *master = project->masterRoot();
     SStdMixer *masterMixer = dynamic_cast<SStdMixer *>( master );
     SObject *arrObj = project->arrangement( arrName_ );
     SStdMixer *arrRoot = dynamic_cast<SStdMixer *>( arrObj );

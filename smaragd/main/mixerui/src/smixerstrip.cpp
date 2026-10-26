@@ -361,7 +361,8 @@ void SMixerStrip::applyHeaderColor_()
 {
     STrack *t = track_.data();
     SProject *proj = SApplication::app().getCurrentProject();
-    SObject *root  = proj ? proj->getRootComponent() : nullptr;
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
+    SObject *root  = proj ? proj->masterRoot() : nullptr;
     const int idx = ( root && t ) ? sclipcolors::indexForLane( *root, *t ) : 0;
     headerColor_ = sclipcolors::body( idx, false, t && t->isMuted() );
     if( !nameLabel_ ) return;

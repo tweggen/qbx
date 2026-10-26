@@ -684,6 +684,7 @@ QList<SClipPropertiesPanel::ClipRef> SClipPropertiesPanel::collectClips() const
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return out;
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return out;
 
@@ -1292,6 +1293,7 @@ void SClipPropertiesPanel::refreshAutoFadeStatus( const QList<ClipRef> &clips )
     // One `laneSeams` per LANE, not per clip: the answer is a property of the
     // whole lane's ordering, and a multi-lane selection would otherwise
     // re-sort one lane once per clip on it.
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = splacements::rootContainer( project );
     QHash<SObject *, QHash<SLink *, sautofade::Seams>> byLane;
     int exemptIn = 0, exemptOut = 0, explicitIn = 0, explicitOut = 0, n = 0;
@@ -1416,6 +1418,7 @@ SClipPropertiesPanel::collectMidiClips() const
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return out;
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return out;
 

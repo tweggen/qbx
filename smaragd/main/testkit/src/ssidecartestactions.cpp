@@ -48,6 +48,7 @@ namespace {
 // staleness).
 STrack *feelFlowTrackAt( SProject *project, const QString &trackPath )
 {
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( project );
     SObject *lane = splacements::laneAt( root, stringToPath( trackPath ) );
     return dynamic_cast<STrack *>( lane );
@@ -214,6 +215,7 @@ SApplyResult SWaitAnalysisAction::apply(SProject *project)
             // queued revalidator job, so jobsQueued()==0 above does not mean
             // "no bounce in flight" — only that no ANALYSIS job is queued
             // yet (the bounce schedules one only on completion).
+            // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
             pending = anyTrackBouncing(splacements::rootContainer(project));
         }
 
@@ -514,6 +516,7 @@ SApplyResult SFeelFlowAnalyzeAction::apply(SProject *project)
         return {false, nullptr};
     }
 
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *mixer = splacements::rootContainer(project);
     SLink *link = splacements::placementAt(mixer, clipPath_);
     if (!link) {

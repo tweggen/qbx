@@ -122,7 +122,8 @@ inline Position derivedPos( SProject *project, const QString &rootName,
     Position r;
     if( rootName.isEmpty() ) { r.sounding = true; r.pos = masterPos; return r; }
     if( !project ) return r;
-    SObject *master = project->getRootComponent();
+    // check_root_resolution: master -- the master is the reference frame a named root's position is mapped FROM
+    SObject *master = project->masterRoot();
     if( !master ) return r;
     QSet<const SObject *> onPath;
     offset_t found = 0;

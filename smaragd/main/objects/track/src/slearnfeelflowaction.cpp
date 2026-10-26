@@ -57,6 +57,7 @@ SLearnFeelFlowAction *inverseFrom( const QList<int> &trackPath,
 SApplyResult SLearnFeelFlowAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( project );
     SObject *lane = splacements::laneAt( root, trackPath_ );
     STrack *track = dynamic_cast<STrack *>( lane );

@@ -23,6 +23,7 @@ namespace {
 SStdMixer *mixerOf( SProject *project )
 {
     return project ? dynamic_cast<SStdMixer *>(
+                         // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
                          splacements::rootContainer( project ) )
                    : nullptr;
 }

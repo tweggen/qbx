@@ -21,7 +21,8 @@ SApplyResult SSetSelectionAction::apply(SProject *project)
     QList<QList<int>> priorPaths = app.getCurrentSelectionPathsFor( pathRoot_ );
 
     // Validate all paths before applying
-    SObject *root = project->getRootComponent();
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
+    SObject *root = project->masterRoot();
     if (!root) return {false, nullptr};
 
     // pathRoot_ names WHICH root (master, or a named arrangement) the paths

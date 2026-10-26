@@ -544,6 +544,7 @@ bool STrackDetailPanel::meterAudible() const
     SObject *soloRoot = splacements::rootNamed(proj, where.root);
     // specOf answers empty for a track no root reaches any more; the master is
     // the only honest fallback, and a detached track is not metered anyway.
+    // check_root_resolution: master -- QBX-233's deliberate FALLBACK: a track with no placement has no holding root
     if (!soloRoot) soloRoot = splacements::rootContainer(proj);
     return ssolo::isLaneAudible(soloRoot, currentTrack_);
 }

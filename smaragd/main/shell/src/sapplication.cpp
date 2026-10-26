@@ -191,7 +191,8 @@ void SApplication::rewireSpeaker()
 {
     // Drop any prior wiring first.
     getSpeaker()->setInput( 0, NULL );
-    if( !currentProject_ || !currentProject_->getRootComponent() ) return;
+    // check_root_resolution: master -- the speaker is wired to the master alone
+    if( !currentProject_ || !currentProject_->masterRoot() ) return;
 
     // ONE plug (proposal 36 B5). There used to be a second, wired to
     // root->linkOutput(1) when the root reported more than one output, from the
@@ -202,7 +203,8 @@ void SApplication::rewireSpeaker()
     // twRewire (the rewire root inside SStdMixer) returns NULL from
     // linkOutput() when nothing has been wired into it yet, so this call
     // is only meaningful once the graph has at least one track.
-    std::shared_ptr<twComponent> root = currentProject_->getRootComponent()->getRootComponent();
+    // check_root_resolution: master -- the speaker is wired to the master alone
+    std::shared_ptr<twComponent> root = currentProject_->masterRoot()->getRootComponent();
     getSpeaker()->setInput( 0, root->linkOutput( 0 ) );
 }
 
@@ -1053,6 +1055,7 @@ void SApplication::initMediaLayer()
         []( SObject *track, const QString &localPath, offset_t timePos ) -> bool {
             SApplication &app = SApplication::app();
             SProject *project = app.getCurrentProject();
+            // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
             SObject  *root    = splacements::rootContainer( project );
             if( !project || !root || !track ) return false;
             // RE-RESOLVED HERE, at completion, from the track's own identity --
@@ -1144,7 +1147,8 @@ void SApplication::submitAction(SAction *action)
 std::shared_ptr<twComponent> SApplication::rootComponent()
 {
     if (!currentProject_) return nullptr;
-    SObject *root = currentProject_->getRootComponent();
+    // check_root_resolution: master -- the app's root component IS the master; only it reaches the device
+    SObject *root = currentProject_->masterRoot();
     return root ? root->getRootComponent() : nullptr;
 }
 
@@ -1162,7 +1166,8 @@ bool SApplication::isRenderingActive() const
 void SApplication::beginRun( offset_t pos )
 {
     if( !currentProject_ ) return;
-    SObject *root = currentProject_->getRootComponent();
+    // check_root_resolution: master -- the transport runs the master
+    SObject *root = currentProject_->masterRoot();
     if( !root ) return;
 
     std::vector<STrack *> tracks;

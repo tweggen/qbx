@@ -77,6 +77,7 @@ SEventEditorView::Resolved SEventEditorView::resolve() const
 
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return r;
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return r;
 

@@ -27,7 +27,8 @@ QColor STrackRendererInline::laneFillColor( STrack &track )
     bool isTrackSelected = false;
     SProject *project = SAppContext::get().getCurrentProject();
     if( project ) {
-        SObject *root = project->getRootComponent();
+        // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
+        SObject *root = project->masterRoot();
         if( root ) {
             if( root && root->activeLane() == &track ) {
                 isTrackSelected = true;
@@ -364,7 +365,8 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     int colorIndex = getTrack().colorIndex();
     if( colorIndex < 0 ) {
         SProject *proj = SAppContext::get().getCurrentProject();
-        SObject *root = proj ? proj->getRootComponent() : nullptr;
+        // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
+        SObject *root = proj ? proj->masterRoot() : nullptr;
         colorIndex = root ? sclipcolors::autoIndexForLane( *root, getTrack() ) : 0;
     }
     const bool laneMuted = getTrack().isMuted();

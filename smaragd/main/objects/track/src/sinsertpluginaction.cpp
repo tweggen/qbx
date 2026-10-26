@@ -47,7 +47,7 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     auto path = strackpath::parseInto( pathRoot_, trackPath_ );
     // THE ARRANGEMENT QUALIFIER IS HONOURED, and it was not until proposal 45
     // M2. `parseInto` peels a "Name:" qualifier into pathRoot_ and this then
-    // resolved against project->getRootComponent() -- THE DEFAULT ROOT --
+    // resolved against project->masterRoot() -- THE DEFAULT ROOT --
     // unconditionally, so `trackPath="Drums:0"` silently edited the DEFAULT
     // arrangement's track 0. That is the "resolved against the wrong root
     // SUCCEEDS" class sobjectpath.h's own comment warns about: no error, no

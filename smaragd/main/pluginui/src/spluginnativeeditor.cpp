@@ -374,6 +374,7 @@ void SPluginNativeEditor::restoreOpenEditors( SProject *project,
     if( SApplication::app().isTestCaseMode() ) return;
 
     QList<STrack *> tracks;
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
     collectTracks( splacements::rootContainer( project ), tracks );
     // ...and every arrangement's (QBX-231): an asset's tracks hold plugins too,
     // and a window left open on one is a setting the file carries just the

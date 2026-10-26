@@ -199,7 +199,8 @@ void SMainWindow::attachTrackDetail()
     // have no active root until an editor is installed.
     if( !root )
         if( SProject *proj = SApplication::app().getCurrentProject() )
-            root = proj->getRootComponent();
+            // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+            root = proj->masterRoot();
     followTrackDetailRoot_( root );
 }
 
@@ -372,7 +373,8 @@ static QImage sGrabLogical( QWidget *w )
 QColor sClipBodyOf( STrack *track )
 {
     SProject *proj = SAppContext::get().getCurrentProject();
-    SObject *root = proj ? proj->getRootComponent() : nullptr;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    SObject *root = proj ? proj->masterRoot() : nullptr;
     const int idx = ( root && track )
         ? sclipcolors::indexForLane( *root, *track ) : 0;
     return sclipcolors::body( idx, false, track && track->isMuted() );
@@ -387,7 +389,8 @@ QColor sClipBodyOf( STrack *track )
 QColor sClipCutMarkOf( STrack *track )
 {
     SProject *proj = SAppContext::get().getCurrentProject();
-    SObject *root = proj ? proj->getRootComponent() : nullptr;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    SObject *root = proj ? proj->masterRoot() : nullptr;
     const int idx = ( root && track )
         ? sclipcolors::indexForLane( *root, *track ) : 0;
     return sclipcolors::cutMark( idx, false, track && track->isMuted() );
@@ -432,6 +435,7 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
     if( !proj ) return nullptr;
     // An EMPTY name is the master, exactly as `SAction::pathRoot()` reads it.
     SObject *root = arrangement.isEmpty()
+                        // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
                         ? splacements::rootContainer( proj )
                         : splacements::rootNamed( proj, arrangement );
     if( !root ) return nullptr;
@@ -602,6 +606,7 @@ void SMainWindow::attachMixerPane()
     // is the same arrangement the tabs would name.
     if( !root )
         if( SProject *proj = SApplication::app().getCurrentProject() )
+            // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
             root = splacements::rootContainer( proj );
     mixerPane_->setRoot( root );
 }
@@ -1526,7 +1531,8 @@ void SMainWindow::newProject()
 {
 #if 0
     currentProject_ = new SProject();
-    projectRootWidget_ = currentProject_->getRootComponent()->getDetailEditWidget( this );
+    // check_root_resolution: master -- projectRootWidget_ is the MASTER's own detail editor
+    projectRootWidget_ = currentProject_->masterRoot()->getDetailEditWidget( this );
     linkEventEditorAxis();
     setCentralWidget( projectRootWidget_ );
     SApplication::app().setCurrentProject( currentProject_ );
@@ -1726,7 +1732,8 @@ void SMainWindow::startPlayingFrom_( bool fromLastNavigated )
     } else {
         qWarning() << "startPlaying(): Ought to start." << Qt::endl;
         // FIXME: Add myselves as listener of the root component.
-        SObject *root = proj->getRootComponent();
+        // check_root_resolution: master -- the transport plays the master
+        SObject *root = proj->masterRoot();
         if( !root ) return;
         qWarning() << "startPlaying(): Preparing start." << Qt::endl;
 
@@ -1793,11 +1800,12 @@ void SMainWindow::stopPlaying()
         SApplication::app().getSpeaker()->stopOutput();
         SApplication::app().setPlaying( false );
     } else {
-        SObject *root = proj->getRootComponent();
+        // check_root_resolution: master -- the transport plays the master
+        SObject *root = proj->masterRoot();
         if( !root ) return;
         // FIXME: Jump to left locator here.
         SApplication::app().setGlobalLocatorPos( 0 );
-        //  proj->getRootComponent().seekTo( 0 );
+        //  proj->masterRoot().seekTo( 0 );
     }
     actPlay_->setIcon( QIcon( QPixmap( (const char **)playoff_xpm ) ) );
 }
@@ -2814,7 +2822,8 @@ void SMainWindow::runSaveLoadTest()
         return;
     }
 
-    SStdMixer *liveMixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    // check_root_resolution: master -- a developer self-test driving the master deliberately
+    SStdMixer *liveMixer = dynamic_cast<SStdMixer*>(currentProject_->masterRoot());
     int liveTracks = liveMixer ? liveMixer->getNTracks() : -1;
 
     QString tmpPath = QDir::tempPath() + "/smaragd_roundtrip.qxp";
@@ -2833,7 +2842,8 @@ void SMainWindow::runSaveLoadTest()
 
     int probeTracks = -1;
     if (loaded) {
-        SStdMixer *probeMixer = dynamic_cast<SStdMixer*>(probe->getRootComponent());
+        // check_root_resolution: master -- a developer self-test driving the master deliberately
+        SStdMixer *probeMixer = dynamic_cast<SStdMixer*>(probe->masterRoot());
         probeTracks = probeMixer ? probeMixer->getNTracks() : -1;
     }
     delete probe;
@@ -2856,7 +2866,8 @@ void SMainWindow::runGroupTrackTest()
         statusBar()->showMessage("Open or create a project first", 3000);
         return;
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    // check_root_resolution: master -- a developer self-test driving the master deliberately
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->masterRoot());
     if (!mixer) {
         statusBar()->showMessage("Group test FAILED: no mixer", 4000);
         return;
@@ -2897,7 +2908,8 @@ void SMainWindow::runGroupTrackTest()
     if (saved) {
         SProject *probe = new SProject();
         if (SLoadProjectAction(tmpPath).apply(probe).applied) {
-            SStdMixer *pm = dynamic_cast<SStdMixer*>(probe->getRootComponent());
+            // check_root_resolution: master -- a developer self-test driving the master deliberately
+            SStdMixer *pm = dynamic_cast<SStdMixer*>(probe->masterRoot());
             if (pm && pm->getNTracks() >= 1) {
                 probeTop = pm->getNTracks();
                 SObject *pTop0 = &pm->childAt(0)->getSObject();
@@ -2933,7 +2945,8 @@ void SMainWindow::runUndoRemoveTest()
         statusBar()->showMessage("Open or create a project first", 3000);
         return;
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    // check_root_resolution: master -- a developer self-test driving the master deliberately
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->masterRoot());
     if (!mixer) {
         statusBar()->showMessage("Remove test FAILED: no mixer", 4000);
         return;
@@ -2984,7 +2997,8 @@ void SMainWindow::runGroupPersist()
         statusBar()->showMessage("Open or create a project first", 3000);
         return;
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    // check_root_resolution: master -- a developer self-test driving the master deliberately
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->masterRoot());
     if (!mixer) return;
     while (mixer->getNTracks() < 2) {
         SApplication::app().submitAction(new SAddTrackAction(-1));
@@ -3004,7 +3018,8 @@ void SMainWindow::runReorderTrackTest()
         statusBar()->showMessage("Open or create a project first", 3000);
         return;
     }
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->getRootComponent());
+    // check_root_resolution: master -- a developer self-test driving the master deliberately
+    SStdMixer *mixer = dynamic_cast<SStdMixer*>(currentProject_->masterRoot());
     if (!mixer) {
         statusBar()->showMessage("Reorder test FAILED: no mixer", 4000);
         return;
@@ -3043,7 +3058,8 @@ void SMainWindow::runReorderTrackTest()
     if (saved) {
         SProject *probe = new SProject();
         if (SLoadProjectAction(tmpPath).apply(probe).applied) {
-            SStdMixer *pm = dynamic_cast<SStdMixer*>(probe->getRootComponent());
+            // check_root_resolution: master -- a developer self-test driving the master deliberately
+            SStdMixer *pm = dynamic_cast<SStdMixer*>(probe->masterRoot());
             if (pm && pm->getNTracks() >= 3) {
                 QString ps;
                 for (int i = 0; i < 3; ++i)
@@ -3373,14 +3389,17 @@ void SMainWindow::installMasterEditor_()
     // handle, and its own comment says so.
     SProject *proj = currentProject_ ? currentProject_
                                      : SApplication::app().getCurrentProject();
-    if( !proj || !proj->getRootComponent() ) return;
+    // check_root_resolution: master -- installMasterEditor_ installs the MASTER's editor; the name says so
+    if( !proj || !proj->masterRoot() ) return;
     if( !viewTabs_ ) {
         viewTabs_ = new SViewTabs( centralHost_ );
         centralHost_->addWidget( viewTabs_ );
         centralHost_->setCurrentWidget( viewTabs_ );
     }
-    QWidget *editor = proj->getRootComponent()->getDetailEditWidget( this );
-    viewTabs_->setMasterEditor( proj->getRootComponent(), editor,
+    // check_root_resolution: master -- installMasterEditor_ installs the MASTER's editor; the name says so
+    QWidget *editor = proj->masterRoot()->getDetailEditWidget( this );
+    // check_root_resolution: master -- installMasterEditor_ installs the MASTER's editor; the name says so
+    viewTabs_->setMasterEditor( proj->masterRoot(), editor,
                                 tr( "Arrangement" ) );
     // projectRootWidget_ stays the widget the rest of this file pokes for
     // repaints and focus; it is now the SHELL rather than the arranger, which
@@ -3421,7 +3440,8 @@ SStdMixerView *SMainWindow::ensureArranger_()
             return v;
     }
     SProject *proj = SApplication::app().getCurrentProject();
-    if( !proj || !proj->getRootComponent() ) return NULL;
+    // check_root_resolution: master -- installMasterEditor_ installs the MASTER's editor; the name says so
+    if( !proj || !proj->masterRoot() ) return NULL;
     installMasterEditor_();
     linkEventEditorAxis();
     return viewTabs_
@@ -4288,6 +4308,7 @@ QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
 
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
     STrack *track = dynamic_cast<STrack *>( lane );
@@ -4319,6 +4340,7 @@ QString SMainWindow::describeTrackDetailSections( const QString &trackPath )
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     STrack *track = dynamic_cast<STrack *>(
         splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
@@ -4334,6 +4356,7 @@ bool SMainWindow::clickTrackDetailSection( const QString &trackPath,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     STrack *track = dynamic_cast<STrack *>(
         splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
@@ -4351,6 +4374,7 @@ QString SMainWindow::describeUiFonts( const QString &trackPath )
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     STrack *track = dynamic_cast<STrack *>(
         splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
@@ -4543,6 +4567,7 @@ QString SMainWindow::describeFeelFlow( const QString &trackPath )
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
 
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
     STrack *track = dynamic_cast<STrack *>( lane );
@@ -4563,6 +4588,7 @@ bool SMainWindow::grabFeelFlow( const QString &path, const QString &trackPath,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
     STrack *track = dynamic_cast<STrack *>( lane );
@@ -4608,7 +4634,8 @@ void SMainWindow::updateFeelFlowPuppet_( offset_t pos )
         return;
 
     SProject *proj = SApplication::app().getCurrentProject();
-    SObject  *root = proj ? proj->getRootComponent() : nullptr;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    SObject  *root = proj ? proj->masterRoot() : nullptr;
 
     // The ACTIVE lane when it is a track (the lane the user is working on --
     // the same activeLane() STrackRendererInline::laneFillColor reads), else
@@ -4642,6 +4669,7 @@ bool SMainWindow::grabFeelFlowPuppet( const QString &path,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
     STrack *track = dynamic_cast<STrack *>( lane );
@@ -4669,6 +4697,7 @@ bool SMainWindow::clickFeelFlowPanel( const QString &trackPath,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
     SObject *root = splacements::rootContainer( proj );
     SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
     STrack *track = dynamic_cast<STrack *>( lane );

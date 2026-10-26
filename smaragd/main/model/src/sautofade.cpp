@@ -170,7 +170,8 @@ void reapplyAll( SProject *project )
     if( !project ) return;
 
     QList<SObject *> roots;
-    if( SObject *master = project->getRootComponent() ) roots.append( master );
+    // check_root_resolution: master -- enumerates EVERY root -- the master here, then project->arrangements() below
+    if( SObject *master = project->masterRoot() ) roots.append( master );
     for( SObject *arr : project->arrangements() )
         if( arr && !roots.contains( arr ) ) roots.append( arr );
 

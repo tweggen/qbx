@@ -69,6 +69,71 @@ plain lane (a folder-track "container asset") gains NO second name this way:
 that lane is already addressable by itself, and the `isLane()` check screens
 it out. Arrangements always WIN a name collision, so every path that already
 resolved keeps its current meaning.
+
+## WHICH ROOT DOES IT MEAN? (QBX-242)
+
+A project has several ROOTS: the master, one per named arrangement, one per
+asset fragment. Anything turning a track POINTER into a path, or a path into a
+track, answers "which root?" first, and there are exactly two spellings:
+
+```cpp
+splacements::rootNamed( project, pathRoot_ )   // ASK: the root is a parameter
+splacements::rootContainer( project )          // ASSUME: the master, always
+```
+
+**The action layer is correct by construction** — about 60 verbs take the root
+as a parameter. **The UI, shell and widget layer is where the master gets
+assumed**, and assuming it is RIGHT only when the question is about the AUDIBLE
+GRAPH: the device, the transport, the recorder's arming, the MIDI out pump, the
+live monitor. Only the master is wired to the device, so for those the master is
+not a default, it is the answer.
+
+Everywhere else it is a defect, **and it never announces itself**: in an
+arrangement or asset tab the path resolves to `""`, every caller returns early
+on `""`, and the gesture does nothing. No crash, no log line — a dead control.
+That is how QBX-230, QBX-231, QBX-232, QBX-233 and QBX-234 were each found:
+by a human clicking something that did not respond.
+
+What to reach for instead:
+
+| the question | the answer |
+|---|---|
+| the root that HOLDS this object | `splacements::specOf()` (the inverse of `laneBySpec()`), then `rootNamed()` or `parseQualified()` |
+| the root the ACTIVE VIEW edits | `stimeline::submitActive()` / `submitFor( view, a )` / `submitRooted()` |
+| genuinely the master | keep it, and carry a marker saying why |
+
+### `SProject::masterRoot()`, and why the rename was necessary
+
+It was `SProject::getRootComponent()` until QBX-242. `SObject::getRootComponent()`
+is a **wholly different method** — the DSP component a lane renders through, not
+the project's root container — and it accounts for most of the ~140
+`getRootComponent` mentions in the tree. While the two shared a name, no grep
+and no checker could separate "give me the master root" from "give me this
+track's audio component", which is why the class could not be gated. The rename
+is non-behavioural and the compiler verifies it in both directions.
+
+### The gate
+
+`tools/check_root_resolution.py`, in `ci/gates.sh`. It fails on any
+`rootContainer()` / `masterRoot()` site in `smaragd/main` that does not carry
+
+```cpp
+// check_root_resolution: master -- <why the master is right here>
+```
+
+and the reason is required — a marker with no prose fails too. A site that is
+known-wrong and not yet fixed carries `suspect <TICKET>` instead, which needs a
+ticket key and is COUNTED AND PRINTED on every run, so the debt is a number
+somebody sees. At QBX-242 that was 33 master sites and 63 suspects across
+QBX-243 … QBX-246. The honest end state is zero suspects.
+
+**`tools/check_pathroot.py` is the same class from the parsing side** and is now
+in `ci/gates.sh` too. It had not been: it was committed on 2026-08-20 by
+`fbeb4b86`, whose message reads *"...and add a gate so the class cannot
+return"*, and was never added to the loop, so it never ran. Wired in by QBX-242
+it failed immediately with eight violations in seven files, every one of them
+introduced on or after the commit that was supposed to have gated them. **A
+checker in `tools/` is not a gate until `ci/gates.sh` names it.**
 volumeDbSnapshot() is the thread-safe volume read (it holds volumeMutex_,
 which a bare getVolume() does not). Proposal 39 M2 left it with NO CALLER —
 it deleted the paint-time fader multiply from drawObjectWaveform — and kept
