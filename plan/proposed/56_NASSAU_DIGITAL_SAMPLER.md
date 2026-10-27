@@ -168,8 +168,8 @@ costlier than DESIGN.md says, §10 and §9 say so.
 | B2 | `tw/sampler` registers the instrument through a **new explicit registration call** into `twPluginRegistry`, made by the composition root (`SApplication`) and by tests; never a static initializer | The registry cannot name a module that depends on it (§1); inv. 1 forbids static-init self-registration, not an explicit call |
 | B3 | Every mutation of a live sampler instance goes through **one new processor entry point that runs under `mutex_`** and bumps the param epoch, plus an **instance initializer** the slot applies to every instance its factory makes | The only reach the app has today is a raw pointer outside the lock (`twpluginslotproc.h:262-263`), and a rebuild discards every instance (`twpluginslotproc.cc:392-394`), so a snapshot pushed once would be lost on the next channel-count change |
 | B4 | The program model object is an `SObject` child of the `SPluginSlot`, serialized through the slot's existing `SLink`-children loop; an asset-backed layer is an `SLink` to the asset body | A3 and DESIGN §9.2's "an ordinary link to the asset"; the loader resolves `SLink` by object id within the file, so a link survives a rename where a name would not |
-| B5 | `objects/sampler` depends on `objects/track` (for `SPluginSlot`), and nothing below the UI depends on `objects/sampler`; a new UI slice `samplerui` holds the editor | §4.4; DESIGN's "rank of objects/midi" cannot hold as stated, see Q-6 |
-| B6 | The verbs take `slotIndex`, the attribute `set-plugin-param` already uses (`docs/ACTIONS.md:353`), not DESIGN's `slot` | A6 says "the way the plugin verbs already do"; see Q-5 |
+| B5 | ~~`objects/sampler` depends on `objects/track` (for `SPluginSlot`)~~ — **superseded 2026-10-27 by the author (Q-6, answered):** `objects/sampler` keeps the rank of `objects/midi` and has **no** edge to `objects/track`; the **shell** installs the slot's instance initializer as a hook (see *Layering* below). Nothing below the UI depends on `objects/sampler`; a new UI slice `samplerui` holds the editor | §4.4; DESIGN's "rank of objects/midi" cannot hold as stated, see Q-6 |
+| B6 | The verbs take `slotIndex`, the attribute `set-plugin-param` already uses (`docs/ACTIONS.md:353`), not DESIGN's `slot` — **confirmed 2026-10-27 (Q-5, answered)**; DESIGN §9.3 and GATES Q1.1 now say `slotIndex` (nassau-digital#15) | A6 says "the way the plugin verbs already do"; see Q-5 |
 | B7 | The sampler reports **one** output bus until Q8, and its aux buses only once proposal 55's host passes every bus | The host hands a generator one bus (`twpluginslotproc.cc:968`); a plugin that reports nine and writes `outBuses[1]` reads past the array |
 | B8 | The offline-render wait at the barrier is a **synchronous settle on the main thread**, bounded and logged: wait for each outstanding generation job, install its result, then start | The `render` verb sleeps on the main thread (`srenderaction.cpp:143-151`), so a wait that needed the event loop to install a generation would deadlock every scripted render |
 | B9 | An asset is rendered to a sample by a bounce of its root component on a worker, through the page scheduler, into memory — the `SFeelFlowTrackBounce` precedent (`smaragd/main/objects/track/src/sfeelflowbounce.cpp:200`) with a memory writer that lives in `tw/render` | The app may not include `tw/sinks` (`smaragd/tw303a/render/include/tw/render/render_session.h:31-36`), so the writer cannot live in the app |
@@ -412,7 +412,20 @@ string the core never interprets. qbx writes:
 | A recording made in the instrument | `file:<path under the project's recordings folder>` | as a file; see Q-4 |
 | A qbx asset | `link:<layer id>` | the `SLink` child carrying that layer id, targeting the asset body (B4) |
 
-**Layering (B5).**
+**Layering (B5) — superseded by the Q-6 answer, 2026-10-27.** The author
+kept DESIGN §9.2's rank: `objects/sampler` sits at the rank of
+`objects/midi` and does **not** depend on `objects/track`. The block below is
+the shape this proposal first argued for and is kept for its reasoning; the
+built shape differs in one edge:
+
+* `APP_DEPS['objects/sampler']` drops `objects/track`. The engine edges stay
+  (`plugins` still names `twPlugin &` in the initializer the slice provides).
+* The **shell**, which may already see both slices, wires the hook: it hands
+  the slot an instance initializer that `objects/sampler` provides, so the
+  slot calls it on every instance it creates without either slice naming the
+  other. Q1 records the exact seam as built, here and in the three CONTRACTs.
+
+As first proposed:
 
 ```
 APP_DEPS['objects/sampler'] = {'actions', 'model', 'objects/track', 'persistence'}
@@ -930,11 +943,15 @@ and core C6. Scope: §4.12.
   WAV under the project's recordings folder, referenced as an extern file. Is
   that what was meant, or should a recording also be registered as a qbx asset
   (and so be placeable on a lane)?
-* **Q-5 — `slot` or `slotIndex`.** DESIGN §9.3's example and GATES Q1.1 write
+* **Q-5 — `slot` or `slotIndex`. ANSWERED by the author, 2026-10-27:
+  `slotIndex`** (B6 as written; DESIGN and GATES corrected in
+  nassau-digital#15). The question as asked: DESIGN §9.3's example and GATES Q1.1 write
   `slot`; the plugin verbs DESIGN cites as the model write `slotIndex`. B6
   takes `slotIndex`; say if `slot` is wanted (accepted as an alias, or
   instead).
-* **Q-6 — The slice's rank.** DESIGN §9.2 puts `objects/sampler` "at the rank
+* **Q-6 — The slice's rank. ANSWERED by the author, 2026-10-27: keep the
+  midi rank**; the shell installs the instance initializer as a hook (B5
+  superseded, *Layering* rewritten). The question as asked: DESIGN §9.2 puts `objects/sampler` "at the rank
   of objects/midi" (no edge to `objects/track`). The slot it configures lives in
   `objects/track`, so B5 gives it that one edge and keeps the property that
   matters (the track never depends on the sampler). The alternative — keep the
