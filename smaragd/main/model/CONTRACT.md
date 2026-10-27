@@ -925,6 +925,13 @@ When the walk cannot find the edited object and falls to `renderPathOwner()`
 (45 D11, a system lane), the owner is handed the object itself as well, so a
 send lane's OWN routing dependents are reached from an edit on that lane.
 
+**Proposal 55 M2 adds two virtuals beside it.** `routingInputsChanged()` is
+asked of the root that holds a lane (`splacements::rootHolding`) when
+something a routing edge depends on changed shape -- the mixer re-runs its
+pass; and `isReturnLane()` lets `splacements::placementLaneAt()` word its
+refusal for a return track ("is a RETURN track ... carries no clips"), which a
+case must be able to tell from proposal 45 D6's system-lane message.
+
 ## The recorder's TAKE NAME, and the one test for "this take came from a recording" (plan 53 §8 P4, D5, QBX-182)
 
 `app/model/stakenames.h` — `recorded( n, stamp )` builds `"Take 3 · 14:27"` and

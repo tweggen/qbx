@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QDomElement>
 #include <QFileInfo>
+#include <QRandomGenerator>
 #include <QTextStream>
 
 namespace {
@@ -161,6 +162,9 @@ void SPluginSlot::ensureChannels( int nChannels ) const
     if( !self->proc_ ) {
         self->proc_ = std::make_shared<audio::twPluginSlotProcessor>(
             *SAppContext::get().get303aEnvironment(), makeFactory(), effective_.io );
+        // Proposal 55 M2: a mask handed down before the processor existed
+        // (a loaded project routes before every slot knows its width).
+        if( self->routedMask_ ) self->proc_->setRoutedOutBuses( self->routedMask_ );
     }
 
     if( nChannels != self->channels_ ) {
@@ -206,6 +210,50 @@ std::shared_ptr<audio::twPluginInsert> SPluginSlot::getInsert() const
 std::shared_ptr<audio::twPluginInsert> SPluginSlot::peekInsert() const
 {
     return insert_;
+}
+
+// --- aux routing (proposal 55 M2) -------------------------------------------
+
+quint64 SPluginSlot::ensureSlotId()
+{
+    // Random, 63 bits, never 0 -- see the header for why not max+1 (T6).
+    while( slotId_ == 0 )
+        slotId_ = QRandomGenerator::global()->generate64() & 0x7fffffffffffffffULL;
+    return slotId_;
+}
+
+bool SPluginSlot::setRoutedOutBuses( std::uint32_t mask )
+{
+    mask &= ~1u;   // bus 0 is the track's own output, never routed
+    if( mask == routedMask_ ) return false;
+    routedMask_ = mask;
+    // NEVER materializes a processor: a slot with none yet gets the mask in
+    // ensureChannels(). The processor stales the insert itself (param epoch).
+    if( proc_ ) proc_->setRoutedOutBuses( mask );
+    return true;
+}
+
+int SPluginSlot::auxOutBusCount() const
+{
+    if( proc_ && getSlotState() == audio::twPluginSlotState::Active ) {
+        if( audio::twPlugin *p = proc_->plugin() )
+            return (int) p->audioOutBusCount();
+    }
+    return (int) effective_.nOutBuses;
+}
+
+int SPluginSlot::auxOutBusChannels( int bus ) const
+{
+    if( bus < 0 ) return 0;
+    if( proc_ && getSlotState() == audio::twPluginSlotState::Active ) {
+        if( audio::twPlugin *p = proc_->plugin() ) {
+            if( (std::size_t) bus >= p->audioOutBusCount() ) return 0;
+            return (int) p->audioOutBus( (std::size_t) bus ).channels;
+        }
+    }
+    if( bus < (int) effective_.outBusChannels.size() )
+        return (int) effective_.outBusChannels[(std::size_t) bus];
+    return 0;
 }
 
 // --- the instrument slot (proposal 37 P3b) ---------------------------------
@@ -329,6 +377,10 @@ int SPluginSlot::readPreChildrenAttributes( QDomElement &element )
     if( element.hasAttribute( "editorOpen" ) )
         editorOpen_ = element.attribute( "editorOpen" ) == "true";
 
+    // Proposal 55 D8: absent = never referenced by a return.
+    if( element.hasAttribute( "slotId" ) )
+        slotId_ = element.attribute( "slotId" ).toULongLong();
+
     // Read the opaque state chunk (base64 encoded in child <state> element)
     QDomElement stateElem = element.firstChildElement( "state" );
     if( !stateElem.isNull() ) {
@@ -372,6 +424,11 @@ int SPluginSlot::serializeSelfAttributes( QTextStream &o )
     o << " nIn='" << descriptor_.io.audioInputs << "'";
     o << " nOut='" << descriptor_.io.audioOutputs << "'";
     o << " isInstrument='" << (descriptor_.isInstrument ? "true" : "false") << "'";
+    // Proposal 55 D8: the stable id a return track's <auxSource slot=> names.
+    // Written only once something has referenced the slot, so a project that
+    // never routed an aux bus re-serializes byte-identically (T8).
+    if( slotId_ != 0 )
+        o << " slotId='" << slotId_ << "'";
     // WRITTEN ONLY WHEN TRUE, which is what keeps every project file saved
     // before proposal 33 D2 — and both render goldens — byte-unchanged. The
     // same discipline SObject::serialize() already follows for automation

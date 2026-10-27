@@ -1592,6 +1592,14 @@ proposal 45 and both of which still caught these cases out:
 * `maxCount` alone still asserts a floor of one. A negative assertion needs
   `minCount="0" maxCount="0"`.
 
+## `assert-return-track` (proposal 55 M2)
+
+Reads a return track's model AND its LIVE wiring: `routed=1` means the tap is
+the return chain's input and reads the source insert (`STrack::returnRouted`),
+`mask=` is what the pass handed the source slot. 47's assert-master-inputs
+lesson again: a wired and a wiped route are both silent on a quiet fixture, so
+the wiring is the only place a case can tell them apart.
+
 ## `assert-track-pan` (proposal 49 M3)
 
 `trackPath` / `pan` / `tolerance`, reading `STrack::getPan()`.

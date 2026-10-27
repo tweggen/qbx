@@ -7,6 +7,7 @@
 #include "app/model/slink.h"
 #include "app/model/splacements.h"
 #include "app/model/sappcontext.h"
+#include <QDebug>
 #include <QDomElement>
 
 using namespace strackpath;
@@ -92,6 +93,16 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
     STrack   *destTrack = dynamic_cast<STrack *>(destParent);
     if (!destMixer && !destTrack) {
         return {false, nullptr};            // not a container we can attach into
+    }
+
+    // PROPOSAL 55 D1: A RETURN TRACK HAS NO CHILD TRACKS. Its twTrackMix --
+    // where a folder sums its children -- is disconnected (D3), so a lane
+    // moved in would be summed into nothing.
+    if (destTrack && destTrack->isReturnTrack()) {
+        qWarning().noquote()
+            << "reparent-track: refused -" << destTrack->getSName()
+            << "is a RETURN track and takes no child tracks (proposal 55 D1)";
+        return {false, nullptr};
     }
 
     // Reject a no-op / pure reorder (that is SMoveTrackAction's job) and cycles.

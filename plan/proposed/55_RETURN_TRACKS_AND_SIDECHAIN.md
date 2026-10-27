@@ -796,6 +796,66 @@ D1, D3, D6 (second half), D8, D9; §3.2 return half; the aux edge in D7.
 - **AC2.7** A solo toggle elsewhere leaves the return wired (T1), asserted with
   `assert-return-track routed=1` reading the live plug.
 
+**M2 as built (2026-10-27, QBX-251).** Every AC holds as written (numbers in
+the PR and in thinktank); what the build found that this document did not say:
+
+- **A routing edit on a return needs `invalidateRenderPath()` on the return,
+  not only a re-wire.** The pass re-points the tap on every run, which
+  re-stamps the tap, the return's chain, fader and rewire (each `setInput`
+  bumps its consumer) -- and NOT the master lane chain and mixer rewire behind
+  them. Measured: deleting a return's source track ran the pass, nulled the
+  tap's input, announced the return silent, and the next render was
+  **byte-identical to the routed one**. The pass now invalidates a return's
+  render path whenever its route moved (a different source insert, or a new
+  tap). 47 M2's lesson, paid again for the aux edge.
+- **The pass must not route returns while a project is loading.** Tracks are
+  inserted, and the pass runs, before the deferred resolvers have given a
+  return its source or a source its plugin chain, so it announced loaded
+  returns silent that were not. The return half skips while
+  `SProject::isLoading()`, and a post-load pass registered from
+  `objects/mixer` (`SProjectLoader::registerPostLoadPass`, the take-column
+  pass's mechanism) routes every loaded return once, with every chain
+  adopted. D8 said "resolved by `deferResolve` exactly as `pluginChainId`
+  is"; that holds for the TRACK, while the SLOT needs no lookup at all -- it
+  is a number the pass finds in the source's chain.
+- **`slotId` is minted random (63 bits), not max+1**, and is written from the
+  first time something names the slot, staying written after the return goes
+  ("written only once something references it" read literally). A counter
+  would hand a new slot the number of a removed one that a return -- alive on
+  the undo stack -- still names, and the return would re-attach to it (T6).
+  remove-plugin's inverse carries the id (`insert-plugin slotId=`), as D8
+  required.
+- **An unroutable return keeps the tap as its chain's input, with nothing
+  wired into it** -- silent, not its own (empty) clip mix. A source that did
+  not resolve on load keeps the bus with no track, so the return stays a
+  return and fails closed, and re-saves as `track='0'`.
+- **The master as a source is refused by ROLE**, as add-send refuses it: the
+  routing graph has no edge for the master sum, so the walk cannot see that
+  master -> return closes a cycle. A SEND lane may be a source (its return is
+  appended at the top level); a system lane may never be the return.
+- **A return that sits in another folder than its source** is reached by the
+  D7 walk over the aux edge as a containment walk from the root TO the
+  return, which also bumps every folder above it; whatever that walk bumps is
+  followed on, so a send FROM a return is covered.
+- **AC2.1's fixture is `test_stereo.wav`, not `test_sawtooth.wav`.** Every saw
+  fixture in `tests/` has byte-identical channels, and against one the
+  required sabotage (the tap reading its bus one channel to the right) went
+  UNBITTEN: the cmp passed. `test_stereo.wav`'s channels differ (RMS 0.5 and
+  0.25), and with it both required sabotages bite.
+- **§5 named two fixtures; M2 needed a third.** D9's DualMono refusal needs a
+  1-in/1-out plugin and none existed, so `tw.test.clap.monosplit` is the split
+  with every port mono.
+- **Q1 (a) is announced in the pass, once per arm** -- `[RETURN] '<return>' is
+  silent while its source '<source>' is armed`; the return stays WIRED through
+  the arm (the slot renders only for the pump), gated by
+  `return_track_live_source` on the wiring and the log, as sends are.
+- **T1 for returns is weaker than for sends.** A return's wiring is internal to
+  the return track (tap -> chain -> fader -> rewire); the master half of the
+  pass re-sets only the return's root in the master sum, so nothing the pass
+  does elsewhere can clobber it. AC2.7 is gated as written; the sabotage that
+  bites it is the plausible regression, applying the send's audibility rule
+  to returns, under which a solo elsewhere unwires the return.
+
 ### M3 — Sidechain inputs (engine only)
 
 D5's ABI and insert half, D4 (key rows); `tw.test.clap.duck`, `TestDuck`.

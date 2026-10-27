@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 Q1 (a) / T9: AN ARMED SOURCE'S RETURNS GO SILENT FOR THE ARM,
+  AND THAT IS ANNOUNCED ONCE PER ARM.
+
+  Q1 is the author's question and M2 builds its default, option (a): accept and
+  announce, as proposal 47 D9 did for sends. A live-owned slot answers every
+  frozen render with silence (twpluginslotproc.cc), so a return reading its aux
+  bus goes quiet while the source is armed. T9: "until decided, the behaviour
+  is gated as it is and announced once per arm".
+
+  WHAT IS GATED IS THE ANNOUNCEMENT AND THE WIRING, not the silence: a render
+  SUSPENDS every live lane (21 L1b), so by the time there is audio the
+  condition is gone - the reason send_live_lane_does_not_feed is a wiring gate.
+  The return stays WIRED through the arm (routed=1): nothing about the route
+  changes, the slot simply renders only for the pump. The announcement comes
+  where the live plan is built (monitor "on" alone puts a
+  lane in the live set, and with monitor Auto and the transport stopped an
+  armed track with an input monitors at once - so the plan is built, and the
+  line logged, at arm-track itself, measured), and a second pass during the
+  same arm says nothing.
+
+  Needs the paced file: input backend, registered with the live cases in
+  CMakeLists.txt - without a real input the track never becomes live-owned.
+-->
+<SActionScript version="1" name="return_track_live_source">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Kit"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0"/>
+    <add-return-track trackPath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" routed="1" mask="2"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+
+    <!-- ============ ARMED: announced once, still wired ================== -->
+    <arm-track trackPath="0" armed="true"/>
+    <assert-log contains="[RETURN] 'Kit Aux 1' is silent while its source 'Kit' is armed"/>
+    <!-- Monitor "on" re-builds the plan in the same arm: no second line. -->
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <assert-log contains="is silent while its source" minCount="0" maxCount="0"/>
+    <assert-return-track trackPath="1" routed="1" mask="2"/>
+
+    <!-- Another pass in the same arm (a solo toggle elsewhere) is silent. -->
+    <add-track index="-1"/>
+    <set-track-solo trackPath="2" solo="1"/>
+    <assert-log contains="is silent while its source" minCount="0" maxCount="0"/>
+    <set-track-solo trackPath="2" solo="0"/>
+
+    <!-- ============ HAND-BACK: audible again ============================ -->
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="false"/>
+    <assert-return-track trackPath="1" routed="1" mask="2"/>
+    <render filename="rtl_handback.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="rtl_handback.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+  </actions>
+</SActionScript>

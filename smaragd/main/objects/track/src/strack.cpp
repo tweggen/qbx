@@ -19,6 +19,10 @@
 #include "tw/mix/twrewire.h"
 #include "tw/mix/twgainstage.h"
 #include "tw/plugins/twpluginchain.h"
+#include "tw/plugins/twpluginauxtap.h"
+#include "tw/plugins/twplugininsert.h"
+#include "tw/plugins/twpluginslotproc.h"
+#include "tw/graph/twlatch.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
 #include "app/model/slink.h"
@@ -715,6 +719,19 @@ int STrack::serialize( QTextStream &o )
     // repeated is silently dropped on save with no error anywhere.
     serializeSends( o );
 
+    // THE AUX SOURCE (proposal 55 D8), inline and ONLY WHEN SET, so every
+    // project without a return re-serializes byte-identically (47 T8). The
+    // track is an object id exactly as pluginChainId is; the slot is its
+    // stable slotId, never an index; the bus is the plugin's own bus index. A
+    // source that did not resolve is written as track='0' so the return stays
+    // a return (and stays silent) across a save.
+    if( isReturnTrack() ) {
+        const std::uintptr_t src = auxTrack_
+            ? reinterpret_cast<std::uintptr_t>( (SObject *) auxTrack_.data() ) : 0;
+        o << "<auxSource track='" << src << "' slot='" << auxSlotId_
+          << "' bus='" << auxBus_ << "'/>\n";
+    }
+
     // Written ONLY when non-default (mode == Trained, or a structure was
     // learned while still in Adaptive mode) -- so a project that has never
     // touched Feel Flow's mode re-serializes BYTE-IDENTICAL to a pre-M3
@@ -845,6 +862,220 @@ std::shared_ptr<twComponent> STrack::sendTapComponent( bool preFader ) const
     return std::static_pointer_cast<twComponent>( cpGainStage_ );
 }
 
+// --- RETURN TRACKS (proposal 55 D1, D3, D8, D9; M2) --------------------------
+
+namespace {
+/// Ask the root that holds `lane` to re-run its routing pass. A lane outside
+/// every root (removed, alive on the undo stack) has no pass to re-run.
+void requestRoutingPass( SObject *lane )
+{
+    SProject *project = lane ? lane->getProjectSafe() : nullptr;
+    if( !project || project->isLoading() ) return;
+    if( SObject *root = splacements::rootHolding( project, lane ) )
+        root->routingInputsChanged();
+}
+}  // namespace
+
+void STrack::setAuxSource( STrack *source, quint64 slotId, int bus )
+{
+    if( bus <= 0 ) { source = nullptr; slotId = 0; bus = 0; }
+    if( auxTrack_.data() == source && auxSlotId_ == slotId && auxBus_ == bus )
+        return;
+    auxTrack_  = source;
+    auxSlotId_ = slotId;
+    auxBus_    = bus;
+    returnState_.clear();   // a new source is announced afresh
+    requestRoutingPass( this );
+}
+
+int STrack::pluginSlotCount() const
+{
+    return cpPluginChain_ ? cpPluginChain_->getSlotCount() : 0;
+}
+
+quint64 STrack::pluginSlotId( int slotIndex, bool ensure )
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot ) return 0;
+    return ensure ? slot->ensureSlotId() : slot->slotId();
+}
+
+int STrack::pluginSlotIndexOf( quint64 slotId ) const
+{
+    if( slotId == 0 || !cpPluginChain_ ) return -1;
+    const int n = cpPluginChain_->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = cpPluginChain_->getSlotAt( i );
+        if( slot && slot->slotId() == slotId ) return i;
+    }
+    return -1;
+}
+
+QString STrack::pluginSlotName( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot ) return QString();
+    return QString::fromStdString( slot->getEffectiveDescriptor().name );
+}
+
+std::uint32_t STrack::pluginSlotRoutedMask( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    return slot ? slot->routedOutBuses() : 0u;
+}
+
+bool STrack::auxBusRoutable( int slotIndex, int bus, QString *why,
+                             int *busChannels ) const
+{
+    auto refuse = [why]( const QString &w ) { if( why ) *why = w; return false; };
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot )
+        return refuse( QStringLiteral( "there is no plugin in slot %1" ).arg( slotIndex ) );
+    if( bus < 1 )
+        return refuse( QStringLiteral( "bus %1 is the MAIN bus, the track's own output; "
+                                       "a return reads an aux bus (1 or above)" ).arg( bus ) );
+    // D9: on DualMono "the plugin's bus k" has one candidate per channel.
+    if( slot->getSlotMode() == audio::twPluginSlotMode::DualMono )
+        return refuse( QStringLiteral( "slot %1 runs DualMono (one plugin instance per "
+                                       "channel), so its aux bus %2 has no single source" )
+                           .arg( slotIndex ).arg( bus ) );
+    if( slot->getSlotState() != audio::twPluginSlotState::Active )
+        return refuse( QStringLiteral( "the plugin in slot %1 is not loaded, so it has no "
+                                       "buses to route" ).arg( slotIndex ) );
+    const int nBuses = slot->auxOutBusCount();
+    if( bus >= nBuses )
+        return refuse( QStringLiteral( "the plugin in slot %1 has no output bus %2 (it "
+                                       "reports %3)" ).arg( slotIndex ).arg( bus ).arg( nBuses ) );
+    const int ch = slot->auxOutBusChannels( bus );
+    if( ch <= 0 )
+        return refuse( QStringLiteral( "output bus %1 of slot %2 reports no channels" )
+                           .arg( bus ).arg( slotIndex ) );
+    if( busChannels ) *busChannels = ch;
+    return true;
+}
+
+bool STrack::wireAsReturnTrack( STrack *source, const QString &reason, bool *changed )
+{
+    if( changed ) *changed = false;
+    if( !cpDspChain_ || !cpGainStage_ || !cpRewire_ ) return false;
+
+    QString why = reason;
+    std::shared_ptr<audio::twPluginInsert> insert;
+    int busChannels = 0;
+    if( why.isEmpty() && !source )
+        why = QStringLiteral( "its source track is gone" );
+    if( why.isEmpty() ) {
+        const int idx = source->pluginSlotIndexOf( auxSlotId_ );
+        if( idx < 0 ) {
+            why = QStringLiteral( "the slot it names on '%1' is gone" )
+                      .arg( source->getSName() );
+        } else if( source->auxBusRoutable( idx, auxBus_, &why, &busChannels ) ) {
+            SPluginSlot *slot = source->cpPluginChain_->getSlotAt( idx );
+            insert = slot ? slot->getInsert() : nullptr;
+            if( !insert ) why = QStringLiteral( "the source slot has no insert" );
+        }
+    }
+
+    // THE TAP IS ALWAYS THE CHAIN'S INPUT, routed or not: a return that cannot
+    // be routed is SILENT (fail closed, D8), never its own empty clip mix. Its
+    // shape is fixed at construction (55 D4: the mapping is decided once), so
+    // a changed width, bus or bus width builds a new one.
+    const idx_t width = (idx_t) ( channels_ > 0 ? channels_ : 1 );
+    const std::uint16_t wantBus = (std::uint16_t) ( auxBus_ > 0 ? auxBus_ : 1 );
+    const std::uint16_t wantBusCh = insert ? (std::uint16_t) busChannels
+                                  : cpAuxTap_ ? cpAuxTap_->busChannels()
+                                              : (std::uint16_t) width;
+    if( !cpAuxTap_ || cpAuxTap_->getOutputChannels() != width
+        || cpAuxTap_->bus() != wantBus || cpAuxTap_->busChannels() != wantBusCh ) {
+        if( cpAuxTap_ ) cpAuxTap_->setInput( 0, nullptr );   // while auxInsert_ lives
+        auto tap = std::make_shared<audio::twPluginAuxTap>(
+            *SAppContext::get().get303aEnvironment(), width, wantBus, wantBusCh );
+        tap->init();
+        cpAuxTap_ = tap;
+        if( changed ) *changed = true;
+    }
+    if( changed && insert != auxInsert_ ) *changed = true;
+
+    // RE-POINTED ON EVERY PASS, which re-stamps (M1: a tap's pages are
+    // stamped against its own epoch, so a mask change stales the insert and
+    // not the tap; re-wiring is what makes the tap re-read). Every hop below
+    // is re-set for the same reason wireAsSendLane re-sets its own.
+    cpAuxTap_->setInput( 0, insert ? insert->linkOutput( 0 ) : nullptr );
+    auxInsert_ = insert;
+    cpDspChain_->setInput( 0, cpAuxTap_->linkOutput( 0 ) );
+    cpDspChain_->rebuildWiring();
+    cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+    // A return keeps its OWN rewire, which is what its summing parent reads
+    // as its root component -- wireAsSendLane's shape, for 47 D1's reason.
+    cpRewire_->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+
+    // ANNOUNCED ONCE per state (47 T6), never per pass: a solo toggle re-runs
+    // the pass and must not repeat the line.
+    const bool routed = (bool) insert;
+    const QString state = routed ? QString() : why;
+    if( state != returnState_ ) {
+        if( !routed )
+            TW_LOGW( "model", "[RETURN] '%s' is SILENT: %s (proposal 55 D8)",
+                     getSName().toUtf8().constData(), why.toUtf8().constData() );
+        else
+            TW_LOGI( "model", "[RETURN] '%s' is routed again",
+                     getSName().toUtf8().constData() );
+        returnState_ = state;
+    }
+    return routed;
+}
+
+void STrack::unwireReturnTrack()
+{
+    if( !cpAuxTap_ ) return;
+    // Back to the constructor's wiring, exactly unwireSendLane's.
+    if( cpDspChain_ ) {
+        cpDspChain_->setInput( 0, cpTrackMix_ ? cpTrackMix_->linkOutput( 0 ) : nullptr );
+        cpDspChain_->rebuildWiring();
+        if( cpGainStage_ ) cpGainStage_->setInput( 0, cpDspChain_->linkOutput( 0 ) );
+        if( cpRewire_ && cpGainStage_ )
+            cpRewire_->setInput( 0, cpGainStage_->linkOutput( 0 ) );
+    }
+    // The tap lets go of the source insert while auxInsert_ still keeps it
+    // alive -- the order 47's unwireSendLane segfault taught.
+    cpAuxTap_->setInput( 0, nullptr );
+    cpAuxTap_.reset();
+    auxInsert_.reset();
+    returnState_.clear();
+}
+
+bool STrack::returnRouted() const
+{
+    if( !cpAuxTap_ || !cpDspChain_ || !auxInsert_ ) return false;
+    if( twProducerOf( cpDspChain_->getInputPlug( 0 ) ).get() != cpAuxTap_.get() )
+        return false;
+    return twProducerOf( cpAuxTap_->getInputPlug( 0 ) ).get() == auxInsert_.get();
+}
+
+QString STrack::describeReturnTap() const
+{
+    return cpAuxTap_ ? QString::fromStdString( cpAuxTap_->describe() ) : QString();
+}
+
+std::uint64_t STrack::returnTapSilentRenders() const
+{
+    return cpAuxTap_ ? cpAuxTap_->silentRenders() : 0;
+}
+
+bool STrack::applyRoutedAuxMasks( const QHash<quint64, std::uint32_t> &masks )
+{
+    if( !cpPluginChain_ ) return false;
+    bool changed = false;
+    const int n = cpPluginChain_->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = cpPluginChain_->getSlotAt( i );
+        if( !slot ) continue;
+        const quint64 id = slot->slotId();
+        if( slot->setRoutedOutBuses( id ? masks.value( id, 0u ) : 0u ) ) changed = true;
+    }
+    return changed;
+}
+
 void STrack::bumpRenderChainEpoch()
 {
     // Every model change that reaches this track passes through here on the
@@ -860,6 +1091,10 @@ void STrack::bumpRenderChainEpoch()
         cpGainStage_->bumpContentEpoch();
     if( cpRewire_ )
         cpRewire_->bumpContentEpoch();
+    // A return's input (proposal 55 D3): its own page cache sits in front of
+    // the chain and is stamped against its own epoch.
+    if( cpAuxTap_ )
+        cpAuxTap_->bumpContentEpoch();
 }
 
 // Range-scoped variant (proposal 18 Phase 5): every component in the chain
@@ -876,6 +1111,8 @@ void STrack::bumpRenderChainEpochRange( offset_t start, offset_t end )
         cpGainStage_->invalidatePagesInRange(start, end);
     if( cpRewire_ )
         cpRewire_->invalidatePagesInRange(start, end);
+    if( cpAuxTap_ )
+        cpAuxTap_->invalidatePagesInRange(start, end);
 }
 
 // proposal 41 D11/M7: TOPMOST means Z-ORDER topmost -- latest start time,
@@ -1347,6 +1584,9 @@ void STrack::setChannels( int n )
         // change safe — it is what makes it converge instead of playing silence
         // until some other edit invalidates us.
         invalidateRenderPath();
+        // A return's tap was built for the old width (55 D4: decided once);
+        // the pass builds a new one.
+        if( isReturnTrack() ) requestRoutingPass( this );
     }
 
     emit nChannelsChanged( n );
@@ -1720,6 +1960,35 @@ SLink *STrack::instantiateFromDomElement(
     }
     track->readPostChildrenAttributes( element );
 
+    // THE AUX SOURCE (proposal 55 D8), DEFERRED for pluginChainId's reason: the
+    // source track's element may not have been instantiated yet. The slot is
+    // an id, not an object, so it needs no lookup -- the pass finds it in the
+    // source's chain. A track id that does not resolve FAILS CLOSED: the
+    // track stays a return (it keeps the bus) with no source, and the pass
+    // announces it silent. It is never re-attached by a later object.
+    const QDomElement auxEl = element.firstChildElement( "auxSource" );
+    if( !auxEl.isNull() ) {
+        const int bus = auxEl.attribute( "bus", "0" ).toInt();
+        if( bus > 0 ) {
+            track->auxBus_    = bus;
+            track->auxSlotId_ = auxEl.attribute( "slot", "0" ).toULongLong();
+            const QString srcId = auxEl.attribute( "track" );
+            SProjectLoader *loader = &projectLoader;
+            projectLoader.deferResolve( [loader, track, srcId]() {
+                SLink *lk = loader->getObjectDictionary().value( srcId );
+                STrack *src = lk ? dynamic_cast<STrack *>( &lk->getSObject() ) : nullptr;
+                if( !src ) {
+                    TW_LOGW( "model", "[RETURN] '%s': its aux source track %s is not "
+                             "in the project; the return stays silent",
+                             track->getSName().toUtf8().constData(),
+                             srcId.toUtf8().constData() );
+                    return;
+                }
+                track->auxTrack_ = src;
+            } );
+        }
+    }
+
     // Adopt our serialized plugin chain — DEFERRED (proposal 08 M4).
     //
     // It cannot happen here, and it cannot happen in readPostChildrenAttributes
@@ -1788,6 +2057,9 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
         // The project end moves with the instrument's tail (design 3.1).
         lastDurationValid_ = false;
         invalidateRenderPath();
+        // Proposal 55 T5: an undo of remove-plugin brings a slot back under
+        // the id a return names; the pass re-finds it.
+        if( auxReferenced_ ) requestRoutingPass( this );
     }
 }
 
@@ -1812,6 +2084,9 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
     syncInstrumentSlot();
     lastDurationValid_ = false;
     invalidateRenderPath();
+    // Proposal 55: a return of the departing slot must go silent NOW, not at
+    // the next solo toggle; its tap keeps the insert alive until then.
+    if( auxReferenced_ ) requestRoutingPass( this );
 }
 
 void STrack::onPluginSlotAudioInvalidated()
@@ -1836,6 +2111,10 @@ void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
     }
     syncInstrumentSlot();
     invalidateRenderPath();
+    // Proposal 55: a return names its slot by id, so a reorder moves nothing
+    // it reads -- but the pass is cheap and keeps "all routing wiring happens
+    // in the pass" literally true (inv. 6).
+    if( auxReferenced_ ) requestRoutingPass( this );
 }
 
 // Mute belongs to the mixer CHANNEL, not to the track: it is enforced by

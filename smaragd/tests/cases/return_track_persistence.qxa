@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M2, AC2.5: A RETURN TRACK KEEPS ITS ROUTE ACROSS EVERYTHING THAT
+  MOVES OR RE-CREATES ITS SOURCE SLOT, FAILS CLOSED WHEN ITS SOURCE GOES, AND
+  ROUND-TRIPS THROUGH THE FILE BY IDENTITY (D8).
+
+  Fixture as return_track_split_cmp: "Kit" plays test_sawtooth.wav through
+  tw.test.clap.split at MainLevel 0, so every file is the return alone and
+  `rtp_ref.wav` is the route working.
+
+    A  T8, the negative control: a project with a plugin and NO return writes
+       neither an <auxSource> nor a slotId=, so every project saved before M2
+       re-serializes as it did.
+    B  remove-plugin + undo (T5): remove-plugin's inverse inserts a NEW slot
+       object, so the route survives only because the inverse carries the
+       slot's stable id back. reorder-plugin moves the slot's INDEX and
+       nothing the return names.
+    C  deleting the SOURCE TRACK (T6): the return goes silent and says so;
+       undo brings the same track back and the route with it.
+    D  save + reload (D8): the file carries <auxSource> and the slot's id,
+       and the reloaded project renders byte-identically. LAST, because
+       load-project replaces the project.
+-->
+<SActionScript version="1" name="return_track_persistence">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Kit"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0"/>
+
+    <!-- ===================== A: T8, NO RETURN ========================== -->
+    <save-project path="../../build/rtp_no_return.qxp"/>
+    <assert-file-contains path="../../build/rtp_no_return.qxp" text="auxSource" absent="true"/>
+    <assert-file-contains path="../../build/rtp_no_return.qxp" text="slotId=" absent="true"/>
+
+    <add-return-track trackPath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" source="0" slot="0" bus="1" routed="1" mask="2"/>
+    <render filename="rtp_ref.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtp_ref.wav" startFrame="24000" frameCount="96000"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+
+    <!-- ================ B: REMOVE + UNDO, REORDER (T5) ================== -->
+    <remove-plugin trackPath="0" slotIndex="0"/>
+    <assert-log contains="[RETURN] 'Kit Aux 1' is SILENT: the slot it names on 'Kit' is gone"/>
+    <assert-return-track trackPath="1" isReturn="1" routed="0"/>
+    <undo count="1"/>
+    <assert-log contains="[RETURN] 'Kit Aux 1' is routed again"/>
+    <assert-return-track trackPath="1" source="0" slot="0" bus="1" routed="1" mask="2"/>
+    <render filename="rtp_undo.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="rtp_undo.wav" expected="rtp_ref.wav"/>
+
+    <!-- A unity gain in front, then the split moved behind it: slot 0 -> 1.
+         Gain 1.0 is an exact x 1.0f, so the aux still copies the clip. -->
+    <insert-plugin trackPath="0" slotIndex="1"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <reorder-plugin trackPath="0" fromIndex="0" toIndex="1"/>
+    <assert-return-track trackPath="1" source="0" slot="1" bus="1" routed="1" mask="2"/>
+    <render filename="rtp_reorder.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="rtp_reorder.wav" expected="rtp_ref.wav"/>
+
+    <!-- ================ C: THE SOURCE TRACK GOES (T6) =================== -->
+    <remove-track trackPath="0"/>
+    <assert-log contains="[RETURN] 'Kit Aux 1' is SILENT: its source 'Kit' is not in this arrangement"/>
+    <!-- The return is now track 0. -->
+    <assert-return-track trackPath="0" isReturn="1" routed="0"/>
+    <render filename="rtp_orphan.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtp_orphan.wav" startFrame="0" frameCount="192000"
+                         channel="0" minRms="0.0" maxRms="0.0"/>
+    <undo count="1"/>
+    <assert-log contains="[RETURN] 'Kit Aux 1' is routed again"/>
+    <assert-return-track trackPath="1" source="0" slot="1" bus="1" routed="1"/>
+    <render filename="rtp_restored.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="rtp_restored.wav" expected="rtp_ref.wav"/>
+
+    <!-- ===================== D: SAVE + RELOAD (D8) ====================== -->
+    <save-project path="../../build/rtp_return.qxp"/>
+    <assert-file-contains path="../../build/rtp_return.qxp" text="&lt;auxSource track='"/>
+    <assert-file-contains path="../../build/rtp_return.qxp" text="slotId='"/>
+    <load-project path="../../build/rtp_return.qxp"/>
+    <!-- No return is announced silent while the load is half done: the pass
+         skips returns until the post-load pass routes them, with every chain
+         adopted (a pass on each insertTrack would see no source yet). -->
+    <assert-log contains="[RETURN]" minCount="0" maxCount="0"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="1" bus="1"
+                         routed="1" mask="2"/>
+    <render filename="rtp_reloaded.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="rtp_reloaded.wav" expected="rtp_ref.wav"/>
+  </actions>
+</SActionScript>

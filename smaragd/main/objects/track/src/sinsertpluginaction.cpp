@@ -19,7 +19,8 @@ SInsertPluginAction::SInsertPluginAction(
     const QString &trackPath,
     int slotIndex,
     const audio::twPluginDescriptor &descriptor,
-    const QString &stateBase64
+    const QString &stateBase64,
+    quint64 slotId
 )
     : trackPath_(trackPath),
       slotIndex_(slotIndex),
@@ -31,7 +32,8 @@ SInsertPluginAction::SInsertPluginAction(
       nIn_(descriptor.io.audioInputs),
       nOut_(descriptor.io.audioOutputs),
       isInstrument_(descriptor.isInstrument ? 1 : -1),
-      state_(stateBase64)
+      state_(stateBase64),
+      slotId_(slotId)
 {
 }
 
@@ -133,6 +135,9 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     // Create the slot
     SPluginSlot *slot = new SPluginSlot(project, desc);
     slot->setSName(pluginName_);
+    // Proposal 55 T5: BEFORE the link is parented, because parenting is what
+    // fires slotInserted and the routing pass that re-finds this slot by id.
+    if (slotId_ != 0) slot->setSlotId(slotId_);
 
     // The state chunk goes in BEFORE the link is parented. setParent() is what
     // fires slotInserted -> STrack::onPluginSlotInserted -> setChannelCount(),
@@ -209,6 +214,9 @@ void SInsertPluginAction::writeXml(QDomElement &elem) const
     if (!state_.isEmpty()) {
         elem.setAttribute("state", state_);
     }
+    if (slotId_ != 0) {
+        elem.setAttribute("slotId", QString::number(slotId_));
+    }
 }
 
 bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
@@ -229,6 +237,7 @@ bool SInsertPluginAction::readXml(const QDomElement &elem, int /*version*/)
         isInstrument_ = -1;
     }
     state_ = elem.attribute("state");
+    slotId_ = elem.attribute("slotId", "0").toULongLong();
     return true;
 }
 

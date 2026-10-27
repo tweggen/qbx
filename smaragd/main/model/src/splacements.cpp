@@ -129,6 +129,16 @@ SObject *placementLaneAt( SObject *root, const QList<int> &path,
 {
     SObject *lane = laneAt( root, path );
     if( !lane ) return nullptr;
+    if( !lane->acceptsClips() && lane->isReturnLane() ) {
+        // Proposal 55 D1: a return's input is a plugin's aux bus, and a clip
+        // on it would be summed into nothing (its twTrackMix is disconnected,
+        // D3). Worded on its own so a case can tell this refusal from D6's.
+        TW_LOGW( "model",
+                 "%s: refused - '%s' is a RETURN track: its input is a plugin "
+                 "aux bus and it carries no clips (proposal 55 D1)",
+                 verb, lane->getSName().toUtf8().constData() );
+        return nullptr;
+    }
     if( !lane->acceptsClips() ) {
         TW_LOGW( "model",
                  "%s: refused - the %s lane '%s' does not carry clips "

@@ -225,6 +225,30 @@ int SStdMixer::seekTo( offset_t off )
     return 0;
 }
 
+namespace {
+
+/// The routing graph's nodes are lane POINTERS, spelled opaquely so the graph
+/// type stays pure (app/model/sroutinggraph.h). These two are the only casts.
+sroute::Node nodeOf( const SObject *o ) { return static_cast<sroute::Node>( o ); }
+SObject *objOf( sroute::Node n )
+{
+    return const_cast<SObject *>( static_cast<const SObject *>( n ) );
+}
+
+/// Containment edges under `lane`, depth-first in child order.
+void appendContainment( SObject *lane, QList<sroute::Edge> &out )
+{
+    for( SLink *lk : lane->childLinks() ) {
+        if( !lk ) continue;
+        SObject &child = lk->getSObject();
+        if( !child.isLane() ) continue;
+        out.append( { nodeOf( &child ), nodeOf( lane ), sroute::EdgeKind::Containment } );
+        appendContainment( &child, out );
+    }
+}
+
+}  // namespace
+
 /**
  * Remove all inputs from each of the mixers.
  * Add all track outputs again to each of the bus mixers.
@@ -325,6 +349,157 @@ void SStdMixer::reconnectTracksToMixer()
 
     // ...and the send BUSES, in the same pass and from nowhere else (47 D4).
     rewireSendBuses();
+    // ...and the RETURN TRACKS (proposal 55 D3), likewise.
+    rewireReturns();
+}
+
+void SStdMixer::rewireReturns()
+{
+    const QList<STrack *> tracks = allTracks_();
+    bool anyReturn = false;
+    for( STrack *t : tracks )
+        if( t && t->isReturnTrack() && !t->isSystemLane() ) { anyReturn = true; break; }
+    // T8: no return now and none last pass -- nothing to wire, clear or mask.
+    if( !anyReturn && !auxRoutedLastPass_ ) return;
+    // NOT WHILE LOADING, except from the post-load pass. Tracks are inserted
+    // (and this pass runs) before the deferred resolvers have given a return
+    // its source or a source its chain, so a pass now would announce a return
+    // SILENT that is not. routeReturnsAfterLoad() routes them all once.
+    if( SProject *p = getProjectSafe() )
+        if( p->isLoading() && !routingAfterLoad_ ) return;
+
+    // The tree, for "is the source in THIS arrangement": a source removed
+    // (alive on the undo stack) or living under another root fails closed.
+    QSet<const STrack *> inTree;
+    for( STrack *t : tracks ) if( t ) inTree.insert( t );
+
+    // THE CYCLE BREAK over the union of edge kinds (D7), the same accepted
+    // graph rewireSendBuses() wires and invalidateRoutingDependents() walks.
+    QList<sroute::Edge> dropped;
+    const sroute::Graph accepted = acceptedRoutingGraph_( &dropped );
+    QSet<QPair<sroute::Node, sroute::Node> > droppedAux;
+    for( const sroute::Edge &e : dropped ) {
+        if( e.kind != sroute::EdgeKind::Aux ) continue;
+        droppedAux.insert( qMakePair( e.from, e.to ) );
+        const SObject *src = objOf( e.from );
+        const SObject *ret = objOf( e.to );
+        TW_LOGW( "model",
+                 "[ROUTE] cycle: the aux edge from '%s' into the return '%s' is "
+                 "DROPPED -- '%s' already reaches '%s'. The routing graph must "
+                 "be acyclic; the return verbs refuse one, a project file can "
+                 "still carry one.",
+                 src->getSName().toUtf8().constData(),
+                 ret->getSName().toUtf8().constData(),
+                 ret->getSName().toUtf8().constData(),
+                 src->getSName().toUtf8().constData() );
+    }
+    (void) accepted;
+
+    // One return per (source, slot, bus) -- proposal 55 D9 / Q4. The FIRST in
+    // tree order wins; a later one is silent and says which one reads it.
+    struct BusKey { const STrack *src; quint64 slot; int bus; };
+    QList<QPair<BusKey, STrack *> > claimed;
+
+    QHash<STrack *, QHash<quint64, std::uint32_t> > masks;
+    QSet<STrack *> referenced;
+    QList<QPointer<STrack> > stillLive;
+
+    for( STrack *ret : tracks ) {
+        if( !ret ) continue;
+        if( !ret->isReturnTrack() || ret->isSystemLane() ) {
+            // A track whose aux source was cleared: back to its own clip mix.
+            if( ret->hasReturnTap() ) ret->unwireReturnTrack();
+            continue;
+        }
+        STrack *src = ret->auxSourceTrack();
+        QString why;
+        if( !src ) {
+            why = QStringLiteral( "its source track is gone" );
+        } else if( src->systemRole() == SSystemRole::Master ) {
+            why = QStringLiteral( "its source is the MASTER lane, whose output is the "
+                                  "sum that already contains this return" );
+        } else if( !inTree.contains( src ) ) {
+            why = QStringLiteral( "its source '%1' is not in this arrangement" )
+                      .arg( src->getSName() );
+        } else if( droppedAux.contains( qMakePair(
+                       nodeOf( static_cast<SObject *>( src ) ),
+                       nodeOf( static_cast<SObject *>( ret ) ) ) ) ) {
+            why = QStringLiteral( "its aux edge from '%1' closes a routing cycle" )
+                      .arg( src->getSName() );
+        } else {
+            for( const auto &c : claimed ) {
+                if( c.first.src == src && c.first.slot == ret->auxSourceSlotId()
+                    && c.first.bus == ret->auxSourceBus() ) {
+                    why = QStringLiteral( "'%1' already reads that bus -- one return "
+                                          "per bus (proposal 55 D9)" )
+                              .arg( c.second->getSName() );
+                    break;
+                }
+            }
+        }
+        if( src ) referenced.insert( src );
+
+        bool moved = false;
+        const bool routed = ret->wireAsReturnTrack( why.isEmpty() ? src : nullptr, why,
+                                                    &moved );
+        // A changed route re-stamped the return up to its rewire only; the
+        // master chain and rewire behind it still hold the old route's pages
+        // (47 M2: invalidateRenderPath is what makes a routing edit audible).
+        if( moved ) ret->invalidateRenderPath();
+        if( !routed ) continue;
+        claimed.append( { { src, ret->auxSourceSlotId(), ret->auxSourceBus() }, ret } );
+        masks[src][ret->auxSourceSlotId()] |= ( 1u << (unsigned) ret->auxSourceBus() );
+
+        // Q1 (a), DECIDED AT THE PROPOSAL'S DEFAULT: an armed source's slot is
+        // live-owned and answers every frozen render with silence
+        // (twpluginslotproc.cc), so its returns go quiet for the arm -- 47 D9's
+        // "a live lane does not feed a send", accepted and ANNOUNCED once per
+        // arm rather than silently.
+        if( src->isLiveOwnedLane() ) {
+            bool told = false;
+            for( const QPointer<STrack> &p : liveAnnounced_ ) if( p == ret ) told = true;
+            if( !told )
+                TW_LOGW( "model", "[RETURN] '%s' is silent while its source '%s' is "
+                         "armed: a live-owned slot renders only for the live pump "
+                         "(proposal 55 Q1 (a), as 47 D9)",
+                         ret->getSName().toUtf8().constData(),
+                         src->getSName().toUtf8().constData() );
+            stillLive.append( ret );
+        }
+    }
+    liveAnnounced_ = stillLive;
+
+    // THE ROUTED MASKS (D7): every slot of every track learns what the returns
+    // add up to, and a slot no return names any more is cleared. A changed
+    // mask re-prepares the plugin and stales its insert; the path above the
+    // insert is the track's, and is staled here.
+    for( STrack *t : tracks ) {
+        if( !t ) continue;
+        t->setAuxReferenced( referenced.contains( t ) );
+        if( t->applyRoutedAuxMasks( masks.value( t ) ) ) t->invalidateRenderPath();
+    }
+
+    auxRoutedLastPass_ = anyReturn;
+}
+
+void SStdMixer::routingChanged()
+{
+    reconnectTracksToMixer();
+    // The full walk, as sendRoutingChanged(): the rewire above re-stamped
+    // every plug it touched, and this carries the change past the master.
+    invalidateRenderPath();
+}
+
+void SStdMixer::routeReturnsAfterLoad()
+{
+    for( STrack *t : allTracks_() ) {
+        if( t && t->isReturnTrack() ) {
+            routingAfterLoad_ = true;
+            routingChanged();
+            routingAfterLoad_ = false;
+            return;
+        }
+    }
 }
 
 /**
@@ -353,29 +528,6 @@ double SStdMixer::sendBusInputLevelDb( int k, int i ) const
     return sendBuses_[k]->inputLevel( (idx_t) i );
 }
 
-namespace {
-
-/// The routing graph's nodes are lane POINTERS, spelled opaquely so the graph
-/// type stays pure (app/model/sroutinggraph.h). These two are the only casts.
-sroute::Node nodeOf( const SObject *o ) { return static_cast<sroute::Node>( o ); }
-SObject *objOf( sroute::Node n )
-{
-    return const_cast<SObject *>( static_cast<const SObject *>( n ) );
-}
-
-/// Containment edges under `lane`, depth-first in child order.
-void appendContainment( SObject *lane, QList<sroute::Edge> &out )
-{
-    for( SLink *lk : lane->childLinks() ) {
-        if( !lk ) continue;
-        SObject &child = lk->getSObject();
-        if( !child.isLane() ) continue;
-        out.append( { nodeOf( &child ), nodeOf( lane ), sroute::EdgeKind::Containment } );
-        appendContainment( &child, out );
-    }
-}
-
-}  // namespace
 
 QList<sroute::Edge> SStdMixer::routingCandidates_( bool enabledOnly ) const
 {
@@ -415,7 +567,42 @@ QList<sroute::Edge> SStdMixer::routingCandidates_( bool enabledOnly ) const
         }
     }
 
-    // 3. AUX and KEY edges follow here (proposal 55 M2, M4).
+    // 3. AUX (proposal 55 M2): source track -> return track, for every return
+    //    in the tree in depth-first child order (= file order), after every
+    //    send edge, so a cycle that mixes kinds drops the AUX edge and keeps
+    //    the sends 47 M3 has always kept. The return's position is free (a
+    //    return may sit in any folder), so the walk is the whole tree, not the
+    //    top level the send sources are collected from. A return with no
+    //    resolved source has no edge. KEY edges follow here in M4.
+    for( STrack *t : allTracks_() ) {
+        if( !t || !t->isReturnTrack() || t->isSystemLane() ) continue;
+        STrack *src = t->auxSourceTrack();
+        if( !src ) continue;
+        out.append( { nodeOf( static_cast<SObject *>( src ) ),
+                      nodeOf( static_cast<SObject *>( t ) ), sroute::EdgeKind::Aux } );
+    }
+    return out;
+}
+
+QList<STrack *> SStdMixer::allTracks_() const
+{
+    QList<STrack *> out;
+    // Depth-first, a folder before its children, in child order.
+    QList<SObject *> stack;
+    for( int i = childLinks().size() - 1; i >= 0; --i )
+        if( SLink *lk = childLinks().at( i ) ) stack.append( &lk->getSObject() );
+    while( !stack.isEmpty() ) {
+        SObject *o = stack.takeLast();
+        STrack *t = dynamic_cast<STrack *>( o );
+        if( !t ) continue;
+        out.append( t );
+        const SChildLinks kids = t->childLinks();
+        for( int i = kids.size() - 1; i >= 0; --i )
+            if( kids.at( i ) && kids.at( i )->getSObject().isLane() )
+                stack.append( &kids.at( i )->getSObject() );
+    }
+    for( STrack *lane : sendLanes_ ) if( lane ) out.append( lane );
+    if( masterLane_ ) out.append( masterLane_ );
     return out;
 }
 
@@ -437,9 +624,10 @@ sroute::Graph SStdMixer::acceptedRoutingGraph_( QList<sroute::Edge> *dropped ) c
 void SStdMixer::invalidateRoutingDependents(
     const QList<QPair<SObject *, QList<SDirtyRange> > > &bumped, bool whole )
 {
-    // T8: with no send lane there is no routing edge, nothing to build and
-    // nothing to bump -- the commonest project pays one emptiness test.
-    if( sendLanes_.isEmpty() || bumped.isEmpty() ) return;
+    // T8: with no send lane and no return there is no routing edge, nothing
+    // to build and nothing to bump -- the commonest project pays two tests.
+    if( bumped.isEmpty() ) return;
+    if( sendLanes_.isEmpty() && !auxRoutedLastPass_ ) return;
 
     // THE WIRED GRAPH, not the model's: what is followed is what the pass
     // actually connected, so a dropped cycle edge is not followed either. It
@@ -477,6 +665,32 @@ void SStdMixer::invalidateRoutingDependents(
                     fresh.append( r );
                 }
                 if( fresh.isEmpty() ) continue;
+            }
+
+            // A RETURN TRACK (proposal 55 D7, M2), reached over an AUX edge:
+            // a lane in THIS root's tree, so the containment walk from here
+            // reaches it -- bumping its tap, chain, gain stage and rewire AND
+            // every container above it, which carry its audio too and which
+            // the walk that found the edit need not have touched (a return may
+            // sit in another folder than its source). Everything that walk
+            // bumped is passed on, so a send FROM the return, or from a folder
+            // holding it, is followed as well. Positions are shared, so the
+            // range carries over unmapped (the send lane's argument below).
+            if( e.kind == sroute::EdgeKind::Aux ) {
+                if( whole ) {
+                    QList<SObject *> sub;
+                    invalidateRenderChainsContaining( dep, &sub );
+                    for( SObject *o : sub ) work.append( { o, QList<SDirtyRange>() } );
+                } else {
+                    for( const SDirtyRange &r : fresh ) {
+                        QList<SDirtyRange> rs;
+                        QList<QPair<SObject *, QList<SDirtyRange> > > sub;
+                        invalidateRenderChainsContainingRange( dep, r.start, r.end,
+                                                               rs, &sub );
+                        work.append( sub );
+                    }
+                }
+                continue;
             }
 
             // A SEND LANE: its bus is ours, its chain, gain stage and rewire
@@ -1512,6 +1726,25 @@ SLink *SStdMixer::instantiateFromDomElement(
 // Self-registration with the project loader (proposal 14, Phase 5): the
 // persistence module names no concrete types; each slice registers its own
 // element name. Relies on the app being an OBJECT library (no TU elision).
+// Proposal 55 M2: route every loaded return ONCE, after the deferred resolvers
+// have adopted every plugin chain -- the order in which a return's aux source
+// and its source's chain are resolved is the loader's, not ours, so a pass run
+// from either resolver could find the other half missing (and announce a
+// return silent that is not). Registered here for the layering reason the
+// take-column pass is registered from objects/cut.
+static const bool s_reg_return_postload = (
+    SProjectLoader::registerPostLoadPass( []( SProject &p ) {
+        QList<SObject *> roots;
+        // check_root_resolution: master -- enumerates EVERY root, the master and then every arrangement
+        if( SObject *m = p.masterRoot() ) roots.append( m );
+        for( SObject *a : p.arrangements() )
+            if( a && !roots.contains( a ) ) roots.append( a );
+        for( SObject *r : roots )
+            if( SStdMixer *mixer = dynamic_cast<SStdMixer *>( r ) )
+                mixer->routeReturnsAfterLoad();
+    } ),
+    true );
+
 static const bool s_registered_sstdmixer =
     ( SProjectLoader::registerSObjectClass( "SStdMixer",
           SStdMixer::instantiateFromDomElement,

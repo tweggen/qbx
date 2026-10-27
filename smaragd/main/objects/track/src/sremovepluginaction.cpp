@@ -91,6 +91,9 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
         }
     }
 
+    // Proposal 55 T5: the id a return track names this slot by.
+    slotId_ = slot->slotId();
+
     // Remove the slot (SLink will be deleted, which deletes the SPluginSlot)
     SLink *link = chain->childAt(slotIndex_);
     if (link) {
@@ -107,7 +110,7 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     desc_inv.io = {nIn_, nOut_};
 
     SAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_, desc_inv,
-                                               state_);
+                                               state_, slotId_);
 
     return {true, inverse};
 }
@@ -128,6 +131,9 @@ void SRemovePluginAction::writeXml(QDomElement &elem) const
     if (!state_.isEmpty()) {
         elem.setAttribute("state", state_);
     }
+    if (slotId_ != 0) {
+        elem.setAttribute("slotId", QString::number(slotId_));
+    }
 }
 
 bool SRemovePluginAction::readXml(const QDomElement &elem, int /*version*/)
@@ -142,6 +148,7 @@ bool SRemovePluginAction::readXml(const QDomElement &elem, int /*version*/)
     nIn_ = elem.attribute("nIn", "0").toUInt();
     nOut_ = elem.attribute("nOut", "0").toUInt();
     state_ = elem.attribute("state");
+    slotId_ = elem.attribute("slotId", "0").toULongLong();
     return true;
 }
 

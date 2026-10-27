@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M2: A RETURN TRACK FOLLOWS ITS SOURCE, IGNORES ITS SOURCE'S
+  MUTE, SOLOS LIKE A USER TRACK AND SURVIVES THE PASS.
+
+  The source "Kit" plays test_autosaw.wav (4 s of a constant-amplitude
+  sawtooth, RMS A in [0.2240, 0.2379]) through tw.test.clap.split, whose aux
+  bus 1 is a copy of its input and whose main bus is input x MainLevel. Its
+  return "Kit Aux 1" reads the aux.
+
+    A  AC2.3 (T3): a SOURCE edit after the first render reaches the return.
+       MainLevel 0, so the file is the return alone; the clip moves from 0 s
+       to 2 s. A stale return replays the pre-edit sawtooth over [0 s, 2 s).
+       The return is not on its source's containment path: only the D7 walk
+       over the AUX edge (SStdMixer::invalidateRoutingDependents) carries the
+       edit to it.
+    B  AC2.4 (D6 + user-track solo). MainLevel 1: main and aux both carry
+       the sawtooth, so unmuted the file is 2A. Muting Kit leaves the return
+       at A, byte-identical to the MainLevel-0 render (the return alone);
+       soloing the return instead silences Kit's main and keeps the return,
+       byte-identical again. Then the solo rule LITERALLY (Q3 at its
+       default): soloing the SOURCE darkens its return like any other track.
+    C  AC2.7 (T1): a solo toggle somewhere else entirely re-runs the mixer
+       pass; the return is still wired, read from the LIVE plugs.
+-->
+<SActionScript version="1" name="return_track_routing">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Kit"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0"/>
+    <add-return-track trackPath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" source="0" slot="0" bus="1" routed="1"/>
+
+    <!-- ===================== A: THE SOURCE EDIT (T3) ==================== -->
+    <render filename="rtr_pre.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="rtr_pre.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.2240" maxRms="0.2379"/>
+    <assert-audio-energy filename="rtr_pre.wav" startFrame="216000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0005"/>
+
+    <move-clip clip="0,0" destTrack="0" startTime="96000"/>
+    <render filename="rtr_post.wav" format="wav" quality="10" durationSec="6.0"/>
+    <!-- [0 s, 2 s) is empty now; a stale return still plays the clip here. -->
+    <assert-audio-energy filename="rtr_post.wav" startFrame="0" frameCount="96000"
+                         channel="0" minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="rtr_post.wav" startFrame="0" frameCount="96000"
+                         channel="1" minRms="0.0" maxRms="0.0005"/>
+    <!-- [4.5 s, 5.5 s): the moved clip's tail. -->
+    <assert-audio-energy filename="rtr_post.wav" startFrame="216000" frameCount="48000"
+                         channel="0" minRms="0.2240" maxRms="0.2379"/>
+    <assert-file-identical actual="rtr_post.wav" expected="rtr_pre.wav"
+                           startFrame="0" frameCount="96000" expectReject="true"/>
+
+    <!-- Back to 0 s for the rest of the case. -->
+    <move-clip clip="0,0" destTrack="0" startTime="0"/>
+    <render filename="rtr_alone.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtr_alone.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.2240" maxRms="0.2379"/>
+
+    <!-- ================= B: MUTE AND SOLO (D6, Q3) ====================== -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="1"/>
+    <render filename="rtr_both.wav" format="wav" quality="10" durationSec="4.0"/>
+    <!-- main + aux = 2A: the main path is audible before the mute. -->
+    <assert-audio-energy filename="rtr_both.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.4480" maxRms="0.4758"/>
+
+    <!-- Muting the source leaves its return alone (D6). -->
+    <set-track-mute trackPath="0" muted="1"/>
+    <render filename="rtr_muted.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtr_muted.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.2240" maxRms="0.2379"/>
+    <assert-file-identical actual="rtr_muted.wav" expected="rtr_alone.wav"/>
+    <set-track-mute trackPath="0" muted="0"/>
+
+    <!-- Soloing the RETURN: Kit's main goes, the return stays. -->
+    <set-track-solo trackPath="1" solo="1"/>
+    <render filename="rtr_solo_ret.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="rtr_solo_ret.wav" expected="rtr_alone.wav"/>
+    <set-track-solo trackPath="1" solo="0"/>
+
+    <!-- Q3 at its default, LITERAL: soloing the SOURCE darkens its return
+         like any other track. MainLevel 0, so the file is silent. -->
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0"/>
+    <set-track-solo trackPath="0" solo="1"/>
+    <render filename="rtr_solo_src.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="rtr_solo_src.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.0" maxRms="0.0005"/>
+    <set-track-solo trackPath="0" solo="0"/>
+
+    <!-- ================ C: A SOLO ELSEWHERE (T1) ======================== -->
+    <add-track index="-1"/>
+    <set-track-solo trackPath="2" solo="1"/>
+    <assert-return-track trackPath="1" routed="1" mask="2"/>
+    <set-track-solo trackPath="2" solo="0"/>
+    <assert-return-track trackPath="1" routed="1" mask="2"/>
+    <render filename="rtr_after_solo.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="rtr_after_solo.wav" expected="rtr_alone.wav"/>
+  </actions>
+</SActionScript>
