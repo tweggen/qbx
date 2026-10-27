@@ -31,6 +31,11 @@ hangs off the graph without joining the audio path. `tw/events` (→ core ONLY,
 proposal 37) is the MIDI/event model leaf: events are model data, not pages, so
 it has no place in the dataflow DAG at all — and it must stay core-only because
 `tw/plugins` (which will consume its event clip set) may not include `tw/mix`.
+`tw/sampler` (→ core+graph+events+plugins, proposal 56) sits ABOVE
+`tw/plugins` and nothing in the engine depends on it: it is the one engine
+module that builds code from another repository (tweggen/nassau-digital,
+linked PRIVATE), and the registry learns of it by an explicit call from the
+app, never by naming it.
 
 | Module | One-liner | Contract |
 |---|---|---|
@@ -52,6 +57,7 @@ it has no place in the dataflow DAG at all — and it must stay core-only becaus
 | tw/metering | level meters: page probe + ballistics | tw303a/metering/CONTRACT.md |
 | tw/events | events, tempo map, SMF, curves, clip set | tw303a/events/CONTRACT.md |
 | tw/body | anthropometrics and joint mechanics (proposal 44); depends on NOTHING, not even tw/core | tw303a/body/CONTRACT.md |
+| tw/sampler | NassauDigital as a native `tw` instrument (proposal 56): the plugin, `twSamplerHost`, the snapshots; the nassau-digital core is linked PRIVATE and found by `smaragd/cmake/NassauDigital.cmake` | tw303a/sampler/CONTRACT.md |
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 

@@ -200,6 +200,7 @@ keeps `cmake/bootstrap/NassauDSP.cmake` and nassau-plugin-sdk keeps
    passes, so a release builds exactly the pinned core;
 2. a sibling checkout `../nassau-digital` beside the qbx checkout (the
    workspace layout, and what an IDE opened on the workspace sees);
+   *(Q0: "beside the checkout" needed a variable — §11.1.)*
 3. a FetchContent of `NASSAU_DIGITAL_GIT_REF`, a **commit or tag, never a
    branch**, pinned in `smaragd/tw303a/CMakeLists.txt`, so a bare clone of qbx
    and qbx's own CI still build. The repo is public; no token.
@@ -290,6 +291,7 @@ tw/sampler   deps: core, graph, events, plugins, sources   (+ the core, PRIVATE)
                               std::shared_ptr<const twSamplerSample> ) = 0;
       virtual void setRoutedOutputs( std::uint32_t mask ) = 0;   // bit k = aux k+1
       virtual void collectRetired() = 0;   // drop retired snapshots; NOT the audio thread
+      // (Q0: returns int, and a fifth, stats(), was added — §11.3.)
   protected:
       ~twSamplerHost() = default;
   };
@@ -325,7 +327,9 @@ are never scanned.
 
 **The state blob (A3).** `saveState()` writes an 8-byte header (`'TWND'`, u16
 version, u16 reserved, as the CLAP frame does, inv. 3) and the program-level
-parameters (§4.5); never the program, never PCM. `loadState()` refuses a newer
+parameters (§4.5); never the program, never PCM. *(Q0: no program-level
+parameter exists until Q-2 is answered, so the blob is the header alone —
+§11.5.)* `loadState()` refuses a newer
 version (inv. 3). The program comes from the model through `setProgram`.
 
 **Buses and width.** The instrument always renders stereo (A17). On a
@@ -339,7 +343,9 @@ row). DESIGN §9.3 says qbx "spreads them on a wider one"; it does not (Q-7).
 each chunk in `twProcessContext::position` (set with `twCtxPosition` on every
 freeze, `twpluginslotproc.cc:947-953`). The "same page" of DESIGN §2.2 is the
 cell `floor(position / twOutputPage::FRAME_CAPACITY)`; `tw/sampler` passes the
-cell size to the core at prepare, so the core never names a qbx type. Because a
+cell size to the core at prepare, so the core never names a qbx type. *(Wrong
+against the core as built — it takes no cell size; `tw/sampler` calls
+`nd::Instrument::startPage()` on every cell change instead. §11.2.)* Because a
 page render always starts at a cell boundary and the pre-roll replays the notes
 before it (inv. 40), a page rendered alone and the same page rendered after its
 predecessor see the same notes of their cell — the property C3.4 tests in the
@@ -349,6 +355,8 @@ core and Q2 re-tests through qbx's real page renders.
 generation it started with (A7). When `setSample` replaces a buffer a voice
 still reads, the instance moves the old `shared_ptr` to a fixed-size retire
 list instead of dropping it; `collectRetired()` releases what no voice uses.
+*(Q0: the core already parks replaced buffers itself, so `tw/sampler` keeps no
+retire list of its own — §11.4.)*
 The app calls it from the main thread after every install and from a slow
 timer while the slot exists. `process()` never holds the last reference.
 
@@ -967,3 +975,79 @@ and `:38-39`; `twpluginregistry.cc:707-708`; `twnativeinstrument.cc:116`,
 `twpagedvocoder.h:110-112`; `sproject.h:280-285`; `FREEZE_PROTOCOL.md:36-39`,
 `:116-119`, `:129-140`. The threshold-start absence holds too: neither
 `saudiorecorder.cpp` nor `tw303a/record` has a recording threshold.
+
+---
+
+## 11. Corrections from the build
+
+Recorded as the build disproved or refined the text above; the reasoning above
+is kept and points here.
+
+### Q0 (QBX-250, 2026-10-27)
+
+1. **"A sibling beside the qbx checkout" needs to be told where the checkout
+   is** (§4.1). The canonical locator, like nassau-dsp's, looks for the
+   sibling relative to `CMAKE_CURRENT_SOURCE_DIR`, and qbx includes it from
+   `smaragd/tw303a/`, two levels below its root, where `../nassau-digital`
+   would point INTO qbx. nassau-digital's `cmake/bootstrap/NassauDigital.cmake`
+   therefore takes an optional `NASSAU_DIGITAL_SIBLING_ROOT`, which
+   `tw303a/CMakeLists.txt` sets to the checkout's root. Consequence worth
+   knowing: a qbx worktree under `.claude/worktrees/<slug>` has no sibling at
+   that depth and takes the FETCH route; the configure log says so. The
+   locator also keeps only an EXPLICIT directory in the cache, unlike
+   NassauDSP.cmake, which caches a sibling path and then reports it as
+   "explicit" on every later configure.
+2. **The round-robin cell is not handed to the core** (§4.2 "Round-robin",
+   B10). The core as merged (C3) has no cell size; it has
+   `nd::Instrument::startPage()`, "called before the first block of a page".
+   `tw/sampler` computes the cell from `twProcessContext::position` exactly as
+   B10 says and calls `startPage()` whenever it changes (and after
+   `reset()`/`prepare()`), splitting a chunk that straddles a boundary into two
+   core blocks. B10's property (a page's choices depend on that page alone)
+   holds; invariant 11's "given to the core at prepare" does not describe the
+   mechanism. No core change was needed.
+3. **`twSamplerHost` has a fifth method, `stats()`, and `collectRetired()`
+   returns how many it freed** (§4.2). Q0.2 asks that the installs be "read
+   without a lock in `process()`", and a stored value is not evidence of a read:
+   `stats()` reports what `process()` itself last ran on (program serial,
+   routed mask, installed sample count, active voices), written by `process()`
+   as relaxed atomics. It is the one method callable outside
+   `applyToInstances`. `twSamplerProgram` and `twSamplerSample` are opaque
+   wrappers (a pimpl over `nd::Program` / `nd::Sample`): with the core linked
+   PRIVATE (invariant 1), a public header may not name a core type.
+4. **The retire list is the core's** (§4.2 "Buffers are never released on the
+   audio path"). `nd::Instrument::setSample()` parks a replaced buffer and
+   `collectGarbage()` frees it once its use count is 1; `collectRetired()`
+   forwards to it. Invariant 5 holds as stated.
+5. **No program-level parameters in Q0** (§4.2 "The state blob"). Which
+   program quantities become host parameters is Q-2, open; the instrument
+   declares none and its blob is the 8-byte header. A saved project with a
+   10 MiB sample installed grows by 0 bytes (measured, `sampler_slot_test`).
+6. **The render is the sample only to the interpolator's ripple.** The core
+   reads every layer through a Kaiser-windowed sinc (cutoff 0.45 fs) even at
+   the root pitch, so "the render after the note is the sample" holds for
+   band-limited material within the passband ripple (measured 7.8e-4 on a
+   0.5-amplitude 440 Hz sine; 1.2e-3 peak on `test_stereo.wav`), and not at all
+   near Nyquist. Q0.3 asks for the sample's RMS, which holds (0.49997 / 0.24998
+   against the file's 0.49999 / 0.24999); the gates compare renders with
+   renders, never "sample for sample".
+7. **Q0 needs a test verb §4.5 does not list.** Q0.3 asks a `.qxa` case for
+   "the sample's RMS" before the model and its verbs exist (Q1). The test verb
+   `sampler-test-install` (testkit) installs a program and one WAV through
+   exactly the two §4.3 seams — the slot's instance initializer and
+   `applyToInstances` — and writes nothing into the project. It is not undoable
+   and not a user verb; Q1's model replaces it as the owner of the program.
+8. **`-ffp-contract=off` on the core and on `tw_sampler`** (§4.1 "Compile
+   flags"). R7 forbids two flags; byte-identical goldens across x86-64 and
+   aarch64 also need FMA contraction off (clang contracts by default), the
+   reason `tw_sources` already carries it. The R7 configure assert covers
+   `-ffast-math`, `-Ofast`, `/fp:fast`, `-march=native` and `-mcpu=native`.
+9. **`tailFrames()`** was not specified: it is the longest amp release in the
+   program, extended to the longest installed sample when a zone is one-shot,
+   so the pre-roll (capped at 4 s by the processor) reaches back far enough.
+10. **`check_layering.py` grants `sources` now; CMake links it in Q4.** §4.2's
+    DEPS row is taken as written; the link waits for the first include.
+11. **`SPluginSlot::applyToInstances()`** wraps §4.3's two steps
+    (`applyToInstances(install)` → `notifyPluginEdited()`) into one call,
+    without the second epoch bump `notifyPluginEdited()` would add.
+

@@ -221,8 +221,32 @@ public:
     // Instantiate a plugin from its descriptor.
     std::unique_ptr<twPlugin> instantiate( const twPluginDescriptor & );
 
+    // --- built-ins from OTHER modules (proposal 56 B2) ----------------------
+    //
+    // A linked-in instrument that lives in a module which DEPENDS on tw_plugins
+    // (tw/sampler's NassauDigital) cannot be named here: the registry would have
+    // to include the module that includes it. So such a module hands the
+    // registry its descriptor and a factory, by an EXPLICIT CALL from the
+    // composition root (SApplication::initPluginRegistry) and from tests —
+    // never from a static initializer, which static-library linking may drop
+    // and which invariant 1 forbids for discovery.
+    //
+    // The descriptor is appended after the in-house built-ins on every seed and
+    // every rescan, and instantiate() consults these factories BEFORE the format
+    // branches, keyed by (format, uid). Registering the same (format, uid) again
+    // REPLACES the earlier pair, so a test and the app may both call it. Safe
+    // from any thread; never scanned, never cached.
+    using BuiltinFactory = std::function<std::unique_ptr<twPlugin>()>;
+    void registerBuiltin( const twPluginDescriptor &desc, BuiltinFactory factory );
+
 private:
     void appendBuiltins_nolock();
+
+    struct ExtraBuiltin {
+        twPluginDescriptor desc;
+        BuiltinFactory     factory;
+    };
+    std::vector<ExtraBuiltin>       extraBuiltins_;   // guarded by mutex_
 
     mutable std::mutex              mutex_;         // guards everything below
     std::vector<twPluginDescriptor> plugins_;

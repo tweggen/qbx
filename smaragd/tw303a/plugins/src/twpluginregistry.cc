@@ -332,6 +332,44 @@ void twPluginRegistry::appendBuiltins_nolock()
     native.nInBuses       = 0;   // a generator: no audio input bus
 
     plugins_.push_back( native );
+
+    // Built-ins handed in by modules that depend on this one (proposal 56 B2,
+    // registerBuiltin), in registration order, after the in-house two.
+    for( const ExtraBuiltin &x : extraBuiltins_ )
+        plugins_.push_back( x.desc );
+}
+
+void twPluginRegistry::registerBuiltin( const twPluginDescriptor &desc,
+                                        BuiltinFactory factory )
+{
+    std::lock_guard<std::mutex> g( mutex_ );
+    bool replaced = false;
+    for( ExtraBuiltin &x : extraBuiltins_ ) {
+        if( x.desc.format == desc.format && x.desc.uid == desc.uid ) {
+            x.desc    = desc;
+            x.factory = factory;
+            replaced  = true;
+            break;
+        }
+    }
+    if( !replaced ) extraBuiltins_.push_back( ExtraBuiltin{ desc, factory } );
+
+    // A list already seeded (a plugins() call, or a finished scan) must show it
+    // NOW, not at the next rescan: replace the row in place, else append it.
+    // An empty list is seeded lazily with it, by appendBuiltins_nolock().
+    if( !plugins_.empty() ) {
+        bool listed = false;
+        for( twPluginDescriptor &d : plugins_ ) {
+            if( d.format == desc.format && d.uid == desc.uid ) {
+                d      = desc;
+                listed = true;
+                break;
+            }
+        }
+        if( !listed ) plugins_.push_back( desc );
+    }
+    TW_LOGI( "plugins", "[registry] built-in '%s' (%s) registered%s",
+             desc.uid.c_str(), desc.format.c_str(), replaced ? " again" : "" );
 }
 
 std::vector<twPluginDescriptor> twPluginRegistry::plugins() const
@@ -709,6 +747,22 @@ std::unique_ptr<twPlugin> twPluginRegistry::instantiate( const twPluginDescripto
     }
     if( desc.uid == "tw.native.303" ) {
         return createNativeInstrument();
+    }
+    {
+        // registerBuiltin()'s factories (proposal 56 B2). Copied out under the
+        // lock and CALLED outside it: a factory is plugin code, and nothing that
+        // runs plugin code may hold the registry's mutex.
+        BuiltinFactory f;
+        {
+            std::lock_guard<std::mutex> g( mutex_ );
+            for( const ExtraBuiltin &x : extraBuiltins_ ) {
+                if( x.desc.uid == desc.uid && x.desc.format == desc.format ) {
+                    f = x.factory;
+                    break;
+                }
+            }
+        }
+        if( f ) return f();
     }
 
     if( desc.format == "clap" ) {

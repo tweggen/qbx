@@ -274,6 +274,24 @@ public:
     // above is the only cache, and this is now just "stale the insert".
     void bumpParamEpoch();
 
+    // THE LOCKED MUTATION (proposal 56 B3). Calls `fn` on EVERY live instance
+    // (dual-mono has N) while holding mutex_ -- the mutex render() holds for its
+    // whole call -- and then bumps the param epoch, all under that one lock. So
+    // whatever `fn` installs lands BETWEEN two process() calls, never inside one,
+    // on the frozen path and on the live pump alike, and a plugin may read what
+    // was installed from process() without a lock of its own. This is the only
+    // legal way to mutate a plugin's non-parameter state from outside (the
+    // sampler's twSamplerHost); plugin()/plugins() hand out bare pointers that
+    // are NOT under the lock.
+    //
+    // `fn` runs on the calling thread, under the processor's mutex: it must not
+    // call back into this processor, and it should do no heavy work (build the
+    // snapshot first, install it here). A Missing slot's placeholder is an
+    // instance too; `fn` decides by capability what to do with it. The CALLER
+    // still owns the path above the slot (SPluginSlot::notifyPluginEdited()).
+    // Returns how many instances `fn` saw.
+    std::size_t applyToInstances( const std::function<void( twPlugin & )> &fn );
+
     // --- aux output buses (proposal 55 D2, M1) -----------------------------
     //
     // THE ROUTED MASK IS STATE: bit b = the plugin's aux output bus b reaches

@@ -116,7 +116,31 @@ audio::twPluginSlotProcessor::Factory SPluginSlot::makeFactory() const
     // per call. The descriptor is captured BY VALUE so the factory stays valid
     // across a reloadPlugin() that replaces effective_.
     audio::twPluginDescriptor eff = effective_;
-    return [eff]() { return audio::pluginRegistry().instantiate( eff ); };
+    // The initializer holder is shared, not copied: setInstanceInitializer()
+    // after this factory was handed out must still reach its next call
+    // (proposal 56 §4.3, invariant 4: a fresh instance is born current).
+    std::shared_ptr<InstanceInitializer> init = initHolder_;
+    return [eff, init]() {
+        std::unique_ptr<audio::twPlugin> p = audio::pluginRegistry().instantiate( eff );
+        if( p && init && *init ) ( *init )( *p );
+        return p;
+    };
+}
+
+void SPluginSlot::setInstanceInitializer( InstanceInitializer init )
+{
+    *initHolder_ = std::move( init );
+}
+
+std::size_t SPluginSlot::applyToInstances( const std::function<void( audio::twPlugin & )> &fn )
+{
+    std::size_t n = 0;
+    if( proc_ ) n = proc_->applyToInstances( fn );
+    // The processor staled its own pages under its lock; the path ABOVE the
+    // slot is ours (see audioInvalidated() in the header).
+    invalidateAbove();
+    emit paramsChanged();
+    return n;
 }
 
 // Proposal 36 B4: ONE insert, N channels wide, where there used to be one tap

@@ -84,6 +84,15 @@ DEPS = {
     # NOT reach playback or mix — which component is the right tap is the app's
     # decision, not the module's.
     'metering': ['core', 'pages', 'graph'],
+    # sampler (proposal 56 §4.2, Q0): NassauDigital as a native instrument.
+    # plugins because twSamplerInstrument IS a twPlugin (and registers through
+    # twPluginRegistry::registerBuiltin, B2); events for the ABI's event list;
+    # sources for the stretch renderer of Q4 (twPagedVocoder), declared with the
+    # module as the proposal fixes it and not linked until Q4 uses it. The
+    # NassauDigital core itself is linked PRIVATE into tw_sampler and is not a
+    # tw/ module, so no rule here can or need name it (invariant 1). Nothing
+    # below the app depends on sampler, so the DAG stays acyclic.
+    'sampler':  ['core', 'graph', 'events', 'plugins', 'sources'],
 }
 
 APP_HEADERS = re.compile(
@@ -440,9 +449,13 @@ APP_ENG = {
     # (twlive::checkMasterShape, design D3). It reaches tw/pages for one
     # constant, twOutputPage::FRAME_CAPACITY, which is the stride the re-rooted
     # horizon demands are issued on.
+    # shell + sampler since proposal 56 Q0: the composition root registers
+    # NassauDigital with the plugin registry by CALL (registerNassauDigital,
+    # B2 / invariant 2), before the first scan.
     'shell':          _ENG_BASE | {'devices', 'dsp', 'events', 'metering',
                                    'mix', 'pages', 'playback', 'plugins',
-                                   'record', 'render', 'schedule', 'sidecar'},
+                                   'record', 'render', 'sampler', 'schedule',
+                                   'sidecar'},
     # testkit + sidecar + schedule since proposal 27 M1 test verbs:
     # assert-sidecar reads twQafReader/twSidecarStore, wait-analysis polls the
     # revalidator's jobsQueued().
@@ -469,9 +482,13 @@ APP_ENG = {
     # between those two (the dialog polls and leaves the caller's onComplete
     # alone) and a stub session would assert the stub. actions and servicesui,
     # which testkit already reaches, hold the same edge.
+    # testkit + sampler + plugins since proposal 56 Q0: sampler-test-install
+    # hands a NassauDigital slot a program and a sample through twSamplerHost
+    # (reached by capability from a twPlugin &) before Q1's model exists.
     'testkit':        _ENG_BASE | {'analysis', 'devices', 'events', 'metering',
-                                   'pages', 'playback', 'render', 'schedule',
-                                   'sidecar', 'sinks', 'sources'},
+                                   'pages', 'playback', 'plugins', 'render',
+                                   'sampler', 'schedule', 'sidecar', 'sinks',
+                                   'sources'},
 }
 
 # A file under <module>/tools/ is NOT part of that module's library.

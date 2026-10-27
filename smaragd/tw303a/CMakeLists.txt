@@ -1036,6 +1036,90 @@ if(SMARAGD_MACOS AND ENABLE_COREAUDIO)
     message(STATUS "tw_devices: CoreAudio backend and input (recording) enabled")
 endif()
 
+# --- sampler: NassauDigital as a native instrument (proposal 56 §4.1, §4.2) ----
+#
+# THE CORE IS FOUND, NOT VENDORED. tweggen/nassau-digital is a sibling Nassau
+# repo, pinned ONCE for a release as a top-level nassau-suite submodule (the
+# author's decision of 2026-10-26, proposal 56 A2). qbx carries NO submodule
+# for it: ../cmake/NassauDigital.cmake is a VERBATIM copy of nassau-digital's
+# cmake/bootstrap/NassauDigital.cmake (change it there and re-copy), and it
+# resolves, in one order:
+#   1. -DNASSAU_DIGITAL_DIR=<checkout>   what the nassau-suite superbuild passes
+#   2. a sibling ../nassau-digital beside THIS checkout's root
+#   3. FetchContent of NASSAU_DIGITAL_GIT_REF below   a bare clone, and qbx's CI
+# and logs "nassau-digital: <route>, <dir> at <commit>" on every configure.
+#
+# REQUIRED, NOT OPTIONAL (proposal 56 B1) — the opposite of the CLAP block's
+# WARNING, on purpose: a sampler that silently vanished from a build would take
+# its .qxa cases with it and CI would test less than it claims. Finding nothing
+# is a FATAL_ERROR naming the clone command.
+#
+# NASSAU_DIGITAL_GIT_REF is a COMMIT, never a branch (a branch builds different
+# code on different days), and it must be a commit on nassau-digital's main: a
+# PR branch is deleted on merge. Moving it is its own PR, gated by the whole
+# suite (proposal 56 §4.1, "a core bump"). For a RELEASE the suite's pin is the
+# authority and this ref is not used (the suite passes NASSAU_DIGITAL_DIR); the
+# two are different numbers by design, and the configure log says which was
+# built. nassau-dsp, which the core takes from its gate C5 on, is found by the
+# core's own locator the same way (the suite passes NASSAU_DSP_DIR too).
+set(NASSAU_DIGITAL_GIT_REF "041456af87cf85e35fe4a61548e7c54441d9b5d7")
+# This file sits two levels below the checkout's root (smaragd/tw303a/).
+get_filename_component(NASSAU_DIGITAL_SIBLING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/NassauDigital.cmake)
+
+tw_module(sampler
+    SOURCES
+        sampler/include/tw/sampler/twsamplertypes.h
+        sampler/include/tw/sampler/twsamplerhost.h
+        sampler/include/tw/sampler/twsamplerregistry.h
+        sampler/src/twsamplerimpl.h
+        sampler/src/twsamplertypes.cc
+        sampler/src/twsamplerinstrument.cc
+    DEPS tw_core tw_graph tw_events tw_plugins
+)
+# PRIVATE is load-bearing (proposal 56 invariant 1), exactly as for the CLAP
+# headers: the core's include directory reaches tw_sampler and nothing else, so
+# no other module and no app module can include a core header, and
+# check_layering.py needs no rule for it. A static library's PRIVATE link still
+# carries the archive to whatever links tw_sampler ($<LINK_ONLY:>).
+target_link_libraries(tw_sampler PRIVATE nassau::digital)
+
+# R7 (nassau-digital GATES.md): no -ffast-math, no -march=native — for the core
+# AND for the module that drives it. qbx sets neither today (checked for
+# proposal 56: smaragd/, tw303a/, main/ CMakeLists.txt), and a future flag change
+# that added one would break R7 silently, so the configure stops instead. It
+# reads every place a flag can be set before this point: the global flag
+# variables of every configuration, the directory's compile options (inherited
+# from smaragd/CMakeLists.txt's add_compile_options) and the two targets' own.
+set(_tw_sampler_flag_text "${CMAKE_CXX_FLAGS}")
+foreach(_cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER "${_cfg}" _cfg)
+    string(APPEND _tw_sampler_flag_text " ${CMAKE_CXX_FLAGS_${_cfg}}")
+endforeach()
+get_directory_property(_tw_sampler_dir_opts COMPILE_OPTIONS)
+get_target_property(_tw_sampler_tgt_opts tw_sampler COMPILE_OPTIONS)
+get_target_property(_tw_sampler_core_opts nassau_digital_core COMPILE_OPTIONS)
+string(APPEND _tw_sampler_flag_text " ${_tw_sampler_dir_opts} ${_tw_sampler_tgt_opts} ${_tw_sampler_core_opts}")
+foreach(_bad -ffast-math -Ofast /fp:fast -march=native -mcpu=native)
+    string(FIND "${_tw_sampler_flag_text}" "${_bad}" _at)
+    if(NOT _at EQUAL -1)
+        message(FATAL_ERROR
+            "tw_sampler: the compile flags contain '${_bad}', which nassau-digital's R7 "
+            "forbids for the NassauDigital core (determinism and portable bytes). "
+            "Remove it, or keep it away from tw_sampler and nassau_digital_core.")
+    endif()
+endforeach()
+message(STATUS "tw_sampler: R7 flag check passed (no -ffast-math, no -march=native)")
+
+# The bytes must not depend on the CPU: -ffp-contract=off forbids FMA fusion,
+# so x86-64 (no FMA in the baseline) and aarch64 (FMA everywhere, and clang's
+# default contraction ON) produce the SAME samples, which the sampler's render
+# goldens assume — the same reason tw_sources carries it below.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(tw_sampler PRIVATE -ffp-contract=off)
+    target_compile_options(nassau_digital_core PRIVATE -ffp-contract=off)
+endif()
+
 if(NOT (ENABLE_ALSA OR ENABLE_PIPEWIRE OR ENABLE_PULSEAUDIO OR ENABLE_JACK OR ENABLE_WASAPI OR ENABLE_COREAUDIO))
     message(WARNING "tw303a: no audio backend enabled; the synthesizer will build but cannot output sound.")
 endif()
@@ -1045,7 +1129,7 @@ add_library(tw303a INTERFACE)
 target_link_libraries(tw303a INTERFACE
     tw_core tw_pages tw_graph tw_sources tw_dsp tw_mix tw_plugins
     tw_devices tw_sinks tw_playback tw_render tw_record tw_schedule tw_analysis
-    tw_sidecar tw_metering tw_events
+    tw_sidecar tw_metering tw_events tw_sampler
 )
 
 # --- DSP optimization flags (proposal 28 W5) ----------------------------------
@@ -1329,6 +1413,11 @@ set_tests_properties(playback_test PROPERTIES RUN_SERIAL TRUE)
 # tw/plugins; it needs nothing from the engine itself.
 tw_module_test(scheduled_insert_continuity_test playback/tests/scheduled_insert_continuity_test.cc tw_schedule tw_pages tw_plugins)
 tw_module_test(render_test                  render/tests/render_test.cc                 tw_render)
+# Proposal 56 Q0.2: NassauDigital through registerBuiltin, twSamplerHost by
+# capability, installs through applyToInstances read by process(), the
+# generator rows, and the state blob that holds no sample. Links the core only
+# through tw_sampler — the test cannot include a core header either.
+tw_module_test(sampler_test                 sampler/tests/sampler_test.cc               tw_sampler tw_plugins)
 # QBX-145: render_test reads its MP3 render back to check length and energy,
 # so it links libsndfile itself (a third-party link, not a module edge).
 if(SMARAGD_WINDOWS)

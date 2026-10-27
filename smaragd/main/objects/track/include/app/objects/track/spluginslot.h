@@ -5,6 +5,9 @@
 #include "tw/events/tweventsource.h"
 #include "tw/events/twtempomap.h"
 #include "tw/plugins/twplugindescriptor.h"
+
+#include <functional>
+#include <memory>
 #include "tw/plugins/twpluginslotproc.h"
 #include <QVector>
 #include <cstdint>
@@ -169,6 +172,35 @@ public:
     // path above it, without which the edit is inaudible.
     void notifyPluginEdited();
 
+    // --- non-parameter state of a live instance (proposal 56 B3, §4.3) -------
+    //
+    // Both are GENERIC — neither names the sampler — and both exist because a
+    // plugin whose state is not a parameter list (NassauDigital's program and
+    // samples, handed over through tw/sampler's twSamplerHost) has two ways to
+    // be lost: a push through the bare plugin() pointer races the render, and a
+    // REBUILD (setChannelCount(), reloadPlugin(), a rescan's setFactory())
+    // re-instantiates every instance from the factory and drops whatever was
+    // pushed into the old ones.
+    //
+    // THE INSTANCE INITIALIZER: every instance makeFactory() produces from now
+    // on is passed through `init` BEFORE the processor sees it (inside the
+    // rebuild, under the processor's mutex), so a fresh instance is BORN
+    // CURRENT (proposal 56 invariant 4). Held by the factory through a shared
+    // holder, so setting it after the processor exists still reaches the next
+    // rebuild. It does NOT touch the instances that already exist: that is
+    // applyToInstances(). An empty function clears it. UI thread.
+    using InstanceInitializer = std::function<void( audio::twPlugin & )>;
+    void setInstanceInitializer( InstanceInitializer init );
+    bool hasInstanceInitializer() const { return initHolder_ && *initHolder_; }
+
+    // THE LOCKED MUTATION of the instances that exist now:
+    // twPluginSlotProcessor::applyToInstances() — under the processor's mutex,
+    // with a param-epoch bump — followed by notifyPluginEdited(), which stales
+    // the path above the slot that the processor cannot reach. Materializes
+    // nothing: a slot with no processor yet has no instances, returns 0, and
+    // gets its state from the initializer when it is built. UI thread.
+    std::size_t applyToInstances( const std::function<void( audio::twPlugin & )> &fn );
+
     // --- the instrument slot (proposal 37 P3b) ------------------------------
     //
     // A slot is an instrument because its DESCRIPTOR says so, which is what
@@ -281,6 +313,10 @@ private:
     bool bypass_ = false;
     bool editorOpen_ = false;
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
+    // The instance initializer, shared with every factory makeFactory() hands
+    // out, so a later setInstanceInitializer() reaches the next rebuild.
+    std::shared_ptr<InstanceInitializer> initHolder_ =
+        std::make_shared<InstanceInitializer>();
 };
 
 #endif

@@ -14,6 +14,7 @@
 #include "tw/core/twlog.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginsearchpaths.h"
+#include "tw/sampler/twsamplerregistry.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
@@ -717,6 +718,12 @@ void SApplication::initPluginRegistry()
 {
     audio::twPluginRegistry &reg = audio::pluginRegistry();
     SSettings               &s   = SSettings::instance();
+
+    // NassauDigital (proposal 56 B2, invariant 2): a built-in that lives in a
+    // module ABOVE tw_plugins, so the registry is told about it here, by call,
+    // before the first scan and before any project can name it — never by a
+    // static initializer. Every --test-case run comes through here too.
+    audio::registerNassauDigital( reg );
 
     // The cache lives next to smaragd.ini, not in the sidecar store: the
     // sidecar store keys on a content hash of audio PCM and caps itself with an

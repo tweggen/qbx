@@ -956,6 +956,19 @@ than guessed at. The trim floor already distinguishes the two cases
     context menu itself — there is no testkit verb for a context menu anywhere
     in this repo.
 
+## NassauDigital is registered by the composition root (proposal 56 Q0)
+
+`SApplication::initPluginRegistry()` calls
+`audio::registerNassauDigital( audio::pluginRegistry() )` FIRST, before the
+cache path, the search paths and the first scan. The registry cannot name
+tw/sampler (tw/sampler depends on tw/plugins), so the instrument is handed in
+by this explicit call and by nothing else — never by a static initializer
+(proposal 56 invariant 2; tw/plugins CONTRACT inv. 1). Every `--test-case` run
+comes through here, which is what lets a `.qxa` say
+`insert-plugin format="tw" uid="tw.native.nassaudigital"` with no ceremony
+(`qxa.sampler_q0_engine_seam`). The edge is shell -> tw/sampler in
+`check_layering.py`'s APP_ENG.
+
 ## The media layer's two hooks (proposal 38 gate 3)
 
 Three injections, split across two classes because the status bar belongs to
