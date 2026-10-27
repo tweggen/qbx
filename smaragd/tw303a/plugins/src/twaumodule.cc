@@ -202,6 +202,11 @@ std::vector<twPluginDescriptor> auModuleDescriptors( const std::string &moduleKe
         d.outBusChannels.clear();
         for( std::size_t b = 0; b < (std::size_t) d.nOutBuses; ++b )
             d.outBusChannels.push_back( inst->audioOutBus( b ).channels );
+        // Proposal 55 (scanner version 3): the input buses too.
+        d.nInBuses = (std::uint16_t) inst->audioInBusCount();
+        d.inBusChannels.clear();
+        for( std::size_t b = 0; b < (std::size_t) d.nInBuses; ++b )
+            d.inBusChannels.push_back( inst->audioInBus( b ).channels );
     }
 
     out.push_back( std::move( d ) );

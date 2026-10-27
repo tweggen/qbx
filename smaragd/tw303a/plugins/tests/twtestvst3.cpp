@@ -74,6 +74,8 @@ namespace {
 // Stable class id. Chosen to be readable in a hex dump — the host spells a uid
 // as 32 hex digits, so "TWTESTVST3GAIN\0\0" is greppable in a .qxp and in a log.
 const TUID kTestGainCid = INLINE_UID( 0x54575445, 0x53545653, 0x54334741, 0x494E0000 );
+// "TWTESTVST3SPLT\0\0": TestSplit (proposal 55 M1), the gain with an aux output.
+const TUID kTestSplitCid = INLINE_UID( 0x54575445, 0x53545653, 0x54335350, 0x4C540000 );
 
 constexpr uint32 kParamGain = 0;
 
@@ -86,10 +88,20 @@ constexpr int32  kMaxChannels  = 2;
 // base, which would make addRef/release/queryInterface ambiguous — a single
 // override in the most-derived class resolves that, because one declaration
 // overrides the virtual in every base that declares it.
+//
+// TESTSPLIT (proposal 55 §5, M1) is this class built with `split = true`: the
+// same gain on the main bus (its parameter titled "Main Level"), plus a stereo
+// AUX output bus -- bus 1, kAux, not active by default -- carrying a COPY of
+// the input. It writes the aux ONLY WHEN THE HOST HAS ACTIVATED IT, the way
+// TestSine ignores an unactivated event bus (plugins inv. 31): a host that
+// hands the bus buffers but never switches it on reads silence, which is what
+// makes "the routed aux output is activated at prepare()" assertable.
 class TestGain final : public Vst::IComponent,
                        public Vst::IAudioProcessor,
                        public Vst::IEditController {
 public:
+    explicit TestGain( bool split = false ) : split_( split ) {}
+
     // --- FUnknown ------------------------------------------------------------
     tresult PLUGIN_API queryInterface( const TUID _iid, void **obj ) override
     {
@@ -137,14 +149,24 @@ public:
     }
     tresult PLUGIN_API setIoMode( Vst::IoMode ) override { return kNotImplemented; }
 
-    int32 PLUGIN_API getBusCount( Vst::MediaType type, Vst::BusDirection ) override
+    int32 PLUGIN_API getBusCount( Vst::MediaType type, Vst::BusDirection dir ) override
     {
-        return type == Vst::kAudio ? 1 : 0;
+        if( type != Vst::kAudio ) return 0;
+        return ( split_ && dir == Vst::kOutput ) ? 2 : 1;
     }
 
     tresult PLUGIN_API getBusInfo( Vst::MediaType type, Vst::BusDirection dir,
                                    int32 index, Vst::BusInfo &bus ) override
     {
+        if( type == Vst::kAudio && split_ && dir == Vst::kOutput && index == 1 ) {
+            bus.mediaType    = Vst::kAudio;
+            bus.direction    = dir;
+            bus.channelCount = 2;
+            bus.busType      = Vst::kAux;
+            bus.flags        = 0;   // NOT default-active: the host must switch it on
+            copyName( bus.name, "Aux" );
+            return kResultOk;
+        }
         if( type != Vst::kAudio || index != 0 ) return kInvalidArgument;
         bus.mediaType    = Vst::kAudio;
         bus.direction    = dir;
@@ -159,8 +181,11 @@ public:
     {
         return kNotImplemented;
     }
-    tresult PLUGIN_API activateBus( Vst::MediaType, Vst::BusDirection, int32, TBool ) override
+    tresult PLUGIN_API activateBus( Vst::MediaType type, Vst::BusDirection dir, int32 index,
+                                    TBool state ) override
     {
+        if( split_ && type == Vst::kAudio && dir == Vst::kOutput && index == 1 )
+            auxActive_ = state != 0;
         return kResultOk;
     }
     tresult PLUGIN_API setActive( TBool state ) override
@@ -203,7 +228,8 @@ public:
                                            Vst::SpeakerArrangement *outputs,
                                            int32 numOuts ) override
     {
-        if( numIns != 1 || numOuts != 1 || !inputs || !outputs ) return kResultFalse;
+        if( numIns != 1 || !inputs || !outputs ) return kResultFalse;
+        if( numOuts != 1 && !( split_ && numOuts == 2 ) ) return kResultFalse;
         if( inputs[0] != outputs[0] ) return kResultFalse;
         const int32 ch = countChannels( inputs[0] );
         if( ch < 1 || ch > kMaxChannels ) return kResultFalse;
@@ -211,9 +237,13 @@ public:
         return kResultOk;
     }
 
-    tresult PLUGIN_API getBusArrangement( Vst::BusDirection, int32 index,
+    tresult PLUGIN_API getBusArrangement( Vst::BusDirection dir, int32 index,
                                           Vst::SpeakerArrangement &arr ) override
     {
+        if( split_ && dir == Vst::kOutput && index == 1 ) {
+            arr = Vst::SpeakerArr::kStereo;
+            return kResultOk;
+        }
         if( index != 0 ) return kInvalidArgument;
         arr = channels_ == 1 ? Vst::SpeakerArr::kMono : Vst::SpeakerArr::kStereo;
         return kResultOk;
@@ -275,6 +305,20 @@ public:
         }
 
         out.silenceFlags = 0;
+
+        // TESTSPLIT's aux: a copy of the input, written only when ACTIVATED.
+        if( split_ && auxActive_ && data.numOutputs >= 2 ) {
+            Vst::AudioBusBuffers &aux = data.outputs[1];
+            for( int32 c = 0; c < aux.numChannels; ++c ) {
+                float *o = aux.channelBuffers32 ? aux.channelBuffers32[c] : nullptr;
+                if( !o ) continue;
+                const float *i = ( c < in.numChannels && in.channelBuffers32 )
+                                     ? in.channelBuffers32[c] : nullptr;
+                if( i ) std::memcpy( o, i, (std::size_t)data.numSamples * sizeof( float ) );
+                else    std::memset( o, 0, (std::size_t)data.numSamples * sizeof( float ) );
+            }
+            aux.silenceFlags = 0;
+        }
         return kResultOk;
     }
 
@@ -353,7 +397,13 @@ public:
         }
     }
 
-    uint32 PLUGIN_API getTailSamples() override { return 0; }
+    // TESTSPLIT'S ACTIVATION WITNESS (proposal 55 AC1.5): one frame of tail
+    // while its aux bus is ACTIVE, none otherwise. A plugin-side fact the host
+    // can read back (twPlugin::tailFrames() asks the processor live), which is
+    // what lets a gate say "the unrouted bus was NOT switched on" -- an
+    // unrouted bus gets scratch buffers, so its audio could never say it. The
+    // gain fixture is untouched: always 0.
+    uint32 PLUGIN_API getTailSamples() override { return ( split_ && auxActive_ ) ? 1 : 0; }
 
     // --- IEditController -----------------------------------------------------
     tresult PLUGIN_API setComponentState( IBStream *state ) override
@@ -371,8 +421,8 @@ public:
         info.defaultNormalizedValue = 1.0;
         info.unitId                 = 0;   // kRootUnitId, without pulling in ivstunits.h
         info.flags                  = Vst::ParameterInfo::kCanAutomate;
-        copyName( info.title, "Gain" );
-        copyName( info.shortTitle, "Gain" );
+        copyName( info.title, split_ ? "Main Level" : "Gain" );
+        copyName( info.shortTitle, split_ ? "Main Level" : "Gain" );
         return kResultOk;
     }
 
@@ -433,6 +483,8 @@ private:
         dst[i] = 0;
     }
 
+    const bool split_      = false;
+    bool   auxActive_      = false;   // TestSplit: activateBus(kAudio, kOutput, 1)
     int32  refs_           = 1;
     int32  channels_       = 2;
     int32  maxBlock_       = 0;
@@ -1045,7 +1097,9 @@ public:
     // kVstAudioEffectClass, so the host's scanner still sees exactly two
     // plugins — a controller class is reached through getControllerClassId, not
     // by enumeration.
-    int32 PLUGIN_API countClasses() override { return 3; }
+    // FOUR since proposal 55 M1: TestSplit is the fourth, so the existing
+    // indices keep their meaning.
+    int32 PLUGIN_API countClasses() override { return 4; }
 
     tresult PLUGIN_API getClassInfo( int32 index, PClassInfo *info ) override
     {
@@ -1069,6 +1123,11 @@ public:
                           PClassInfo::kCategorySize - 1 );
             std::strncpy( info->name, "TW Test VST3 Sine Controller",
                           PClassInfo::kNameSize - 1 );
+            return kResultOk;
+        case 3:
+            std::memcpy( info->cid, kTestSplitCid, sizeof( TUID ) );
+            std::strncpy( info->category, kVstAudioEffectClass, PClassInfo::kCategorySize - 1 );
+            std::strncpy( info->name, "TW Test VST3 Split", PClassInfo::kNameSize - 1 );
             return kResultOk;
         default:
             return kInvalidArgument;
@@ -1107,6 +1166,12 @@ public:
             std::strncpy( info->name, "TW Test VST3 Sine Controller",
                           PClassInfo::kNameSize - 1 );
             return kResultOk;
+        case 3:
+            std::memcpy( info->cid, kTestSplitCid, sizeof( TUID ) );
+            std::strncpy( info->category, kVstAudioEffectClass, PClassInfo::kCategorySize - 1 );
+            std::strncpy( info->name, "TW Test VST3 Split", PClassInfo::kNameSize - 1 );
+            std::strncpy( info->subCategories, "Fx", PClassInfo2::kSubCategoriesSize - 1 );
+            return kResultOk;
         default:
             return kInvalidArgument;
         }
@@ -1123,6 +1188,13 @@ public:
             if( !p ) return kOutOfMemory;
             const tresult r = p->queryInterface( _iid, obj );
             p->release();   // the QI above took the reference the caller keeps
+            return r;
+        }
+        if( FUnknownPrivate::iidEqual( cid, kTestSplitCid ) ) {
+            TestGain *p = new( std::nothrow ) TestGain( true );
+            if( !p ) return kOutOfMemory;
+            const tresult r = p->queryInterface( _iid, obj );
+            p->release();
             return r;
         }
         if( FUnknownPrivate::iidEqual( cid, kTestSineCid ) ) {

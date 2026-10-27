@@ -6,6 +6,7 @@
 #include "tw/events/tweventsource.h"
 #include "tw/events/twtempomap.h"
 #include "tw/plugins/twplugin.h"
+#include "tw/pages/tw_output_page.h"
 
 #include <atomic>
 #include <cstdint>
@@ -273,6 +274,24 @@ public:
     // above is the only cache, and this is now just "stale the insert".
     void bumpParamEpoch();
 
+    // --- aux output buses (proposal 55 D2, M1) -----------------------------
+    //
+    // THE ROUTED MASK IS STATE: bit b = the plugin's aux output bus b reaches
+    // the host (bit 0, the main bus, is ignored). A change re-prepares every
+    // instance (a format may activate buses only there) and stales the
+    // insert's pages, so the next render hears it from its first frame.
+    //
+    // Routing is defined for SINGLE-INSTANCE mappings only -- Direct,
+    // MonoFold and the generator rows (55 D9). On DualMono "the plugin's bus
+    // b" has N candidates, and on Transparent / Unsupported / Missing there is
+    // no plugin to read: the mask is kept (it comes back with the plugin) but
+    // nothing is routed, and auxLayout() is empty. Said once in the log.
+    void          setRoutedOutBuses( std::uint32_t busMask );
+    std::uint32_t routedOutBuses() const;
+    /// The routed buses that are actually rendered, in bus order, with their
+    /// channel offsets in the side page. Empty when nothing is routed.
+    std::vector<twAuxBusSlice> auxLayout() const;
+
     // --- automation (proposal 37 P5, design D5 / §4.5) ----------------------
 
     // How often a CONTINUOUS segment is re-stated inside a chunk. 64 frames is
@@ -311,8 +330,18 @@ public:
     // so a page that does not start exactly where the last one ended is a
     // discontinuity and resets it. `positional = false` for the legacy pull,
     // which has no page identity at all.
+    //
+    // `auxOut` (proposal 55 M1): when non-null and the slot ROUTES aux output
+    // buses (setRoutedOutBuses), the processor allocates a side page of the
+    // routed width, fills it in the SAME process() calls as `out`, stamps it
+    // with its bus layout and hands it back; otherwise it leaves *auxOut null.
+    // Allocated here, under the processor's own lock, so the page and the
+    // layout it was filled by can never come from two different masks (T10).
+    // Null -- the default, and every caller before M1 -- makes exactly the
+    // calls render() always made.
     void render( const sample_t *const *in, sample_t **out, length_t len,
-                 offset_t startPos, bool positional, int sampleRate );
+                 offset_t startPos, bool positional, int sampleRate,
+                 std::shared_ptr<twOutputPage> *auxOut = nullptr );
 
     // The pre-roll floor and ceiling of design D4's
     //     K = min( max(4096, tailFrames(), P - start(earliest held note)), 4 s )
@@ -424,6 +453,31 @@ private:
 
     // "Unsupported" is logged once per slot, not once per page.
     bool     loggedUnsupported_ = false;
+
+    // Aux routing (proposal 55 M1). The layout is derived from the mask, the
+    // mode and instance 0's own bus list, at every change of any of them.
+    void  computeAuxLayout_nolock();
+    bool  auxRoutable_nolock() const;
+    // Points busArr_ at the main bus and, for every routed aux bus, at this
+    // chunk's slice of the side page (auxBase_ + off); unrouted entries null.
+    float *const *const *busArrayForChunk_nolock( float *const *mainBus, length_t off,
+                                                  bool withAux );
+
+    std::uint32_t              routedMask_ = 0;
+    // The buses actually rendered (auxLayout_'s), which is what the plugin is
+    // told: a backend reads outBuses[b] for exactly these, so every
+    // event-aware call while it is non-zero passes a full-length bus array.
+    std::uint32_t              appliedMask_ = 0;
+    std::vector<twAuxBusSlice> auxLayout_;
+    std::uint16_t              auxChannels_ = 0;
+    bool                       loggedAuxUnroutable_ = false;
+    // Set for the duration of ONE page render that routes aux buses (render()
+    // with an auxOut); null otherwise -- the pre-roll and every discarded run
+    // never write the side page.
+    sample_t                  **auxBase_ = nullptr;
+    std::vector<sample_t *>     auxBaseStore_;
+    std::vector<sample_t *>     auxChunk_;
+    std::vector<float *const *> busArr_;
 
     // --- the instrument slot (proposal 37 P3b) ------------------------------
 

@@ -338,7 +338,7 @@ private:
 // right and the gate was not hermetic.
 //
 // Redirecting the whole INI for `--test-case` runs would be the bigger fix and is
-// deliberately NOT what this is: `configDir()` also holds `plugincache.v2.json`,
+// deliberately NOT what this is: `configDir()` also holds `plugincache.v3.json`,
 // so every case would then cold-probe every plugin installed on the machine.
 //
 // A case may only remove a key it OWNS — one written by a fixture, keyed by a

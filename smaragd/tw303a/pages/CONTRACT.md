@@ -160,3 +160,11 @@ once as a constant so that this would be a parameter rather than another sweep;
 B4 is the milestone that added it, with twTrackMix's per-channel clip mix as its
 first caller. The §4.4 clamp for a NARROWER source (twPageClampChannel) is the
 caller's decision — a view may not implement a downmix policy.
+
+**The side page (proposal 55 M1).** `twOutputPage::aux` (a
+`shared_ptr<twOutputPage>`, null by default) and `auxSlices` (a vector of
+`twAuxBusSlice { bus, offset, channels }`, empty by default) are how a plugin
+insert caches its routed aux output buses on its own page. A page without them
+costs one null pointer and one empty vector more than before -- no samples, no
+accounting. `accountedBytesWithAux()` is the cache entry's whole sample cost and
+is what `twComponent::pageStats[Try]` sum. See FREEZE_PROTOCOL "Page geometry".

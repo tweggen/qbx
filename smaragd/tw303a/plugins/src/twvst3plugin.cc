@@ -176,7 +176,10 @@ public:
 
     twPluginCapabilities capabilities() const override { return caps_; }
     std::size_t          audioOutBusCount() const override { return outBusShape_.size(); }
+    void                 setRoutedOutBuses( std::uint32_t busMask ) override;
     twPluginBusInfo      audioOutBus( std::size_t i ) const override;
+    std::size_t          audioInBusCount() const override { return inBusShape_.size(); }
+    twPluginBusInfo      audioInBus( std::size_t i ) const override;
     std::uint32_t        tailFrames() const override;
 
 private:
@@ -250,6 +253,17 @@ private:
     std::vector<std::vector<float>>    scratchOwned_;
     std::vector<std::vector<float *>>  inBusPtrs_, outBusPtrs_;
     std::vector<float *>               mainInPtrs_, mainOutPtrs_;
+
+    // ROUTED AUX OUTPUTS (proposal 55 M1). twPlugin's bus b -> VST3 output
+    // bus: bus 0 is the main bus, the rest follow in VST3's order with the
+    // main bus taken out (bus == VST3 index whenever main is bus 0). The mask
+    // is the one prepare() ACTIVATED -- VST3 lets a plugin ignore an
+    // unactivated bus, so a bus is routed exactly when it was switched on.
+    std::vector<int>                   outBusIndex_, inBusIndex_;
+    std::uint32_t                      wantedOutMask_ = 0;   // hostMutex_
+    std::atomic<std::uint32_t>         activeOutMask_{ 0 };  // read in process()
+    std::vector<std::vector<float *>>  auxOutPtrs_;
+    std::vector<float *const *>        legacyBuses_;
 
     std::vector<twPluginParamInfo> params_;
     std::vector<Vst::ParamID>      paramIds_;
@@ -507,6 +521,30 @@ void twVst3Plugin::readBusLayout()
 
     io_.audioInputs  = (std::uint16_t)( mainInBus_  >= 0 ? inBusShape_[(std::size_t)mainInBus_].channels : 0 );
     io_.audioOutputs = (std::uint16_t)( mainOutBus_ >= 0 ? outBusShape_[(std::size_t)mainOutBus_].channels : 0 );
+
+    inBusIndex_.clear();
+    if( mainInBus_ >= 0 ) inBusIndex_.push_back( mainInBus_ );
+    for( std::size_t i = 0; i < inBusShape_.size(); ++i )
+        if( (int)i != mainInBus_ ) inBusIndex_.push_back( (int)i );
+
+    outBusIndex_.clear();
+    if( mainOutBus_ >= 0 ) outBusIndex_.push_back( mainOutBus_ );
+    for( std::size_t i = 0; i < outBusShape_.size(); ++i )
+        if( (int)i != mainOutBus_ ) outBusIndex_.push_back( (int)i );
+    legacyBuses_.assign( std::max<std::size_t>( 1, outBusIndex_.size() ), nullptr );
+}
+
+void twVst3Plugin::setRoutedOutBuses( std::uint32_t busMask )
+{
+    std::lock_guard<std::mutex> lock( hostMutex_ );
+    busMask &= ~1u;
+    if( busMask == wantedOutMask_ ) return;
+    wantedOutMask_ = busMask;
+    // Bus activation is a SETUP change: it is legal only while inactive, so it
+    // happens in the next prepare(), which the slot processor calls right
+    // after this. Forget the prepared block size so that prepare() does not
+    // take its idempotent early return over a changed bus set.
+    preparedMax_.store( 0, std::memory_order_release );
 }
 
 // Event (note) buses + what the CONTROLLER offers (proposal 37 §5.2).
@@ -576,11 +614,25 @@ void twVst3Plugin::readMidiMap()
 
 twPluginBusInfo twVst3Plugin::audioOutBus( std::size_t i ) const
 {
+    // Indexed by BUS (proposal 55 M1): bus 0 is the main bus wherever the
+    // plugin declared it, as twPlugin's contract says.
     twPluginBusInfo b;
-    if( i >= outBusShape_.size() )
+    if( i >= outBusIndex_.size() )
         return b;
-    b.channels = (std::uint16_t)outBusShape_[i].channels;
-    b.isMain   = outBusShape_[i].isMain;
+    const BusShape &shape = outBusShape_[(std::size_t)outBusIndex_[i]];
+    b.channels = (std::uint16_t)shape.channels;
+    b.isMain   = shape.isMain;
+    return b;
+}
+
+twPluginBusInfo twVst3Plugin::audioInBus( std::size_t i ) const
+{
+    twPluginBusInfo b;
+    if( i >= inBusIndex_.size() )
+        return b;
+    const BusShape &shape = inBusShape_[(std::size_t)inBusIndex_[i]];
+    b.channels = (std::uint16_t)shape.channels;
+    b.isMain   = shape.isMain;
     return b;
 }
 
@@ -714,16 +766,26 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     preparedMax_.store( maxBlock, std::memory_order_release );
     processFailed_.store( false, std::memory_order_release );
 
-    // Main buses on, everything else off: we have no sidechain routing, and an
-    // aux bus left active would have the plugin expecting audio we never supply.
+    // Main buses on, and of the rest exactly the ROUTED aux OUTPUTS (proposal
+    // 55 M1): an aux bus left active would have the plugin expecting a reader
+    // we never supply, and an inactive one may legally be left unwritten,
+    // which is why a routed bus must be switched on rather than merely handed
+    // buffers. Inputs: main only -- there is no sidechain routing yet (M3).
     // Buffers are still handed over for inactive buses — the spec requires the
     // array and the channel count to match regardless.
     for( std::size_t i = 0; i < inBusShape_.size(); ++i )
         component_->activateBus( Vst::kAudio, Vst::kInput, (int32)i,
                                  (int)i == mainInBus_ );
-    for( std::size_t i = 0; i < outBusShape_.size(); ++i )
-        component_->activateBus( Vst::kAudio, Vst::kOutput, (int32)i,
-                                 (int)i == mainOutBus_ );
+    std::uint32_t activeOut = 0;
+    for( std::size_t b = 1; b < outBusIndex_.size() && b < 32; ++b )
+        if( wantedOutMask_ & ( 1u << b ) ) activeOut |= ( 1u << b );
+    for( std::size_t i = 0; i < outBusShape_.size(); ++i ) {
+        bool on = (int)i == mainOutBus_;
+        for( std::size_t b = 1; !on && b < outBusIndex_.size() && b < 32; ++b )
+            on = outBusIndex_[b] == (int)i && ( activeOut & ( 1u << b ) );
+        component_->activateBus( Vst::kAudio, Vst::kOutput, (int32)i, on );
+    }
+    activeOutMask_.store( activeOut, std::memory_order_release );
 
     // THE EVENT BUSES MUST BE ACTIVATED, AND UNTIL PROPOSAL 37 P2 THEY WERE NOT
     // (plugins/CONTRACT.md invariant 29). Only AUDIO buses were switched on
@@ -785,6 +847,10 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     };
     buildBuses( inBusShape_,  mainInBus_,  inBusPtrs_,  inBufs_ );
     buildBuses( outBusShape_, mainOutBus_, outBusPtrs_, outBufs_ );
+    auxOutPtrs_.assign( outBusShape_.size(), std::vector<float *>{} );
+    for( std::size_t i = 0; i < outBusShape_.size(); ++i )
+        auxOutPtrs_[i].assign( (std::size_t)std::max<int32>( 0, outBusShape_[i].channels ),
+                               nullptr );
 
     mainInPtrs_.assign( io_.audioInputs, nullptr );
     mainOutPtrs_.assign( io_.audioOutputs, nullptr );
@@ -1208,16 +1274,18 @@ void twVst3Plugin::process( const float *const *in, float *const *out,
     const twEventList      noEvents{};
     twEventOut             noSink;
     const twProcessContext noCtx{};
-    float *const *const    outBuses[1] = { out };
-    process( in, outBuses, nframes, noEvents, noSink, noCtx );
+    // As long as the bus list (proposal 55 M1): see twClapPlugin's twin.
+    if( legacyBuses_.empty() ) legacyBuses_.assign( 1, nullptr );
+    legacyBuses_[0] = out;
+    process( in, legacyBuses_.data(), nframes, noEvents, noSink, noCtx );
 }
 
 void twVst3Plugin::process( const float *const *in, float *const *const *outBuses,
                             std::uint32_t nframes, const twEventList &hostEvents,
                             twEventOut &eventsOut, const twProcessContext &ctx )
 {
-    // Only the MAIN bus is wired; bus > 0 is aux output, which nothing consumes
-    // yet (proposal 37 §5.4).
+    // outBuses[0] is the main bus. An aux bus is read only when ROUTED and
+    // activated (proposal 55 M1, below).
     float *const *out = ( outBuses && !outBusShape_.empty() ) ? outBuses[0] : nullptr;
 
     const std::uint32_t nIn  = io_.audioInputs;
@@ -1269,6 +1337,28 @@ void twVst3Plugin::process( const float *const *in, float *const *const *outBuse
     if( mainOutBus_ >= 0 && (std::size_t)mainOutBus_ < outBufs_.size() )
         outBufs_[(std::size_t)mainOutBus_].channelBuffers32 =
             mainOutPtrs_.empty() ? nullptr : mainOutPtrs_.data();
+
+    // ROUTED AUX OUTPUT BUSES (proposal 55 M1): a routed, activated bus with a
+    // non-null entry gets the caller's buffers (the slot's side page); every
+    // other non-main bus gets its scratch back. Re-pointed on every call.
+    {
+        const std::uint32_t routed = activeOutMask_.load( std::memory_order_acquire );
+        for( std::size_t b = 1; b < outBusIndex_.size(); ++b ) {
+            const std::size_t vb = (std::size_t)outBusIndex_[b];
+            if( vb >= outBufs_.size() || vb >= outBusPtrs_.size() ) continue;
+            float *const *caller = nullptr;
+            if( b < 32 && ( routed & ( 1u << b ) ) && outBuses )
+                caller = outBuses[b];
+            if( caller ) {
+                std::vector<float *> &ptrs = auxOutPtrs_[vb];
+                for( std::size_t c = 0; c < ptrs.size(); ++c ) ptrs[c] = caller[c];
+                outBufs_[vb].channelBuffers32 = ptrs.empty() ? nullptr : ptrs.data();
+            } else {
+                outBufs_[vb].channelBuffers32 = outBusPtrs_[vb].empty()
+                                                    ? nullptr : outBusPtrs_[vb].data();
+            }
+        }
+    }
 
     Vst::ProcessData data{};
     data.processMode            = Vst::kRealtime;

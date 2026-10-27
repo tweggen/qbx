@@ -305,6 +305,8 @@ void twPluginRegistry::appendBuiltins_nolock()
     passThrough.isInstrument = false;
     passThrough.nOutBuses = 1;
     passThrough.outBusChannels = { 2 };
+    passThrough.nInBuses = 1;
+    passThrough.inBusChannels = { 2 };
 
     plugins_.push_back( passThrough );
 
@@ -327,6 +329,7 @@ void twPluginRegistry::appendBuiltins_nolock()
     native.eventPortsOut  = 0;
     native.nOutBuses      = 1;
     native.outBusChannels = { 1 };
+    native.nInBuses       = 0;   // a generator: no audio input bus
 
     plugins_.push_back( native );
 }

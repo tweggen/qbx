@@ -143,7 +143,15 @@ public:
 
     twPluginCapabilities capabilities() const override { return caps_; }
     std::size_t          audioOutBusCount() const override { return outPortChans_.size(); }
+    void                 setRoutedOutBuses( std::uint32_t busMask ) override
+    {
+        // CLAP needs no activation per port: a routed port simply gets the
+        // caller's buffers in process(). Read there, on the audio thread.
+        routedOutMask_.store( busMask & ~1u, std::memory_order_release );
+    }
     twPluginBusInfo      audioOutBus( std::size_t i ) const override;
+    std::size_t          audioInBusCount() const override { return inPortChans_.size(); }
+    twPluginBusInfo      audioInBus( std::size_t i ) const override;
     std::uint32_t        tailFrames() const override;
 
 private:
@@ -259,6 +267,18 @@ private:
     // ports get zeroed input scratch and throwaway output scratch).
     std::vector<std::uint32_t> inPortChans_, outPortChans_;
     int                        mainInPort_ = -1, mainOutPort_ = -1;
+    // BUS b -> CLAP PORT (proposal 55 M1). twPlugin's bus 0 is the main bus
+    // and its aux buses follow in port order with the main port taken out, so
+    // bus == port exactly when the main port is port 0 (every fixture, and
+    // every plugin seen so far). Built once in readPortLayout().
+    std::vector<int>           outBusPort_, inBusPort_;
+    std::atomic<std::uint32_t> routedOutMask_{ 0 };
+    // Per routed port, the caller's channel pointers for this call. Sized at
+    // prepare(), never in process().
+    std::vector<std::vector<float *>> auxOutPtrs_;
+    // The legacy overload's bus array: as long as the bus list, so a routed
+    // bus is never read past the end of a one-element array.
+    std::vector<float *const *>       legacyBuses_;
 
     std::vector<clap_audio_buffer_t> inBufs_, outBufs_;
     std::vector<PortBufs>            inScratch_, outScratch_;
@@ -872,6 +892,17 @@ void twClapPlugin::readPortLayout()
     io_.audioInputs = (std::uint16_t)( mainInPort_ >= 0 ? inPortChans_[(size_t)mainInPort_] : 0 );
     io_.audioOutputs =
         (std::uint16_t)( mainOutPort_ >= 0 ? outPortChans_[(size_t)mainOutPort_] : 0 );
+
+    inBusPort_.clear();
+    if( mainInPort_ >= 0 ) inBusPort_.push_back( mainInPort_ );
+    for( std::size_t i = 0; i < inPortChans_.size(); ++i )
+        if( (int)i != mainInPort_ ) inBusPort_.push_back( (int)i );
+
+    outBusPort_.clear();
+    if( mainOutPort_ >= 0 ) outBusPort_.push_back( mainOutPort_ );
+    for( std::size_t i = 0; i < outPortChans_.size(); ++i )
+        if( (int)i != mainOutPort_ ) outBusPort_.push_back( (int)i );
+    legacyBuses_.assign( std::max<std::size_t>( 1, outBusPort_.size() ), nullptr );
 }
 
 // clap.note-ports, and the DIALECT decision (proposal 37 §5.2).
@@ -1032,6 +1063,9 @@ void twClapPlugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     };
     buildPorts( inPortChans_,  mainInPort_,  maxBlock, inScratch_,  inBufs_ );
     buildPorts( outPortChans_, mainOutPort_, maxBlock, outScratch_, outBufs_ );
+    auxOutPtrs_.assign( outPortChans_.size(), std::vector<float *>{} );
+    for( std::size_t p = 0; p < outPortChans_.size(); ++p )
+        auxOutPtrs_[p].assign( outPortChans_[p], nullptr );
 
     mainInPtrs_.assign( io_.audioInputs, nullptr );
     mainOutPtrs_.assign( io_.audioOutputs, nullptr );
@@ -1097,11 +1131,25 @@ std::uint32_t twClapPlugin::tailFrames() const
 
 twPluginBusInfo twClapPlugin::audioOutBus( std::size_t i ) const
 {
+    // Indexed by BUS, not by port (proposal 55 M1): bus 0 is the main port
+    // wherever the plugin declared it, as twPlugin's contract says.
     twPluginBusInfo b;
-    if( i >= outPortChans_.size() )
+    if( i >= outBusPort_.size() )
         return b;
-    b.channels = (std::uint16_t)outPortChans_[i];
-    b.isMain   = ( (int)i == mainOutPort_ );
+    const int port = outBusPort_[i];
+    b.channels = (std::uint16_t)outPortChans_[(std::size_t)port];
+    b.isMain   = ( port == mainOutPort_ );
+    return b;
+}
+
+twPluginBusInfo twClapPlugin::audioInBus( std::size_t i ) const
+{
+    twPluginBusInfo b;
+    if( i >= inBusPort_.size() )
+        return b;
+    const int port = inBusPort_[i];
+    b.channels = (std::uint16_t)inPortChans_[(std::size_t)port];
+    b.isMain   = ( port == mainInPort_ );
     return b;
 }
 
@@ -1514,17 +1562,21 @@ void twClapPlugin::process( const float *const *in, float *const *out,
     const twEventList    noEvents{};
     twEventOut           noSink;      // no storage: every push is a counted drop
     const twProcessContext noCtx{};
-    float *const *const  outBuses[1] = { out };
-    process( in, outBuses, nframes, noEvents, noSink, noCtx );
+    // A bus array as long as the bus list, aux entries null (proposal 55 M1):
+    // with an aux bus routed the event-aware call reads outBuses[b], and a
+    // one-element array would be read past its end.
+    if( legacyBuses_.empty() ) legacyBuses_.assign( 1, nullptr );
+    legacyBuses_[0] = out;
+    process( in, legacyBuses_.data(), nframes, noEvents, noSink, noCtx );
 }
 
 void twClapPlugin::process( const float *const *in, float *const *const *outBuses,
                             std::uint32_t nframes, const twEventList &hostEvents,
                             twEventOut &eventsOut, const twProcessContext &ctx )
 {
-    // Only the MAIN bus is wired: bus > 0 is aux output, which nothing consumes
-    // yet (proposal 37 §5.4). Reading outBuses[0] is what the legacy overload
-    // always did.
+    // outBuses[0] is the main bus, as the legacy overload always used it. An
+    // aux bus is read only when ROUTED (proposal 55 M1, see below), because
+    // only then does the caller promise an array as long as the bus list.
     float *const *out = ( outBuses && !outPortChans_.empty() ) ? outBuses[0] : nullptr;
 
     const std::uint32_t nIn  = io_.audioInputs;
@@ -1584,6 +1636,30 @@ void twClapPlugin::process( const float *const *in, float *const *const *outBuse
     if( mainOutPort_ >= 0 && (std::size_t)mainOutPort_ < outBufs_.size() )
         outBufs_[(std::size_t)mainOutPort_].data32 =
             mainOutPtrs_.empty() ? nullptr : mainOutPtrs_.data();
+
+    // ROUTED AUX OUTPUT BUSES (proposal 55 M1). A routed bus with a non-null
+    // entry gets the caller's buffers -- the slot's side page -- and every
+    // other non-main port gets its own scratch back, as before. Re-pointed on
+    // every call, so a port routed last call and not this one never writes
+    // into a page the caller has moved on from.
+    {
+        const std::uint32_t routed = routedOutMask_.load( std::memory_order_acquire );
+        for( std::size_t b = 1; b < outBusPort_.size(); ++b ) {
+            const std::size_t port = (std::size_t)outBusPort_[b];
+            if( port >= outBufs_.size() || port >= outScratch_.size() ) continue;
+            float *const *caller = nullptr;
+            if( b < 32 && ( routed & ( 1u << b ) ) && outBuses )
+                caller = outBuses[b];
+            if( caller ) {
+                std::vector<float *> &ptrs = auxOutPtrs_[port];
+                for( std::size_t c = 0; c < ptrs.size(); ++c ) ptrs[c] = caller[c];
+                outBufs_[port].data32 = ptrs.empty() ? nullptr : ptrs.data();
+            } else {
+                outBufs_[port].data32 = outScratch_[port].ptrs.empty()
+                                            ? nullptr : outScratch_[port].ptrs.data();
+            }
+        }
+    }
 
     // Transport (proposal 37 §5.2). Built only from what the context CLAIMS to
     // know: an all-invalid context (which is what the legacy overload passes)
