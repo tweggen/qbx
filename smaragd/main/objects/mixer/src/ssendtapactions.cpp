@@ -118,14 +118,15 @@ SAddSendAction::SAddSendAction( const QString &track, const QString &dest,
                                 double levelDb, bool preFader, bool enabled,
                                 const QString &arrangement )
     : track_( track ), dest_( dest ), levelDb_( levelDb ),
-      preFader_( preFader ), enabled_( enabled ), arrangement_( arrangement )
+      preFader_( preFader ), enabled_( enabled )
 {
+    setPathRoot( arrangement );   // the BASE's member (QBX-249)
 }
 
 SApplyResult SAddSendAction::apply( SProject *project )
 {
     Resolved r;
-    if( !resolve( project, name(), track_, dest_, arrangement_, true, r ) )
+    if( !resolve( project, name(), track_, dest_, pathRoot_, true, r ) )
         return { false, nullptr };
     if( !routingIsLegal( name(), r ) ) return { false, nullptr };
 
@@ -144,7 +145,7 @@ SApplyResult SAddSendAction::apply( SProject *project )
     if( !r.source->setSendTap( tap ) ) return { false, nullptr };
     r.mixer->sendRoutingChanged();
 
-    return { true, inverseFor( track_, dest_, arrangement_,
+    return { true, inverseFor( track_, dest_, pathRoot_,
                                had ? &prev : nullptr ) };
 }
 
@@ -155,7 +156,7 @@ void SAddSendAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "level", levelDb_ );
     elem.setAttribute( "pre", preFader_ ? "true" : "false" );
     elem.setAttribute( "enabled", enabled_ ? "true" : "false" );
-    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !pathRoot_.isEmpty() ) elem.setAttribute( "arrangement", pathRoot_ );
 }
 
 bool SAddSendAction::readXml( const QDomElement &elem, int )
@@ -165,7 +166,14 @@ bool SAddSendAction::readXml( const QDomElement &elem, int )
     levelDb_ = elem.attribute( "level", "0" ).toDouble();
     preFader_ = elem.attribute( "pre", "false" ) == QLatin1String( "true" );
     enabled_  = elem.attribute( "enabled", "true" ) == QLatin1String( "true" );
-    arrangement_ = elem.attribute( "arrangement" );
+    // FIRST ROOT WINS, which is strackpath::parseInto()'s rule spelled for an
+    // attribute: a root the caller already stamped with setPathRoot() survives
+    // an element that names none (QBX-249).
+    {
+        const QString arrangement = elem.attribute( "arrangement" );
+        if( !arrangement.isEmpty() && pathRoot_.isEmpty() )
+            setPathRoot( arrangement );
+    }
     return !track_.isEmpty() && !dest_.isEmpty();
 }
 
@@ -177,8 +185,9 @@ static const bool s_reg_add_send = (
 
 SRemoveSendAction::SRemoveSendAction( const QString &track, const QString &dest,
                                       const QString &arrangement )
-    : track_( track ), dest_( dest ), arrangement_( arrangement )
+    : track_( track ), dest_( dest )
 {
+    setPathRoot( arrangement );   // the BASE's member (QBX-249)
 }
 
 SApplyResult SRemoveSendAction::apply( SProject *project )
@@ -186,7 +195,7 @@ SApplyResult SRemoveSendAction::apply( SProject *project )
     Resolved r;
     // needDest = false: a tap whose lane has since been removed must still be
     // clearable (see resolve()).
-    if( !resolve( project, name(), track_, dest_, arrangement_, false, r ) )
+    if( !resolve( project, name(), track_, dest_, pathRoot_, false, r ) )
         return { false, nullptr };
 
     const SSendTap *existing = r.source->sendTap( dest_ );
@@ -201,21 +210,28 @@ SApplyResult SRemoveSendAction::apply( SProject *project )
 
     return { true, new SAddSendAction( track_, dest_, prev.levelDb,
                                        prev.preFader, prev.enabled,
-                                       arrangement_ ) };
+                                       pathRoot_ ) };
 }
 
 void SRemoveSendAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "track", track_ );
     elem.setAttribute( "dest", dest_ );
-    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !pathRoot_.isEmpty() ) elem.setAttribute( "arrangement", pathRoot_ );
 }
 
 bool SRemoveSendAction::readXml( const QDomElement &elem, int )
 {
     track_ = elem.attribute( "track" );
     dest_  = elem.attribute( "dest" );
-    arrangement_ = elem.attribute( "arrangement" );
+    // FIRST ROOT WINS, which is strackpath::parseInto()'s rule spelled for an
+    // attribute: a root the caller already stamped with setPathRoot() survives
+    // an element that names none (QBX-249).
+    {
+        const QString arrangement = elem.attribute( "arrangement" );
+        if( !arrangement.isEmpty() && pathRoot_.isEmpty() )
+            setPathRoot( arrangement );
+    }
     return !track_.isEmpty() && !dest_.isEmpty();
 }
 
@@ -227,14 +243,15 @@ static const bool s_reg_remove_send = (
 
 SSetSendAction::SSetSendAction( const QString &track, const QString &dest,
                                 const QString &arrangement )
-    : track_( track ), dest_( dest ), arrangement_( arrangement )
+    : track_( track ), dest_( dest )
 {
+    setPathRoot( arrangement );   // the BASE's member (QBX-249)
 }
 
 SApplyResult SSetSendAction::apply( SProject *project )
 {
     Resolved r;
-    if( !resolve( project, name(), track_, dest_, arrangement_, true, r ) )
+    if( !resolve( project, name(), track_, dest_, pathRoot_, true, r ) )
         return { false, nullptr };
 
     const SSendTap *existing = r.source->sendTap( dest_ );
@@ -262,7 +279,7 @@ SApplyResult SSetSendAction::apply( SProject *project )
 
     return { true, new SAddSendAction( track_, dest_, prev.levelDb,
                                        prev.preFader, prev.enabled,
-                                       arrangement_ ) };
+                                       pathRoot_ ) };
 }
 
 void SSetSendAction::writeXml( QDomElement &elem ) const
@@ -272,14 +289,21 @@ void SSetSendAction::writeXml( QDomElement &elem ) const
     if( hasLevel_ )   elem.setAttribute( "level", levelDb_ );
     if( hasPre_ )     elem.setAttribute( "pre", preFader_ ? "true" : "false" );
     if( hasEnabled_ ) elem.setAttribute( "enabled", enabled_ ? "true" : "false" );
-    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !pathRoot_.isEmpty() ) elem.setAttribute( "arrangement", pathRoot_ );
 }
 
 bool SSetSendAction::readXml( const QDomElement &elem, int )
 {
     track_ = elem.attribute( "track" );
     dest_  = elem.attribute( "dest" );
-    arrangement_ = elem.attribute( "arrangement" );
+    // FIRST ROOT WINS, which is strackpath::parseInto()'s rule spelled for an
+    // attribute: a root the caller already stamped with setPathRoot() survives
+    // an element that names none (QBX-249).
+    {
+        const QString arrangement = elem.attribute( "arrangement" );
+        if( !arrangement.isEmpty() && pathRoot_.isEmpty() )
+            setPathRoot( arrangement );
+    }
     if( elem.hasAttribute( "level" ) )
         setLevelDb( elem.attribute( "level" ).toDouble() );
     if( elem.hasAttribute( "pre" ) )

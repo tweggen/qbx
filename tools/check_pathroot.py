@@ -40,6 +40,50 @@ a path that is known-bare by construction.
 
 Exemptions are listed explicitly below with a reason each. Add one only when the
 path genuinely cannot be qualified -- not to silence the check.
+
+================================================================================
+JOB 2 (QBX-249): AND THE ROOT LIVES IN SAction::pathRoot_, NOWHERE ELSE.
+================================================================================
+
+Parsing the qualifier correctly is half of it. The other half is WHERE the
+answer is kept, because two funnels read that one member and nothing else:
+
+    applyPropagatingRoot()  copies a->pathRoot() onto every inverse, which is
+                            how 83 inverse-construction sites across 36 files
+                            get their root without one of them saying so.
+    setPathRoot()           is what stimeline::submitFor(), SMixerStrip and
+                            SEventPassVerbs::emitVerb stamp an action with.
+
+An action that keeps its root in a member of its own is invisible to both. It
+is not a style question; it is how QBX-249 happened. `add-track` held an
+`arrangement_`, so:
+
+  * the SRemoveTrackAction it handed back as its inverse was MASTER-rooted,
+    and one undo of an arrangement-side add-track DELETED A MASTER LANE while
+    leaving the arrangement's standing -- measured, and silent, because
+    remove-arrangement then correctly refused the still-populated root;
+  * setPathRoot() was ignored, so "New track" in an arrangement tab added the
+    lane to the master while the view looked for it in its own mixer.
+
+`add-sample` (undo destroyed the master's clip at the same address, and
+writeXml dropped the root entirely) and `place-asset` had the same defect.
+`merge-columns` and `set-lane-hidden` had the sibling form: a pathRoot_ of
+their own SHADOWING the base's, so readXml wrote one member and setPathRoot()
+the other.
+
+So: a class deriving from SAction must not declare a root of its own, and must
+never redeclare pathRoot_ or pathRoot(). This runs over the headers that
+declare an SAction subclass, which is what makes it cheap and exact.
+
+NOT THE TESTKIT, and the reason is measured rather than assumed: no testkit
+verb carrying an `arrangement_`/`root_` returns an inverse (checked -- zero
+`return {true, new S...Action}` across all six), and nothing stamps one with
+setPathRoot(), so neither funnel reaches them. A SHADOW is still refused
+there, because a shadow is never a design choice.
+
+Job 2 has NO exemptions, and that is the point of having migrated the six
+send verbs that were already correct: a rule with six exceptions is the shape
+that let this class come back.
 """
 import re, sys, pathlib
 
@@ -118,7 +162,17 @@ EXEMPT = {
 
 PAT = re.compile(r"\bstringToPath\s*\(")
 
-def main() -> int:
+# Job 2. A class deriving from SAction keeps its root in the BASE's pathRoot_.
+IS_ACTION = re.compile(r":\s*public\s+SAction\b")
+# A root of the class's own, under any of the names this tree has used for one:
+# arrangement_, destRoot_, containerRoot_, rootName_.
+OWN_ROOT = re.compile(
+    r"\bQString\s+[A-Za-z_]*(?:[Aa]rrangement|[Rr]oot)[A-Za-z_]*_\s*;")
+# And the sibling form: the base's own member or accessor, redeclared.
+SHADOW = re.compile(r"\bpathRoot_\s*;|\bpathRoot\s*\(\s*\)\s*const")
+
+
+def job_bare_parse() -> int:
     bad = []
     for p in sorted(ROOT.rglob("*.cpp")) + sorted(ROOT.rglob("*.h")):
         rel = p.relative_to(ROOT).as_posix()
@@ -131,16 +185,55 @@ def main() -> int:
                 bad.append(f"{rel}:{n}: {line.strip()}")
 
     if bad:
-        print("check_pathroot: stringToPath() on a path that may be root-qualified.")
-        print("  Use strackpath::parseQualified() / parseInto() instead, or add an")
-        print("  explicit exemption with a reason in tools/check_pathroot.py.")
+        print("check_pathroot job 1: stringToPath() on a path that may be")
+        print("  root-qualified. Use strackpath::parseQualified() / parseInto()")
+        print("  instead, or add an explicit exemption with a reason in")
+        print("  tools/check_pathroot.py.")
         print()
         for b in bad:
             print("  " + b)
         return 1
 
-    print("check_pathroot: OK -- no unqualified path parses")
+    print("check_pathroot job 1: OK -- no unqualified path parses")
     return 0
+
+
+def job_root_member() -> int:
+    bad = []
+    n_headers = 0
+    for p in sorted(ROOT.rglob("*.h")):
+        rel = p.relative_to(ROOT).as_posix()
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if not IS_ACTION.search(text):
+            continue            # not an action header; its members are its own
+        n_headers += 1
+        testkit = rel.startswith("testkit/")
+        for n, line in enumerate(text.splitlines(), 1):
+            if "check_pathroot" in line or line.lstrip().startswith(("//", "*")):
+                continue
+            if SHADOW.search(line):
+                bad.append(f"{rel}:{n}: shadows SAction::pathRoot -- {line.strip()}")
+            elif OWN_ROOT.search(line) and not testkit:
+                bad.append(f"{rel}:{n}: a root of its own -- {line.strip()}")
+
+    if bad:
+        print("check_pathroot job 2: an SAction subclass keeping its root")
+        print("  somewhere applyPropagatingRoot() and setPathRoot() cannot see.")
+        print("  Use the base's pathRoot_ (set it with setPathRoot() from a")
+        print("  constructor; a base member cannot go in a member-init list).")
+        print("  QBX-249 and the docstring say what a root kept elsewhere costs.")
+        print()
+        for b in bad:
+            print("  " + b)
+        return 1
+
+    print(f"check_pathroot job 2: OK -- {n_headers} action header(s), "
+          "every root in SAction::pathRoot_")
+    return 0
+
+
+def main() -> int:
+    return job_bare_parse() | job_root_member()
 
 if __name__ == "__main__":
     sys.exit(main())

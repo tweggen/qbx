@@ -32,11 +32,16 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
-    // Which ROOT containerPath_ is relative to: empty == the master, a name ==
-    // that arrangement (proposal 09 D21). Serialized as one qualified
-    // `container` attribute ("Drums:1"), so a master-rooted asset writes
-    // exactly what it always wrote.
-    QString    containerRoot_;
+    // Which ROOT containerPath_ is relative to lives in SAction::pathRoot_:
+    // empty == the master, a name == that arrangement (proposal 09 D21).
+    // Serialized as one qualified `container` attribute ("Drums:1"), so a
+    // master-rooted asset writes exactly what it always wrote.
+    //
+    // Moved off a private containerRoot_ by QBX-249 with the verbs that were
+    // BROKEN by having one. This verb's inverse (SRemoveAssetAction) names an
+    // asset rather than a path, so it was not among them -- but a root the
+    // funnels cannot see is the defect, not its symptom, and one of these
+    // left behind is how the class comes back.
     QList<int> containerPath_;
     offset_t   startOffset_ = 0;
     length_t   duration_    = 0;

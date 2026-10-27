@@ -50,10 +50,11 @@ SApplyResult SSetLaneHiddenAction::apply( SProject *project )
     if( clear_ ) lane->clearLaneHidden();
     else         lane->setLaneHidden( hidden_ );
 
-    SSetLaneHiddenAction *inverse =
-        new SSetLaneHiddenAction( trackPath_, wasHidden, !wasExplicit );
-    inverse->pathRoot_ = pathRoot_;
-    return { true, inverse };
+    // The root is NOT copied here: applyPropagatingRoot() does it for every
+    // inverse in the tree, and hand-copying it hid the fact that this class's
+    // own pathRoot_ shadowed the base's (QBX-249).
+    return { true, new SSetLaneHiddenAction( trackPath_, wasHidden,
+                                             !wasExplicit ) };
 }
 
 void SSetLaneHiddenAction::writeXml( QDomElement &elem ) const

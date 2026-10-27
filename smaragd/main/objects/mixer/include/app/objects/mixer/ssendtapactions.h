@@ -68,12 +68,19 @@ public:
                QStringLiteral( "enabled" ), QStringLiteral( "arrangement" ) }; }
 
 private:
+    // THE ROOT IS SAction::pathRoot_, spelled as an `arrangement` attribute
+    // because these verbs take a NAME rather than a path (QBX-249). It used to
+    // be a member of this class, which is how add-track came to delete a
+    // MASTER lane on undo: a root the funnels cannot see is dropped by
+    // applyPropagatingRoot() and ignored by setPathRoot(). These three verbs
+    // were CORRECT with a private member -- they pass it to every inverse by
+    // hand -- and are migrated anyway, so that "the root lives in pathRoot_"
+    // is a rule with no exceptions for a checker to have to carry.
     QString track_;
     QString dest_;
     double  levelDb_ = 0.0;
     bool    preFader_ = false;
     bool    enabled_ = true;
-    QString arrangement_;
 };
 
 class SRemoveSendAction : public SAction {
@@ -91,9 +98,8 @@ public:
                QStringLiteral( "arrangement" ) }; }
 
 private:
-    QString track_;
+    QString track_;             // the root is SAction::pathRoot_ (QBX-249)
     QString dest_;
-    QString arrangement_;
 };
 
 /**
@@ -122,9 +128,8 @@ public:
     void setEnabled( bool v )    { enabled_ = v;  hasEnabled_ = true; }
 
 private:
-    QString track_;
+    QString track_;             // the root is SAction::pathRoot_ (QBX-249)
     QString dest_;
-    QString arrangement_;
     double  levelDb_ = 0.0;
     bool    preFader_ = false;
     bool    enabled_ = true;

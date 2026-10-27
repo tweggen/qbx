@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-249: AN INVERSE ACTS ON THE SAME ROOT AS ITS FORWARD ACTION.
+
+  saction.h already funnels that rule through applyPropagatingRoot(), which
+  copies `a->pathRoot()` onto every inverse. The funnel only works for an
+  action whose root IS in pathRoot_: `add-sample` kept its own `arrangement_`
+  member, so pathRoot() answered "the master" however the path was spelled,
+  and the SRemoveSampleAction it hands back removed a clip from the MASTER.
+
+  WHY THE FIXTURE LOOKS LIKE THIS. Index {0} exists in every root, and so does
+  child {0,0} once both lanes carry a clip. The master is therefore given a
+  clip at exactly the address the arrangement's edit will create, which is the
+  one configuration in which a mis-rooted undo is invisible: it takes back a
+  clip, at the right index, that reads as plausible. Both halves are asserted
+  on every line, because only the PAIR can tell the two roots apart.
+
+  THE BITING ARM is the pair after the undo. Measured on a main baseline
+  (d14d5522) before the fix:
+
+      assert-clip-window: no clip at 0,0          <- the master's clip, GONE
+      assert-clip-window Drums:0,0 ... expectReject failed
+
+  Fixture: test_sawtooth.wav, 4 s, amplitude ramp 0 to 0.8.
+-->
+<SActionScript version="1" name="arrangement_inverse_lands_in_its_own_root">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="DrumLane"/>
+
+    <!-- The confusable baseline: a lane at index 0 in both roots, a clip on
+         the master's, none yet on the arrangement's. -->
+    <assert-clip-window clip="0,0" startTime="0"/>
+    <assert-clip-window clip="Drums:0,0" expectReject="true"/>
+
+    <!-- The edit, in the ARRANGEMENT. -->
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-clip-window clip="Drums:0,0" startTime="0"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+
+    <!-- AND ITS UNDO, which must take back the arrangement's clip and leave
+         the master's alone. This is the pair that fails without the fix. -->
+    <undo/>
+    <assert-clip-window clip="Drums:0,0" expectReject="true"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+
+    <!-- Redo puts it back where it was, in the arrangement. -->
+    <redo/>
+    <assert-clip-window clip="Drums:0,0" startTime="0"/>
+    <assert-clip-window clip="0,0" startTime="0"/>
+  </actions>
+
+</SActionScript>

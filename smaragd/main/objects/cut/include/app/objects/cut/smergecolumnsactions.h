@@ -154,7 +154,11 @@ public:
     /** The recipe, borrowed by the inverse through a back-pointer. */
     const QList<Operand> &operands() const { return operands_; }
     const QList<int>     &lanePath() const { return lanePath_; }
-    const QString        &pathRoot() const { return pathRoot_; }
+    // pathRoot() is SAction's. It used to be redeclared here over a pathRoot_
+    // of this class's own, which SHADOWED the base's pair: readXml wrote ours,
+    // setPathRoot() wrote the base's, and applyPropagatingRoot() read the
+    // base's -- so a root stamped from outside (SEventPassVerbs::emitVerb, the
+    // way objects/midi reaches this verb) was silently dropped. QBX-249.
 
     /** Drop the column pins, after the inverse has re-linked them. */
     void releasePins();
@@ -169,7 +173,6 @@ public:
 private:
     bool hasExtent() const { return extentLen_ >= 0; }
 
-    QString          pathRoot_;
     QList<QList<int>> clipPaths_;
     /**
      * THE COLUMN'S EXTENT WHEN THE CALLER NAMES ONE (plan 53 D4 (a)): `C_g`,

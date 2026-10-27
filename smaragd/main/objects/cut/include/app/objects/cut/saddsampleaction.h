@@ -44,11 +44,17 @@ public:
 
 private:
     QList<int> trackPath_ = { 0 };
-    // The root trackPath_ is relative to: empty == the master, a name == that
-    // arrangement (proposal 09 D21). Parsed out of a qualified trackPath
-    // ("Drums:0"), or taken from the `arrangement` attribute when the legacy
-    // trackIndex spelling is used.
-    QString    arrangement_;
+    // THE ROOT trackPath_ IS RELATIVE TO IS SAction::pathRoot_: empty == the
+    // master, a name == that arrangement (proposal 09 D21). It is parsed out
+    // of a qualified trackPath ("Drums:0") by parseInto(), or taken from the
+    // `arrangement` attribute when the legacy trackIndex spelling is used.
+    //
+    // IT USED TO BE A PRIVATE arrangement_ HERE, and that cost two things
+    // (QBX-249). applyPropagatingRoot() copied an EMPTY pathRoot() onto the
+    // SRemoveSampleAction inverse, so undoing an arrangement-side add-sample
+    // deleted the MASTER's clip at the same address and left the
+    // arrangement's (measured). And writeXml wrote the path BARE, so the root
+    // did not survive serialization at all.
     QString filePath_;
     offset_t timePos_ = 0;
 

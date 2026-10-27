@@ -50,8 +50,10 @@ static QString generateTrackName()
 }
 
 SAddTrackAction::SAddTrackAction(int index, const QString &arrangement)
-    : index_(index), arrangement_(arrangement)
+    : index_(index)
 {
+    // The BASE's member, not one of ours: see the header (QBX-249).
+    setPathRoot(arrangement);
 }
 
 SApplyResult SAddTrackAction::apply(SProject *project)
@@ -63,7 +65,7 @@ SApplyResult SAddTrackAction::apply(SProject *project)
     // The addressed root: the master, or a named arrangement (D21). An
     // unknown name is REFUSED rather than resolved against the master -- see
     // splacements::rootNamed.
-    SObject *root = splacements::rootNamed(project, arrangement_);
+    SObject *root = splacements::rootNamed(project, pathRoot_);
     SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
     if (!mixer) {
         return {false, nullptr};
@@ -91,10 +93,14 @@ SApplyResult SAddTrackAction::apply(SProject *project)
 
     // Create inverse action: remove at the same index. add-track always appends
     // at the MIXER's top level, so a one-element path is the whole address.
-    // NOTE: the inverse is master-rooted until remove-track learns the
-    // qualifier (M2). Undo of an arrangement-side add-track is therefore not
-    // yet exact -- and this is why M2 migrates the whole verb set rather than
-    // the two verbs a gate happens to need.
+    //
+    // THE ROOT IS DELIBERATELY NOT SET HERE. applyPropagatingRoot() copies
+    // this action's pathRoot() onto the inverse, and that funnel is the one
+    // place the rule lives for all 83 inverse-construction sites in the tree
+    // (saction.h: "a funnel cannot be forgotten"). It only reaches this verb
+    // because the root is in pathRoot_ now; while it sat in a private member
+    // the funnel read an empty root and the undo deleted a MASTER lane.
+    // Gated by arrangement_undo_checks_every_root.qxa (QBX-249).
     SAction *inverse = new SRemoveTrackAction(QList<int>{ actualIndex });
 
     return {true, inverse};
@@ -103,13 +109,19 @@ SApplyResult SAddTrackAction::apply(SProject *project)
 void SAddTrackAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("index", index_);
-    if (!arrangement_.isEmpty()) elem.setAttribute("arrangement", arrangement_);
+    if (!pathRoot_.isEmpty()) elem.setAttribute("arrangement", pathRoot_);
 }
 
 bool SAddTrackAction::readXml(const QDomElement &elem, int /*version*/)
 {
     index_ = elem.attribute("index", "-1").toInt();
-    arrangement_ = elem.attribute("arrangement");
+    // FIRST ROOT WINS, which is strackpath::parseInto()'s rule spelled for an
+    // attribute: a caller that already stamped a root with setPathRoot() keeps
+    // it. That is how a module with no include path to this type emits the
+    // verb -- SActionRegistry::create, setPathRoot, then readXml
+    // (SEventPassVerbs::emitVerb).
+    const QString arrangement = elem.attribute("arrangement");
+    if (!arrangement.isEmpty() && pathRoot_.isEmpty()) setPathRoot(arrangement);
     return true;
 }
 

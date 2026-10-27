@@ -94,7 +94,11 @@ moving one is a data migration, silently. Its **job 1** forbids new
 question — **which root does this mean?** The first catches a root-qualified
 path parsed with `stringToPath()`, which splits on commas and so silently
 yields a MASTER-rooted path; the second catches code that resolves the master
-outright. Both carry marker idioms (`check_root_resolution: master — <why>`,
+outright. `check_pathroot` is itself two jobs, as `check_product_name` is: its
+**job 2** (QBX-249) refuses an `SAction` subclass that keeps its root anywhere
+but the base's `pathRoot_` — `applyPropagatingRoot()` and `setPathRoot()` read
+that one member, so a root held beside it is dropped by both, which is how one
+undo of an arrangement-side `add-track` came to delete a MASTER lane. Both carry marker idioms (`check_root_resolution: master — <why>`,
 and `suspect <TICKET>` for a known defect that is counted and printed, not
 silenced). The rule and the history are in `smaragd/main/model/CONTRACT.md`.
 `check_pathroot` existed from 2026-08-20 and was not in this list until

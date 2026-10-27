@@ -25,9 +25,14 @@ public:
 
 private:
     QString assetName_;
-    // Which ROOT trackPath_ addresses: empty == the master, a name == that
-    // arrangement (proposal 09 D21). Serialized inside the qualified trackPath.
-    QString    destRoot_;
+    // Which ROOT trackPath_ addresses lives in SAction::pathRoot_: empty ==
+    // the master, a name == that arrangement (proposal 09 D21). Serialized
+    // inside the qualified trackPath.
+    //
+    // It used to be a private destRoot_ here, where applyPropagatingRoot()
+    // could not see it, so the SRemoveAssetPlacementAction inverse was
+    // MASTER-rooted and undoing an arrangement-side place-asset removed a
+    // placement from the master's lane at the same index (QBX-249).
     QList<int> trackPath_;
     offset_t timePos_ = 0;
 };

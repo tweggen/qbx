@@ -25,6 +25,24 @@ Invariants:
 5. Submission is synchronous today (drain on the GUI thread); do not assume
    that in action code — it may move to the engine thread (Phase 2 of
    proposal 03).
+6. **THE ROOT AN ACTION'S PATHS ADDRESS LIVES IN `SAction::pathRoot_`, AND
+   NOWHERE ELSE** (proposal 09 D21; enforced by `check_pathroot` job 2 since
+   QBX-249). Two funnels read that one member and nothing else:
+   `applyPropagatingRoot()` copies `a->pathRoot()` onto every inverse — the
+   one place that rule lives for all 83 inverse-construction sites in the
+   tree — and `setPathRoot()` is what `stimeline::submitFor()`,
+   `SMixerStrip::submit_()` and `SEventPassVerbs::emitVerb()` stamp an action
+   with. An action that keeps its root in a member of its own is invisible to
+   both, **and both failures are silent**: `add-track` held an
+   `arrangement_`, so the `SRemoveTrackAction` it handed back was
+   master-rooted and one undo of an arrangement-side `add-track` DELETED A
+   MASTER LANE while leaving the arrangement's standing, and `setPathRoot()`
+   was ignored so "New track" in an arrangement tab added the lane to the
+   master. A base member cannot go in a member-init list, so a constructor
+   taking an `arrangement` argument calls `setPathRoot()` in its BODY. Read
+   `pathRoot()` rather than redeclaring either — a derived `pathRoot_` or
+   `pathRoot()` SHADOWS the base's non-virtual pair, which `merge-columns`
+   and `set-lane-hidden` both did.
 
 How to test: action_roundtrip_test.exe; every qxa case exercises the
 submit/apply/reject path.

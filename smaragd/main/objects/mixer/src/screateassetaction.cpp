@@ -25,12 +25,12 @@ SCreateAssetAction::SCreateAssetAction( const QList<int> &containerPath,
                                         offset_t startOffset, length_t duration,
                                         const QString &assetName,
                                         const QString &containerRoot )
-    : containerRoot_( containerRoot ),
-      containerPath_( containerPath ),
+    : containerPath_( containerPath ),
       startOffset_( startOffset ),
       duration_( duration ),
       assetName_( assetName )
 {
+    setPathRoot( containerRoot );   // the BASE's member (QBX-249)
 }
 
 SApplyResult SCreateAssetAction::apply( SProject *project )
@@ -43,7 +43,7 @@ SApplyResult SCreateAssetAction::apply( SProject *project )
     // (proposal 09 D21): "0" is the master's 1st lane, "Drums:" is the Drums
     // root itself, "Drums:1" its 2nd lane. An unknown name is refused rather
     // than resolved against the master.
-    SObject *root = splacements::rootNamed( project, containerRoot_ );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if( !root || !root->isPathContainer() ) {
         return { false, nullptr };
     }
@@ -77,7 +77,7 @@ SApplyResult SCreateAssetAction::apply( SProject *project )
 void SCreateAssetAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "container",
-                       qualifiedToString( containerRoot_, containerPath_ ) );
+                       qualifiedToString( pathRoot_, containerPath_ ) );
     elem.setAttribute( "startOffset", QString::fromStdString( Fraction(startOffset_, 1).toString() ) );
     elem.setAttribute( "duration", QString::fromStdString( Fraction(duration_, 1).toString() ) );
     elem.setAttribute( "assetName", assetName_ );
@@ -86,9 +86,9 @@ void SCreateAssetAction::writeXml( QDomElement &elem ) const
 bool SCreateAssetAction::readXml( const QDomElement &elem, int /*version*/ )
 {
     {
-        const QualifiedPath q = parseQualified( elem.attribute( "container" ) );
-        containerRoot_ = q.root;
-        containerPath_ = q.idx;
+        // parseInto() sets pathRoot_ and leaves a root a caller already
+        // stamped alone (first root wins).
+        containerPath_ = parseInto( pathRoot_, elem.attribute( "container" ) );
     }
     startOffset_   = (offset_t) parseFractionOrDouble( elem.attribute( "startOffset", "0" ).toStdString() ).toDouble();
     duration_      = (length_t) parseFractionOrDouble( elem.attribute( "duration", "0" ).toStdString() ).toDouble();
