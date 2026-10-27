@@ -355,25 +355,156 @@ double SStdMixer::sendBusInputLevelDb( int k, int i ) const
 
 namespace {
 
-/// True when `from` reaches `to` by following the ACCEPTED send edges
-/// (`fed[x]` = the lanes x feeds). Proposal 47 M3.
-bool sendReaches( const QHash<SObject *, QList<SObject *> > &fed,
-                  SObject *from, const SObject *to )
+/// The routing graph's nodes are lane POINTERS, spelled opaquely so the graph
+/// type stays pure (app/model/sroutinggraph.h). These two are the only casts.
+sroute::Node nodeOf( const SObject *o ) { return static_cast<sroute::Node>( o ); }
+SObject *objOf( sroute::Node n )
 {
-    QSet<const SObject *> seen;
-    QList<SObject *> work;
-    work.append( from );
-    while( !work.isEmpty() ) {
-        SObject *cur = work.takeLast();
-        if( !cur || seen.contains( cur ) ) continue;
-        seen.insert( cur );
-        if( cur == to ) return true;
-        for( SObject *nxt : fed.value( cur ) ) work.append( nxt );
+    return const_cast<SObject *>( static_cast<const SObject *>( n ) );
+}
+
+/// Containment edges under `lane`, depth-first in child order.
+void appendContainment( SObject *lane, QList<sroute::Edge> &out )
+{
+    for( SLink *lk : lane->childLinks() ) {
+        if( !lk ) continue;
+        SObject &child = lk->getSObject();
+        if( !child.isLane() ) continue;
+        out.append( { nodeOf( &child ), nodeOf( lane ), sroute::EdgeKind::Containment } );
+        appendContainment( &child, out );
     }
-    return false;
 }
 
 }  // namespace
+
+QList<sroute::Edge> SStdMixer::routingCandidates_( bool enabledOnly ) const
+{
+    QList<sroute::Edge> out;
+
+    // 1. CONTAINMENT. Never dropped -- the lane tree is a tree -- but it is in
+    //    the graph because proposal 55 D7's cycle shapes need it: keying a
+    //    track from its own folder, or placing a return inside its own source,
+    //    is a cycle with no routing edge in it. With sends alone it can close
+    //    nothing (a send edge only ever enters a send lane, and a send lane is
+    //    in no folder), which is why adding it changes no send behaviour.
+    for( SLink *lk : childLinks() ) {
+        if( !lk ) continue;
+        SObject &top = lk->getSObject();
+        if( top.isLane() ) appendContainment( &top, out );
+    }
+
+    // 2. SEND, in the order proposal 47 M3's deterministic break has always
+    //    used: lane by lane in index order (= file order), and for each lane
+    //    its sources in source order. The MASTER is deliberately absent -- its
+    //    output is the sum that already contains every send lane, which is why
+    //    add-send refuses it by role.
+    QList<SObject *> sources;
+    for( SLink *lk : childLinks() )
+        if( lk ) sources.append( &lk->getSObject() );
+    for( STrack *lane : sendLanes_ )
+        if( lane ) sources.append( static_cast<SObject *>( lane ) );
+
+    for( STrack *lane : sendLanes_ ) {
+        if( !lane ) continue;
+        for( SObject *src : sources ) {
+            if( src == static_cast<SObject *>( lane ) ) continue;  // no self
+            const SSendTap *t = src->sendTap( lane->getSName() );
+            if( !t ) continue;
+            if( enabledOnly && !t->enabled ) continue;
+            out.append( { nodeOf( src ), nodeOf( lane ), sroute::EdgeKind::Send } );
+        }
+    }
+
+    // 3. AUX and KEY edges follow here (proposal 55 M2, M4).
+    return out;
+}
+
+sroute::Graph SStdMixer::routingGraph() const
+{
+    sroute::Graph g;
+    for( const sroute::Edge &e : routingCandidates_( false ) ) g.add( e );
+    return g;
+}
+
+sroute::Graph SStdMixer::acceptedRoutingGraph_( QList<sroute::Edge> *dropped ) const
+{
+    sroute::Graph g;
+    const QList<sroute::Edge> d = sroute::acceptInOrder( g, routingCandidates_( true ) );
+    if( dropped ) *dropped = d;
+    return g;
+}
+
+void SStdMixer::invalidateRoutingDependents(
+    const QList<QPair<SObject *, QList<SDirtyRange> > > &bumped, bool whole )
+{
+    // T8: with no send lane there is no routing edge, nothing to build and
+    // nothing to bump -- the commonest project pays one emptiness test.
+    if( sendLanes_.isEmpty() || bumped.isEmpty() ) return;
+
+    // THE WIRED GRAPH, not the model's: what is followed is what the pass
+    // actually connected, so a dropped cycle edge is not followed either. It
+    // is acyclic by construction; the bookkeeping below guards the walk anyway.
+    const sroute::Graph g = acceptedRoutingGraph_( nullptr );
+
+    // What has been handed to each dependent so far. A dependent reached from
+    // two bumped lanes gets the UNION of their ranges, and only a range it has
+    // not had yet is passed on -- which is also what terminates the walk.
+    QSet<SObject *>                         wholeDone;
+    QHash<SObject *, QList<SDirtyRange> >   rangesDone;
+
+    QList<QPair<SObject *, QList<SDirtyRange> > > work = bumped;
+    while( !work.isEmpty() ) {
+        const QPair<SObject *, QList<SDirtyRange> > cur = work.takeFirst();
+        if( !cur.first ) continue;
+        for( const sroute::Edge &e : g.edgesFrom( nodeOf( cur.first ) ) ) {
+            // Containment is the walk's own job and has already been done.
+            if( e.kind == sroute::EdgeKind::Containment ) continue;
+            SObject *dep = objOf( e.to );
+
+            QList<SDirtyRange> fresh;
+            if( whole ) {
+                if( wholeDone.contains( dep ) ) continue;
+                wholeDone.insert( dep );
+            } else {
+                QList<SDirtyRange> &done = rangesDone[dep];
+                for( const SDirtyRange &r : cur.second ) {
+                    if( r.end <= r.start ) continue;
+                    bool seen = false;
+                    for( const SDirtyRange &d : done )
+                        if( d.start == r.start && d.end == r.end ) { seen = true; break; }
+                    if( seen ) continue;
+                    done.append( r );
+                    fresh.append( r );
+                }
+                if( fresh.isEmpty() ) continue;
+            }
+
+            // A SEND LANE: its bus is ours, its chain, gain stage and rewire
+            // are its own. Both go stale over the same range -- a send lane
+            // sits in the mixer at the same positions as its sources, so no
+            // mapping is needed (the D11 delegation's argument). The master
+            // sum it feeds was bumped by the containment walk that found the
+            // edit, since this mixer is that walk's root.
+            const int k = sendLanes_.indexOf( static_cast<STrack *>( dep ) );
+            if( k >= 0 ) {
+                STrack *lane = sendLanes_[k];
+                std::shared_ptr<twMixer> bus =
+                    k < sendBuses_.size() ? sendBuses_[k] : nullptr;
+                if( whole ) {
+                    if( bus ) bus->bumpContentEpoch();
+                    lane->bumpRenderChainEpoch();
+                } else {
+                    for( const SDirtyRange &r : fresh ) {
+                        if( bus ) bus->invalidatePagesInRange( r.start, r.end );
+                        lane->bumpRenderChainEpochRange( r.start, r.end );
+                    }
+                }
+            }
+            // ...and on, transitively: a send lane may feed a send lane.
+            work.append( { dep, whole ? QList<SDirtyRange>() : fresh } );
+        }
+    }
+}
 
 void SStdMixer::rewireSendBuses()
 {
@@ -398,20 +529,34 @@ void SStdMixer::rewireSendBuses()
     // ear came to disagree about a nested lane (timeline/CONTRACT inv. 10).
     const bool solo = ssolo::anySoloInTree( this );
 
-    // Every object that may carry a tap: the user tracks, and the send lanes
-    // themselves (send -> send is legal, subject to the verb's cycle walk).
-    // The MASTER is deliberately absent -- its output is the sum that already
-    // contains every send lane, which is why add-send refuses it by role.
-    QList<SObject *> sources;
-    for( SLink *lk : childLinks() )
-        if( lk ) sources.append( &lk->getSObject() );
-    for( STrack *lane : sendLanes_ )
-        if( lane ) sources.append( static_cast<SObject *>( lane ) );
-
-    // The edges accepted so far: fedLanes[x] is the set of lanes x feeds.
-    // Built as the lanes are wired, in index order, so the cycle break below
-    // is deterministic rather than dependent on edit order.
-    QHash<SObject *, QList<SObject *> > fedLanes;
+    // THE CYCLE BREAK, AND IT LIVES HERE RATHER THAN ONLY IN THE VERB
+    // (proposal 47 M3). `add-send` refuses a cycle, but the LOADER does not go
+    // through it: `<sends>` is read by SObject::readSends(), so a hand-edited
+    // or foreign .qxp can carry Alpha -> Beta -> Alpha and the verb never sees
+    // it.
+    //
+    // An edge is accepted only when it does not close a cycle among the edges
+    // ALREADY accepted, in the fixed order routingCandidates_ produces (lanes
+    // in index order = file order). That is deterministic and it drops
+    // exactly one edge of a cycle rather than both, which asking the full tap
+    // graph instead would do. Since proposal 55 M0 the walk is the shared
+    // sroute::Graph the verbs ask too, over containment + send (D7).
+    QList<sroute::Edge> dropped;
+    const sroute::Graph accepted = acceptedRoutingGraph_( &dropped );
+    for( const sroute::Edge &e : dropped ) {
+        if( e.kind != sroute::EdgeKind::Send ) continue;
+        const SObject *src  = objOf( e.from );
+        const SObject *lane = objOf( e.to );
+        TW_LOGW( "model",
+                 "[SEND] cycle: the tap from '%s' into '%s' is DROPPED "
+                 "-- '%s' already feeds '%s'. A send graph must be "
+                 "acyclic; add-send refuses one, a project file can "
+                 "still carry one.",
+                 src->getSName().toUtf8().constData(),
+                 lane->getSName().toUtf8().constData(),
+                 lane->getSName().toUtf8().constData(),
+                 src->getSName().toUtf8().constData() );
+    }
 
     for( int k = 0; k < sendLanes_.size(); ++k ) {
         STrack *lane = sendLanes_[k];
@@ -420,40 +565,17 @@ void SStdMixer::rewireSendBuses()
 
         bus->setChannels( (idx_t) channels_ );
 
-        // The taps addressing THIS lane, in source order, so an input index is
-        // stable for a given project rather than depending on the order edits
-        // happened to arrive in.
+        // The ACCEPTED taps addressing THIS lane, in source order (the order
+        // the candidates were accepted in), so an input index is stable for a
+        // given project rather than depending on the order edits arrived in.
         struct Feed { SObject *src; SSendTap tap; };
         QList<Feed> feeds;
-        for( SObject *src : sources ) {
-            if( src == static_cast<SObject *>( lane ) ) continue;  // no self
+        for( const sroute::Edge &e : accepted.edges() ) {
+            if( e.kind != sroute::EdgeKind::Send ) continue;
+            if( e.to != nodeOf( lane ) ) continue;
+            SObject *src = objOf( e.from );
             const SSendTap *t = src->sendTap( lane->getSName() );
-            if( !t || !t->enabled ) continue;
-
-            // THE CYCLE BREAK, AND IT LIVES HERE RATHER THAN ONLY IN THE VERB
-            // (proposal 47 M3). `add-send` refuses a cycle, but the LOADER
-            // does not go through it: `<sends>` is read by
-            // SObject::readSends(), so a hand-edited or foreign .qxp can
-            // carry Alpha -> Beta -> Alpha and the verb never sees it.
-            //
-            // Accept an edge only when it does not close a cycle among the
-            // edges ALREADY accepted, walking lanes in index order. That is
-            // deterministic (lane order is file order) and it drops exactly
-            // one edge of a cycle rather than both, which asking the full tap
-            // graph instead of the accepted one would do.
-            if( sendReaches( fedLanes, static_cast<SObject *>( lane ), src ) ) {
-                TW_LOGW( "model",
-                         "[SEND] cycle: the tap from '%s' into '%s' is DROPPED "
-                         "-- '%s' already feeds '%s'. A send graph must be "
-                         "acyclic; add-send refuses one, a project file can "
-                         "still carry one.",
-                         src->getSName().toUtf8().constData(),
-                         lane->getSName().toUtf8().constData(),
-                         lane->getSName().toUtf8().constData(),
-                         src->getSName().toUtf8().constData() );
-                continue;
-            }
-            fedLanes[src].append( static_cast<SObject *>( lane ) );
+            if( !t ) continue;
             feeds.append( { src, *t } );
         }
 

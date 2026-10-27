@@ -5,6 +5,7 @@
 //#include <qptrlist.h>
 
 #include "app/model/sobject.h"
+#include "app/model/sroutinggraph.h"
 // Complete type needed by the QPointer<STrack> members below (QPointer has to
 // see the QObject base). strack.h is a leaf-ish header — qobject + sobject.
 #include "app/objects/track/strack.h"
@@ -348,6 +349,26 @@ public slots:
      */
     void sendRoutingChanged();
 
+    /**
+     * THE ROUTING GRAPH AS THE USER HAS IT (proposal 55 D7): every
+     * containment edge of the lane tree and every send tap, enabled or not,
+     * cyclic or not -- a hand-edited file may carry a cycle, and a verb must
+     * see it to refuse the edge that would close another. Built on demand
+     * from the model; never cached, because it holds raw lane pointers.
+     *
+     * Verbs ask `routingGraph().wouldCloseCycle( from, to )`; the wiring pass
+     * builds the ACCEPTED subgraph from the same candidate list (see
+     * routingCandidates_), so the two layers cannot disagree about what a
+     * cycle is.
+     */
+    sroute::Graph routingGraph() const;
+
+    /// Proposal 55 D7: hand an edit's invalidation to the routing dependents
+    /// of every lane the containment walk bumped. See SObject's declaration.
+    void invalidateRoutingDependents(
+        const QList<QPair<SObject *, QList<SDirtyRange> > > &bumped,
+        bool whole ) override;
+
 
     /**
      * Remove the specified track.
@@ -413,6 +434,24 @@ private:
      * "survives a rewire" means.
      */
     void rewireSendBuses();
+
+    /**
+     * Proposal 55 D7: the routing edges in the pass's FIXED ORDER --
+     * containment first (child lane -> folder, depth-first in child order),
+     * then send edges lane by lane in index order, each lane's sources in
+     * source order (user tracks in child order, then send lanes). Aux and key
+     * edges follow sends when M2/M4 add them. `enabledOnly` drops disabled
+     * taps, which the pass never wires but a verb still sees.
+     *
+     * THE SOURCES ARE THE TOP-LEVEL TRACKS AND THE SEND LANES, as the send
+     * pass has always collected them (proposal 47 M1): a tap on a NESTED lane
+     * is stored but not wired. Kept exactly, because M0 changes no behaviour.
+     */
+    QList<sroute::Edge> routingCandidates_( bool enabledOnly ) const;
+
+    /// The accepted subgraph the pass wires, and the dropped edges in order.
+    sroute::Graph acceptedRoutingGraph_( QList<sroute::Edge> *dropped ) const;
+
     std::vector<std::shared_ptr<twMixer> > cpMixers_;
     std::shared_ptr<twRewire> cpRewire_;
     int nBusses_;

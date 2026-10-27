@@ -7,6 +7,7 @@
 #include <qtextstream.h>
 #include <QDomElement>
 #include <QList>
+#include <QPair>
 #include <QSet>
 #include <atomic>
 #include <mutex>
@@ -1092,7 +1093,8 @@ public slots:
      * multiple parents invalidates all of its containers. Returns whether the
      * subtree contains the target.
      */
-    bool invalidateRenderChainsContaining(SObject *target);
+    bool invalidateRenderChainsContaining(SObject *target,
+                                          QList<SObject *> *bumped = nullptr);
 
     /**
      * Entry point after an edit on this object: bump the render chains on
@@ -1176,7 +1178,33 @@ public:
      */
     bool invalidateRenderChainsContainingRange(
         SObject *target, offset_t targetStart, offset_t targetEnd,
-        QList<SDirtyRange> &rangesInSelf );
+        QList<SDirtyRange> &rangesInSelf,
+        QList<QPair<SObject *, QList<SDirtyRange> > > *bumped = nullptr );
+
+    /**
+     * PROPOSAL 55 D7: INVALIDATION FOLLOWS THE ROUTING GRAPH.
+     *
+     * The containment walk above bumps the chains that CONTAIN an edit. A lane
+     * whose output is read by a lane NOT above it -- a send lane fed by a tap on
+     * its chain or gain stage (47 D2), later a return track (55 D3) or a keyed
+     * insert (55 D5) -- is not on that path, so before M0 an edit on a send's
+     * SOURCE left the send lane serving pages frozen before the edit, silently
+     * (send_source_edit_heard.qxa measured it byte-identical).
+     *
+     * After the walk under a root has found the edit, the ROOT is handed the
+     * objects the walk bumped -- each with the dirty ranges in its OWN domain
+     * when `whole` is false, or ranges ignored and whole chains meant when it is
+     * true -- and hands the same ranges to their routing dependents,
+     * transitively. The default does nothing: only a root that owns routing (the
+     * mixer) has dependents to reach. The objects are the walk's, in its
+     * depth-first order; the caller adds the edited object itself when the walk
+     * could not find it (a system lane, D11).
+     */
+    virtual void invalidateRoutingDependents(
+        const QList<QPair<SObject *, QList<SDirtyRange> > > &bumped, bool whole )
+    {
+        (void) bumped; (void) whole;
+    }
 
     /**
      * Entry point after an edit affecting [start, end) of THIS object's

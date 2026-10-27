@@ -8,7 +8,7 @@ interface views implement.
 
 Public headers: app/model/{sobject,slink,sproject,sprojectprops,
 ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer,
-sclipwindow}.h
+sclipwindow,sroutinggraph}.h
 
 Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources,
 tw/events (SProject owns the twTempoMap — the single tempo authority — and
@@ -865,6 +865,27 @@ mirrors `SObject::serialize` body-for-body rather than hooking into it, so an
 inline child that is not repeated there is silently dropped on save with no
 error anywhere — gated by `qxa.send_tap_model`'s round trip, and watched
 failing by deleting exactly that one call.
+
+## The ROUTING GRAPH type and the routing hook on the invalidation walk (proposal 55 M0)
+
+`app/model/sroutinggraph.h` is a PURE graph over opaque node identities
+(`sroute::Node` is `const void *`, never dereferenced) with four edge kinds:
+containment, send, aux, key. `add()` takes any edge; `accept()` takes one only
+when it closes no cycle among the edges already in the graph (a self edge is a
+cycle of one); `acceptInOrder()` is the mixer pass's whole break algorithm,
+spelled once so `routinggraph_test` drives exactly what the pass runs. It lives
+here because both the verbs and the pass (`objects/mixer`) must see it and
+naming no object type keeps it legal in this layer.
+
+**The invalidation walk reports what it bumped.**
+`invalidateRenderChainsContaining( target, bumped )` and its range twin append
+every object whose chain they bumped (with the ranges in that object's own
+domain), and `invalidateRenderPath[Range]()` hands the list to the ROOT's
+`invalidateRoutingDependents( bumped, whole )`. The default does nothing; only
+a root that owns routing (`SStdMixer`, `objects/mixer` inv. 29) overrides it.
+When the walk cannot find the edited object and falls to `renderPathOwner()`
+(45 D11, a system lane), the owner is handed the object itself as well, so a
+send lane's OWN routing dependents are reached from an edit on that lane.
 
 ## The recorder's TAKE NAME, and the one test for "this take came from a recording" (plan 53 §8 P4, D5, QBX-182)
 

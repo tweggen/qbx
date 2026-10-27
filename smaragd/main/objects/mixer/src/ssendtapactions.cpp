@@ -2,7 +2,6 @@
 
 #include <QDebug>
 #include <QDomElement>
-#include <QSet>
 
 #include "app/actions/sactionregistry.h"
 #include "app/model/splacements.h"
@@ -61,27 +60,6 @@ bool resolve( SProject *project, const QString &verb, const QString &track,
     return true;
 }
 
-/// True when `from` can already reach `to` by following existing taps, so
-/// adding `to -> from` would close a cycle. The graph is at most
-/// (lanes x sends) edges and is walked on an EDIT, never per page.
-bool reaches( SStdMixer *mixer, SObject *from, const SObject *to )
-{
-    QSet<const SObject *> seen;
-    QList<SObject *> work;
-    work.append( from );
-    while( !work.isEmpty() ) {
-        SObject *cur = work.takeLast();
-        if( !cur || seen.contains( cur ) ) continue;
-        seen.insert( cur );
-        if( cur == to ) return true;
-        for( const SSendTap &t : cur->sendTaps() ) {
-            if( STrack *next = mixer->sendLaneNamed( t.dest ) )
-                work.append( static_cast<SObject *>( next ) );
-        }
-    }
-    return false;
-}
-
 /// D6's refusals that only apply when a tap is being CREATED or re-pointed.
 bool routingIsLegal( const QString &verb, const Resolved &r )
 {
@@ -105,7 +83,13 @@ bool routingIsLegal( const QString &verb, const Resolved &r )
             << "output is the sum that already contains every send lane";
         return false;
     }
-    if( reaches( r.mixer, static_cast<SObject *>( r.dest ), r.source ) ) {
+    // THE SHARED WALK (proposal 55 D7, M0): the same sroute::Graph the wiring
+    // pass breaks cycles with, over the MODEL's edges -- every tap, enabled or
+    // not, and containment -- so the verb and the pass cannot disagree about
+    // what a cycle is. Walked on an EDIT, never per page.
+    if( r.mixer->routingGraph().wouldCloseCycle(
+            static_cast<const SObject *>( r.source ),
+            static_cast<const SObject *>( r.dest ) ) ) {
         qWarning().noquote()
             << verb << ": refused, this would create a send CYCLE --" << r.dest->getSName()
             << "already reaches" << r.source->getSName()
