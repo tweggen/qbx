@@ -31,7 +31,7 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
     // (proposal 09 D21): "1" is the master's 2nd lane, "Drums:0" the Drums
     // arrangement's 1st. An unknown name is refused, never resolved against
     // the master.
-    SObject *root = splacements::rootNamed( project, destRoot_ );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *mixer = root;
     if (!mixer) {
         return {false, nullptr};
@@ -114,18 +114,17 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
 void SPlaceAssetAction::writeXml(QDomElement &elem) const
 {
     elem.setAttribute("assetName", assetName_);
-    elem.setAttribute("trackPath", qualifiedToString(destRoot_, trackPath_));
+    elem.setAttribute("trackPath", qualifiedToString(pathRoot_, trackPath_));
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
 }
 
 bool SPlaceAssetAction::readXml(const QDomElement &elem, int /*version*/)
 {
     assetName_ = elem.attribute("assetName", "");
-    {
-        const QualifiedPath q = parseQualified( elem.attribute("trackPath", "") );
-        destRoot_  = q.root;
-        trackPath_ = q.idx;
-    }
+    // parseInto() rather than parseQualified() + an assignment: it leaves a
+    // root the caller already stamped alone (first root wins), where an
+    // assignment would CLEAR it for a bare path. QBX-249.
+    trackPath_ = parseInto( pathRoot_, elem.attribute("trackPath", "") );
     // Preserve precision for large offset_t values by checking denominator
     Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());
     if (frac.denominator == 1) {

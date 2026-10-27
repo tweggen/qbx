@@ -25,16 +25,17 @@ SStdMixer *mixerFor( SProject *project, const QString &arrangement )
 
 SAddSendLaneAction::SAddSendLaneAction( const QString &name,
                                         const QString &arrangement )
-    : sendName_( name ), arrangement_( arrangement )
+    : sendName_( name )
 {
+    setPathRoot( arrangement );   // the BASE's member (QBX-249)
 }
 
 SApplyResult SAddSendLaneAction::apply( SProject *project )
 {
-    SStdMixer *mixer = mixerFor( project, arrangement_ );
+    SStdMixer *mixer = mixerFor( project, pathRoot_ );
     if( !mixer ) {
         qWarning() << "add-send-lane: no mixer root for arrangement"
-                   << arrangement_;
+                   << pathRoot_;
         return { false, nullptr };
     }
     if( sendName_.trimmed().isEmpty() ) {
@@ -58,19 +59,26 @@ SApplyResult SAddSendLaneAction::apply( SProject *project )
     SAppContext::get().rewireSpeaker();
     mixer->notifyTreeChanged();
 
-    return { true, new SRemoveSendLaneAction( sendName_, arrangement_ ) };
+    return { true, new SRemoveSendLaneAction( sendName_, pathRoot_ ) };
 }
 
 void SAddSendLaneAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "sendName", sendName_ );
-    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !pathRoot_.isEmpty() ) elem.setAttribute( "arrangement", pathRoot_ );
 }
 
 bool SAddSendLaneAction::readXml( const QDomElement &elem, int )
 {
     sendName_    = elem.attribute( "sendName" );
-    arrangement_ = elem.attribute( "arrangement" );
+    // FIRST ROOT WINS, which is strackpath::parseInto()'s rule spelled for an
+    // attribute: a root the caller already stamped with setPathRoot() survives
+    // an element that names none (QBX-249).
+    {
+        const QString arrangement = elem.attribute( "arrangement" );
+        if( !arrangement.isEmpty() && pathRoot_.isEmpty() )
+            setPathRoot( arrangement );
+    }
     return true;
 }
 
@@ -83,8 +91,9 @@ static const bool s_reg_add_send_lane = (
 
 SRemoveSendLaneAction::SRemoveSendLaneAction( const QString &name,
                                               const QString &arrangement )
-    : sendName_( name ), arrangement_( arrangement )
+    : sendName_( name )
 {
+    setPathRoot( arrangement );   // the BASE's member (QBX-249)
 }
 
 SRemoveSendLaneAction::~SRemoveSendLaneAction()
@@ -109,10 +118,10 @@ void SRemoveSendLaneAction::releaseHeld()
 
 SApplyResult SRemoveSendLaneAction::apply( SProject *project )
 {
-    SStdMixer *mixer = mixerFor( project, arrangement_ );
+    SStdMixer *mixer = mixerFor( project, pathRoot_ );
     if( !mixer ) {
         qWarning() << "remove-send-lane: no mixer root for arrangement"
-                   << arrangement_;
+                   << pathRoot_;
         return { false, nullptr };
     }
     STrack *lane = mixer->sendLaneNamed( sendName_ );
@@ -159,7 +168,7 @@ SApplyResult SRemoveSendLaneAction::apply( SProject *project )
     // argument about the AUDIO and not about the user's work, so it does not
     // excuse losing it.
     return { true, new SRestoreSendLaneAction( this, sendName_,
-                                               arrangement_ ) };
+                                               pathRoot_ ) };
 }
 
 // --- restore-send-lane ------------------------------------------------------
@@ -167,17 +176,18 @@ SApplyResult SRemoveSendLaneAction::apply( SProject *project )
 SRestoreSendLaneAction::SRestoreSendLaneAction( SRemoveSendLaneAction *owner,
                                                 const QString &name,
                                                 const QString &arrangement )
-    : owner_( owner ), sendName_( name ), arrangement_( arrangement )
+    : owner_( owner ), sendName_( name )
 {
+    setPathRoot( arrangement );   // the BASE's member (QBX-249)
 }
 
 SApplyResult SRestoreSendLaneAction::apply( SProject *project )
 {
     if( !owner_ ) return { false, nullptr };
-    SStdMixer *mixer = mixerFor( project, arrangement_ );
+    SStdMixer *mixer = mixerFor( project, pathRoot_ );
     if( !mixer ) {
         qWarning() << "restore-send-lane: no mixer root for arrangement"
-                   << arrangement_;
+                   << pathRoot_;
         return { false, nullptr };
     }
     STrack *lane = owner_->heldLane();
@@ -195,7 +205,7 @@ SApplyResult SRestoreSendLaneAction::apply( SProject *project )
     SAppContext::get().rewireSpeaker();
     mixer->notifyTreeChanged();
 
-    return { true, new SRemoveSendLaneAction( sendName_, arrangement_ ) };
+    return { true, new SRemoveSendLaneAction( sendName_, pathRoot_ ) };
 }
 
 void SRestoreSendLaneAction::writeXml( QDomElement &elem ) const
@@ -203,7 +213,7 @@ void SRestoreSendLaneAction::writeXml( QDomElement &elem ) const
     // Never serialized standalone (created live as a removal's inverse); the
     // address is recorded for completeness.
     elem.setAttribute( "sendName", sendName_ );
-    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !pathRoot_.isEmpty() ) elem.setAttribute( "arrangement", pathRoot_ );
 }
 
 bool SRestoreSendLaneAction::readXml( const QDomElement &, int )
@@ -223,13 +233,20 @@ bool SRestoreSendLaneAction::readXml( const QDomElement &, int )
 void SRemoveSendLaneAction::writeXml( QDomElement &elem ) const
 {
     elem.setAttribute( "sendName", sendName_ );
-    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !pathRoot_.isEmpty() ) elem.setAttribute( "arrangement", pathRoot_ );
 }
 
 bool SRemoveSendLaneAction::readXml( const QDomElement &elem, int )
 {
     sendName_    = elem.attribute( "sendName" );
-    arrangement_ = elem.attribute( "arrangement" );
+    // FIRST ROOT WINS, which is strackpath::parseInto()'s rule spelled for an
+    // attribute: a root the caller already stamped with setPathRoot() survives
+    // an element that names none (QBX-249).
+    {
+        const QString arrangement = elem.attribute( "arrangement" );
+        if( !arrangement.isEmpty() && pathRoot_.isEmpty() )
+            setPathRoot( arrangement );
+    }
     return true;
 }
 

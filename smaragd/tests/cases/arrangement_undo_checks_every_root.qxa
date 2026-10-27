@@ -1,39 +1,39 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   QBX-246: verify-undo reads EVERY root, not the master alone.
+  QBX-249: and an arrangement-side add-track's inverse now lands in its own
+  root, which is what lets this case carry the fixture QBX-246 had to drop.
 
-  It used to capture the master's track count, undo everything, assert the
-  master was empty, redo, and assert the master's count had come back. A case
-  that built tracks inside an arrangement and undid them badly passed that: the
-  master's count had not moved, and nothing else was looked at.
+  WHAT verify-undo USED TO DO. It captured the master's track count, undid
+  everything, asserted the master was empty, redid, and asserted the master's
+  count had come back. A case that built tracks inside an arrangement and
+  undid them badly passed that: the master's count had not moved, and nothing
+  else was looked at. It now snapshots a count PER ROOT and compares the whole
+  map, so a root that fails to come back is a missing key rather than a count
+  nobody compares.
 
-  WHAT THIS CASE GATES: the ROOT SET half. `Drums` is created inside the undo
-  range, so after a full undo it must be GONE (create-arrangement's inverse is
-  remove-arrangement, which unregisters it) and after the matching redo it must
-  be BACK. The runner compares the whole map, so a root that fails to return is
-  a missing key rather than a count nobody compares.
+  WHAT THIS CASE GATES, in two halves:
 
-  WHY THE ARRANGEMENT IS EMPTY, which is the honest part. The obvious fixture
-  puts MORE tracks in the arrangement than in the master, so the two counts
-  cannot be confused. That fixture FAILS today, and not because of anything
-  QBX-246 changed: `SAddTrackAction`'s inverse is master-rooted (its own source
-  comment says so), so undoing an arrangement-side add-track removes a lane
-  from the MASTER and leaves the arrangement's standing. Measured: master 1 to
-  0, Drums 1 to 1 on a single undo. That is QBX-249, filed Critical, and the
-  richer fixture lands with its fix:
+    THE ROOT SET. `Drums` is created inside the undo range, so after a full
+    undo it must be GONE (create-arrangement's inverse unregisters it) and
+    after the matching redo it must be BACK.
+
+    THE COUNTS, which is QBX-249's half. The arrangement gets TWO lanes and
+    the master ONE, deliberately unequal: a mis-rooted inverse removes from
+    the wrong root, and with equal counts the arithmetic still adds up.
+
+  THE BITING ARM is the undo. Measured on a main baseline (d14d5522) before
+  the fix, with this fixture:
 
       verify-undo: after undo, root Drums has 2 track(s), expected 0
                    (every root: <master>=0,Drums=2)
 
-  So this case deliberately gates only what is correct today. It is not a
-  weaker gate hiding a known failure: the failure has a ticket and the exact
-  assertion to turn green is written in it.
-
-  This half has no watched-failing arm either, and that is worth stating:
-  failing it needs create-arrangement's undo or redo to stop restoring the
-  root, which nothing today does. What shows the new code is REACHED is the
-  sabotage recorded in the PR, plus QBX-249 itself, which the new comparison
-  found on its first run.
+  one undo of an arrangement-side add-track removed a lane from the MASTER and
+  left the arrangement's standing. The knock-on is why it stayed silent:
+  SRemoveArrangementAction refuses to drop a root that still holds lanes, with
+  good reason (its inverse rebuilds an EMPTY mixer), so the rest of the undo
+  then refused too and the project was left with the master emptied and the
+  arrangement intact. Nothing reported an error.
 -->
 <SActionScript version="1" name="arrangement_undo_checks_every_root">
 
@@ -43,12 +43,14 @@
     <add-track index="-1"/>
     <set-track-name trackPath="0" name="MasterLane"/>
 
-    <!-- Created INSIDE the undo range: its unregistration is the thing under
-         test. No tracks in it, for the reason in the header (QBX-249). -->
+    <!-- Created INSIDE the undo range: its unregistration is part of what is
+         under test, as are the two lanes put in it. -->
     <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
 
     <assert-track-count arrangement="" count="1"/>
-    <assert-track-count arrangement="Drums" count="0"/>
+    <assert-track-count arrangement="Drums" count="2"/>
   </actions>
 
   <verify-undo/>

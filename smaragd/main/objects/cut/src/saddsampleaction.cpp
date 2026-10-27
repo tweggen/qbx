@@ -35,7 +35,7 @@ SApplyResult SAddSampleAction::apply(SProject *project)
 
     // The addressed root (proposal 09 D21): whatever qualifier the trackPath
     // carried, else the `arrangement` attribute, else the master.
-    SObject *root = splacements::rootNamed( project, arrangement_ );
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if (!root || !root->isPathContainer()) {
         return {false, nullptr};
     }
@@ -111,7 +111,11 @@ SApplyResult SAddSampleAction::apply(SProject *project)
 
 void SAddSampleAction::writeXml(QDomElement &elem) const
 {
-    elem.setAttribute("trackPath", strackpath::pathToString(trackPath_));
+    // QUALIFIED, so the root survives a round trip: qualifiedToString("", idx)
+    // is the bare path, so a master-rooted add-sample serializes exactly as
+    // it always did and every golden is byte-unchanged (QBX-249).
+    elem.setAttribute("trackPath",
+                      strackpath::qualifiedToString(pathRoot_, trackPath_));
     elem.setAttribute("filePath", filePath_);
     elem.setAttribute("timePos", QString::fromStdString(Fraction(timePos_, 1).toString()));
     // Window attributes are written ONLY for the windowed form, so a plain
@@ -146,17 +150,19 @@ bool SAddSampleAction::readXml(const QDomElement &elem, int /*version*/)
         // A qualified spelling ("Drums:0,1") carries its own root; a bare
         // "0,1" still means the master, which is what keeps every existing
         // case unchanged.
-        const strackpath::QualifiedPath q =
-            strackpath::parseQualified( elem.attribute("trackPath") );
-        trackPath_   = q.idx;
-        arrangement_ = q.root;
+        // parseInto() is what SETS pathRoot_ from a qualified text path, and
+        // it leaves a root a caller already stamped alone (first root wins).
+        trackPath_ = strackpath::parseInto( pathRoot_,
+                                            elem.attribute("trackPath") );
     } else {
         trackPath_ = QList<int>{ elem.attribute("trackIndex", "0").toInt() };
     }
     // The index spelling has no place to put a qualifier, so it takes one as
     // its own attribute.
-    if (arrangement_.isEmpty())
-        arrangement_ = elem.attribute("arrangement");
+    if (pathRoot_.isEmpty()) {
+        const QString arrangement = elem.attribute("arrangement");
+        if (!arrangement.isEmpty()) setPathRoot(arrangement);
+    }
     filePath_ = elem.attribute("filePath", "");
     // Preserve precision for large offset_t values by checking denominator
     Fraction frac = parseFractionOrDouble(elem.attribute("timePos", "0").toStdString());

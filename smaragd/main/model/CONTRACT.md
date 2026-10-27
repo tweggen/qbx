@@ -112,6 +112,42 @@ disagree, and the pair would then describe different roots for one object.
 **Never re-derive the root by parsing `specOf()`'s string and resolving the
 name again** — ask `rootHolding()`.
 
+### Where the root LIVES, which is the other half (QBX-249)
+
+Asking `rootNamed()` instead of assuming the master is only half of it. The
+other half is WHICH MEMBER holds the answer, because two funnels read
+`SAction::pathRoot_` and nothing else: `applyPropagatingRoot()` copies
+`pathRoot()` onto every inverse, and `setPathRoot()` is what the arranger
+(`stimeline::submitFor`), the mixer strip and `SEventPassVerbs::emitVerb`
+stamp an action with. An action keeping its root in a member of its own passes
+`check_root_resolution` — it does call `rootNamed()` — and is still broken at
+both funnels.
+
+`add-track` held an `arrangement_`, and it cost both halves:
+
+* **the inverse.** `applyPropagatingRoot()` read an empty `pathRoot()`, so the
+  `SRemoveTrackAction` was MASTER-rooted: **one undo of an arrangement-side
+  `add-track` deleted a master lane** and left the arrangement's standing.
+  Silent, because `remove-arrangement` then correctly refused the
+  still-populated root (inv. 15 in `objects/mixer`), so the rest of the undo
+  refused too and the project was left with the master emptied.
+* **the forward gesture.** `setPathRoot()` was ignored, so "New track" in an
+  arrangement tab added the lane to the MASTER while the view then looked for
+  it in its own mixer.
+
+`add-sample` (whose undo destroyed the master's clip at the same address, and
+whose `writeXml` wrote the path BARE so the root did not survive
+serialization) and `place-asset` had the same defect. `merge-columns` and
+`set-lane-hidden` had the sibling form — a `pathRoot_` of their own SHADOWING
+the base's non-virtual pair, so `readXml` wrote one member and `setPathRoot()`
+the other.
+
+All ten verbs are on `SAction::pathRoot_` now, the six send verbs that were
+already correct included: **a rule with six exceptions is the shape that lets
+a class come back**, and `check_pathroot` job 2 therefore has no exemptions
+outside the testkit, where no root-carrying verb returns an inverse (measured)
+and nothing stamps one.
+
 ### `SProject::masterRoot()`, and why the rename was necessary
 
 It was `SProject::getRootComponent()` until QBX-242. `SObject::getRootComponent()`
@@ -183,7 +219,9 @@ qualified path that must REACH its arrangement, such as `trackPath="Drums:1"`
 at an index the master does not have.
 
 **`tools/check_pathroot.py` is the same class from the parsing side** and is now
-in `ci/gates.sh` too. It had not been: it was committed on 2026-08-20 by
+in `ci/gates.sh` too. It is TWO jobs in one checker since QBX-249, as
+`check_product_name` is: job 1 is the bare parse below, job 2 is "the root
+lives in `SAction::pathRoot_`" above. It had not been: it was committed on 2026-08-20 by
 `fbeb4b86`, whose message reads *"...and add a gate so the class cannot
 return"*, and was never added to the loop, so it never ran. Wired in by QBX-242
 it failed immediately with eight violations in seven files, every one of them

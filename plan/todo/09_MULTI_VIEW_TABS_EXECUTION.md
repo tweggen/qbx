@@ -23,6 +23,24 @@ each*.
 > - **M8b (done): the D21 verb migration** — every path-taking action and
 >   testkit verb resolves against its own root, and an INVERSE inherits it at
 >   the two apply funnels rather than at 83 construction sites.
+>
+>   > **CORRECTION, 2026-10-27 (QBX-249): "an INVERSE inherits it at the two
+>   > apply funnels" was true of the funnels and FALSE of ten verbs, and the
+>   > gap destroyed the user's work.** `applyPropagatingRoot()` copies
+>   > `a->pathRoot()`, so a verb whose root sits in a member of its own hands
+>   > the funnel an empty root and gets a MASTER-rooted inverse. `add-track`
+>   > (`arrangement_`), `add-sample` (`arrangement_`) and `place-asset`
+>   > (`destRoot_`) each did, so one undo of an arrangement-side edit deleted
+>   > the MASTER's lane or clip at the same address and left the arrangement's
+>   > standing — silently, because `remove-arrangement` then correctly refused
+>   > the still-populated root and the rest of the undo refused too.
+>   > `merge-columns` and `set-lane-hidden` had the sibling form, a `pathRoot_`
+>   > of their own SHADOWING the base's non-virtual pair. The same gap also
+>   > made `setPathRoot()` inert on those verbs, so "New track" in an
+>   > arrangement tab added the lane to the master — M8c's own premise.
+>   > All ten are on `SAction::pathRoot_` now and `check_pathroot` job 2
+>   > refuses a new one. **The lesson for the rest of this plan: a funnel is
+>   > only as wide as the member it reads.**
 > - ~~**M8b (next): the D21 verb migration**~~ — every path-taking action accepts a
 >   qualified path, and the arranger submits its own root. Mechanical and
 >   compiler-assisted, but it is the whole verb set.
@@ -47,6 +65,16 @@ each*.
 >   not `count=`, and it is master-rooted. M1 must build a real verb first. Any
 >   agent that finds itself writing `<assert-track-count count="…">` mid-script
 >   is following a superseded draft.
+>
+>   > **CORRECTION, 2026-10-27 (QBX-246): both halves exist now, and they are
+>   > two different verbs with the same name.** The ACTION verb takes
+>   > `arrangement=`/`count=` and belongs in `<actions>`; the runner's
+>   > ASSERTION takes `equals=`, belongs in `<assertions>`, and took a `root=`
+>   > at QBX-246 (absent = the master), so it is no longer master-rooted.
+>   > `verify-undo` compares every root's count as well. So
+>   > `<assert-track-count arrangement="Drums" count="2"/>` mid-script is
+>   > correct today, and this bullet's warning applies only to the
+>   > `<assertions>` spelling.
 
 **The user-visible outcome, in one sentence:** select a few tracks and a ruler
 range, choose *"Extract to new arrangement…"*, and those tracks leave the master

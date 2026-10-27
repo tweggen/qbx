@@ -17,8 +17,10 @@
  * would make every path they wrote address the wrong lane.
  *
  * `arrangement` is the root, as `add-track`'s is: these verbs take a NAME
- * rather than a path, so the root travels as its own attribute instead of as a
- * "Drums:..." qualifier.
+ * rather than a path, so the root is SPELLED as its own attribute instead of
+ * as a "Drums:..." qualifier. It is STORED in SAction::pathRoot_ all the
+ * same -- see the note on the members below, and QBX-249 for what a root kept
+ * anywhere else costs.
  */
 class SAddSendLaneAction : public SAction {
 public:
@@ -33,8 +35,15 @@ public:
     { return { QStringLiteral( "sendName" ), QStringLiteral( "arrangement" ) }; }
 
 private:
+    // THE ROOT IS SAction::pathRoot_, spelled as an `arrangement` attribute
+    // because these verbs take a NAME rather than a path (QBX-249). It used to
+    // be a member of this class, which is how add-track came to delete a
+    // MASTER lane on undo: a root the funnels cannot see is dropped by
+    // applyPropagatingRoot() and ignored by setPathRoot(). These three verbs
+    // were CORRECT with a private member -- they pass it to every inverse by
+    // hand -- and are migrated anyway, so that "the root lives in pathRoot_"
+    // is a rule with no exceptions for a checker to have to carry.
     QString sendName_;
-    QString arrangement_;
 };
 
 class STrack;
@@ -81,8 +90,7 @@ public:
 private:
     void dropStalePin();
 
-    QString sendName_;
-    QString arrangement_;
+    QString sendName_;          // the root is SAction::pathRoot_ (QBX-249)
     STrack *heldLane_ = nullptr;   // the removed lane, kept alive by holdsRef_
     bool    holdsRef_ = false;
 };
@@ -112,8 +120,7 @@ public:
 
 private:
     SRemoveSendLaneAction *owner_ = nullptr;   // holds the pin (not owned)
-    QString sendName_;
-    QString arrangement_;
+    QString sendName_;          // the root is SAction::pathRoot_ (QBX-249)
 };
 
 #endif // SSENDLANEACTIONS_H

@@ -50,7 +50,9 @@ public:
 
 private:
     QList<int> trackPath_;
-    QString    pathRoot_;
+    // The root is SAction::pathRoot_. A pathRoot_ of this class's own used to
+    // SHADOW it, so setPathRoot() wrote one member and apply() read the other
+    // and a root stamped from outside was silently dropped (QBX-249).
     bool       hidden_ = true;
     // Inverse-only: put the lane back on its ROLE DEFAULT rather than on a
     // value equal to it, so an undo restores the file byte for byte.
