@@ -29,8 +29,9 @@ in_repo() {
 	( cd "$QBX_PARENT/$current" && "$@" )
 }
 
-# nassau-dsp before the plugins: nassau-analogue builds against it.
-for i in nassau-plugin-sdk nassau-dsp qbx
+# nassau-dsp and nassau-digital before qbx and the plugins: nassau-digital and
+# nassau-analogue build against nassau-dsp, and qbx against nassau-digital.
+for i in nassau-plugin-sdk nassau-dsp nassau-digital qbx
 do
 	in_repo "$i" git pull
 	in_repo "$i" ./ci/build.sh

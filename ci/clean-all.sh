@@ -25,7 +25,7 @@ in_repo() {
 	( cd "$QBX_PARENT/$current" && "$@" )
 }
 
-for i in nassau-plugin-sdk nassau-dsp qbx
+for i in nassau-plugin-sdk nassau-dsp nassau-digital qbx
 do
 	in_repo "$i" ./ci/clean.sh
 done
