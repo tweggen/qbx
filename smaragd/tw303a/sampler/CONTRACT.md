@@ -40,6 +40,12 @@ the clone command (B1): the instrument is required, not optional. A qbx
 worktree under `.claude/worktrees/` has no sibling at that depth and takes the
 fetch route, which the log says.
 
+From core gate C5 on the core also links nassau-dsp, and finds it itself
+through its own verbatim `cmake/NassauDSP.cmake`: `-DNASSAU_DSP_DIR`, then
+`../nassau-dsp` beside the CORE's checkout, then a fetch of the core's own
+`NASSAU_DSP_GIT_REF`; it logs `nassau-dsp: <route>, <dir> at <commit>`. qbx
+carries nothing for it. A bare clone fetches both.
+
 ## Invariants
 
 1. **THE CORE IS SEEN BY `tw/sampler` ONLY** (proposal 56 invariant 1). It is
