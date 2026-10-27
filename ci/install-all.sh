@@ -11,7 +11,7 @@ export VCPKG_ROOT
 
 export QBX_PARENT="$PWD/../"
 
-for i in nassau-plugin-sdk qbx
+for i in nassau-plugin-sdk nassau-dsp qbx
 do
 	(
 		cd "$QBX_PARENT/$i"
