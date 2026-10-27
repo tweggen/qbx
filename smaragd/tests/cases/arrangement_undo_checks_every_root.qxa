@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-246: verify-undo reads EVERY root, not the master alone.
+
+  It used to capture the master's track count, undo everything, assert the
+  master was empty, redo, and assert the master's count had come back. A case
+  that built tracks inside an arrangement and undid them badly passed that: the
+  master's count had not moved, and nothing else was looked at.
+
+  WHAT THIS CASE GATES: the ROOT SET half. `Drums` is created inside the undo
+  range, so after a full undo it must be GONE (create-arrangement's inverse is
+  remove-arrangement, which unregisters it) and after the matching redo it must
+  be BACK. The runner compares the whole map, so a root that fails to return is
+  a missing key rather than a count nobody compares.
+
+  WHY THE ARRANGEMENT IS EMPTY, which is the honest part. The obvious fixture
+  puts MORE tracks in the arrangement than in the master, so the two counts
+  cannot be confused. That fixture FAILS today, and not because of anything
+  QBX-246 changed: `SAddTrackAction`'s inverse is master-rooted (its own source
+  comment says so), so undoing an arrangement-side add-track removes a lane
+  from the MASTER and leaves the arrangement's standing. Measured: master 1 to
+  0, Drums 1 to 1 on a single undo. That is QBX-249, filed Critical, and the
+  richer fixture lands with its fix:
+
+      verify-undo: after undo, root Drums has 2 track(s), expected 0
+                   (every root: <master>=0,Drums=2)
+
+  So this case deliberately gates only what is correct today. It is not a
+  weaker gate hiding a known failure: the failure has a ticket and the exact
+  assertion to turn green is written in it.
+
+  This half has no watched-failing arm either, and that is worth stating:
+  failing it needs create-arrangement's undo or redo to stop restoring the
+  root, which nothing today does. What shows the new code is REACHED is the
+  sabotage recorded in the PR, plus QBX-249 itself, which the new comparison
+  found on its first run.
+-->
+<SActionScript version="1" name="arrangement_undo_checks_every_root">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+
+    <!-- Created INSIDE the undo range: its unregistration is the thing under
+         test. No tracks in it, for the reason in the header (QBX-249). -->
+    <create-arrangement name="Drums"/>
+
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-count arrangement="Drums" count="0"/>
+  </actions>
+
+  <verify-undo/>
+
+</SActionScript>

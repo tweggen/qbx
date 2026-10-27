@@ -114,7 +114,7 @@ bool SMidiRecorder::collectArmed_()
     SProject *project = app_ ? app_->getCurrentProject() : nullptr;
     if( !project ) return false;
     std::vector<std::pair<STrack *, QList<int> > > found;
-    // check_root_resolution: master -- arming is about capture through the device, which only the master reaches
+    // check_root_resolution: suspect QBX-247 -- this reason was WRONG: arm-track resolves splacements::rootNamed(), so a track in an arrangement CAN be armed and is then never collected, and start() refuses with "no armed tracks"
     collectArmedMidi( project->masterRoot(), QList<int>(), found );
     for( const auto &pr : found ) {
         Armed a;
@@ -678,7 +678,7 @@ void SMidiRecorder::commit_()
             // `objects/track`, where the folder walk lives -- so the recorder
             // submits the verb with the answer already in it.
             const QString laneMode = srecmode::resolveMode(
-                // check_root_resolution: suspect QBX-246 -- where recorded material LANDS is a placement; decide whether a pass lands in the active arrangement
+                // check_root_resolution: suspect QBX-247 -- the pass lands where collectArmed_ looked; QBX-247 decides which roots that is, and this must use the SAME one
                 splacements::rootContainer( project ), armed_[ai].track,
                 project );
             app_->submitAction( new SPlaceMidiRecordingAction(

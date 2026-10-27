@@ -45,6 +45,32 @@ Invariants:
    verbs gate their own behaviour — order, stamps, real-time pacing — and
    nothing sounding.
 4. Exit code: 0 iff all actions applied as expected AND <assertions> pass.
+4a. **A SEAM ADDRESSES THE ROOT ITS PATH NAMES, NEVER THE MASTER BY DEFAULT**
+   (QBX-246). `trackPath="0,1"` is a master lane and `trackPath="Drums:0"` is
+   that lane inside the arrangement Drums, exactly as every action verb reads
+   it (proposal 09 D21). The shell's describe/grab/click seams resolve
+   `splacements::laneBySpec()`, which peels the qualifier, resolves the root BY
+   NAME and FAILS CLOSED on a name it does not know.
+   `<assert-track-count root="Drums" equals="2"/>` in the `<assertions>` block
+   takes the root too (absent = the master), and `verify-undo` compares EVERY
+   root's count, the root SET included.
+   THIS WAS THE REASON THE WHOLE ROOT-RESOLUTION FAMILY COULD NOT BE GATED:
+   `assertTrackCount_` and `verifyUndo_` read the master alone, so a case that
+   built an arrangement and broke it still reported the master's unchanged
+   count as correct. A gate that cannot see the arrangement cannot fail for the
+   arrangement, so QBX-230 … QBX-234 each had to be found by a human clicking.
+   **WHEN WRITING SUCH A GATE, KNOW WHICH ARM BITES — AND MEASURE IT.** Since
+   proposal 45 D9 `stringToPath` yields `SPATH_INVALID` for an unparsable
+   component and `resolveByPath` returns null on it, so a bare parse of a
+   QUALIFIED path fails CLOSED: the seam answers nothing. Therefore
+   `trackPath="Nope:0"` with `expectReject="true"` looks like the obvious gate
+   and **passes on the broken build too** (two defences give the same answer).
+   The arm that bites is a qualified path that must REACH its arrangement —
+   `trackPath="Drums:1"` at an index the master does not have — plus
+   `<assert-track-count root="Drums" equals="2"/>` against a master with a
+   different count. Both were watched failing under sabotage;
+   `arrangement_seams_see_the_root.qxa`'s header records which, and that the
+   first draft had them the wrong way round.
 5. drag-clip-edge is the ONLY route to clip-edge gesture code. Every clamp and
    snap of a trim / extend / loop / loop-marker drag lives in
    SMVActualView::mouseMoveEvent; resize-clip writes the window straight to the

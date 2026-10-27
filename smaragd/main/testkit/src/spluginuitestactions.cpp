@@ -82,11 +82,15 @@ SMainWindow *mainWindowForStrip_()
     return nullptr;
 }
 
-STrack *trackAt( SProject *project, int index )
+// Index addressing, root-aware (QBX-246): `trackIndex=` counts lanes within
+// the root the verb names, so trackIndex and trackPath reach the same place.
+// It walked the master unconditionally, which made `trackIndex=` unusable from
+// an arrangement tab while `trackPath=` right below already worked there.
+STrack *trackAt( SProject *project, const QString &pathRoot_, int index )
 {
     if( !project ) return nullptr;
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SStdMixer *mixer = dynamic_cast<SStdMixer *>( project->masterRoot() );
+    SStdMixer *mixer =
+        dynamic_cast<SStdMixer *>( splacements::rootNamed( project, pathRoot_ ) );
     if( !mixer ) return nullptr;
     if( index < 0 || index >= mixer->getNTracks() ) return nullptr;
     SLink *link = mixer->getTrackAt( index );
@@ -96,9 +100,11 @@ STrack *trackAt( SProject *project, int index )
 // A strip built for the assertion and thrown away. Parentless and never shown,
 // so no native window is created; its constructor runs the real rebuildUI(),
 // which is the thing under test.
-std::unique_ptr<SPluginEffectStrip> makeStrip( SProject *project, int trackIndex )
+std::unique_ptr<SPluginEffectStrip> makeStrip( SProject *project,
+                                               const QString &pathRoot_,
+                                               int trackIndex )
 {
-    STrack *track = trackAt( project, trackIndex );
+    STrack *track = trackAt( project, pathRoot_, trackIndex );
     if( !track ) return nullptr;
     return std::make_unique<SPluginEffectStrip>( track, nullptr );
 }
@@ -164,7 +170,7 @@ SApplyResult SAssertPluginStripAction::apply( SProject *project )
     // gates, are built inside SPluginEffectStrip's own constructor.
     TopLevelShowSpy spy;
     if( strayWindows_ >= 0 ) qApp->installEventFilter( &spy );
-    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, pathRoot_, trackIndex_ )
                                       : makeStripAt( project, pathRoot_, trackPath_ );
     if( strayWindows_ >= 0 ) qApp->removeEventFilter( &spy );
 
@@ -256,7 +262,7 @@ bool SAssertPluginStripAction::readXml( const QDomElement &elem, int /*version*/
 
 SApplyResult SPluginEditorSetParamAction::apply( SProject *project )
 {
-    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, pathRoot_, trackIndex_ )
                                       : makeStripAt( project, pathRoot_, trackPath_ );
     if( !strip ) {
         qWarning() << "plugin-editor-set-param: no track"
@@ -325,7 +331,7 @@ bool SPluginEditorSetParamAction::readXml( const QDomElement &elem,
 
 SApplyResult SAssertInstrumentSlotAction::apply( SProject *project )
 {
-    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, pathRoot_, trackIndex_ )
                                          : trackAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "assert-instrument-slot: no track"
@@ -434,7 +440,7 @@ bool SAssertInstrumentSlotAction::readXml( const QDomElement &elem, int /*versio
 
 SApplyResult SAssertPluginEditorKindAction::apply( SProject *project )
 {
-    auto strip = trackPath_.isEmpty() ? makeStrip( project, trackIndex_ )
+    auto strip = trackPath_.isEmpty() ? makeStrip( project, pathRoot_, trackIndex_ )
                                       : makeStripAt( project, pathRoot_, trackPath_ );
     if( !strip ) {
         qWarning() << "assert-plugin-editor-kind: no track"
@@ -484,7 +490,7 @@ bool SAssertPluginEditorKindAction::readXml( const QDomElement &elem, int )
 
 SApplyResult SPluginNativeEditorAction::apply( SProject *project )
 {
-    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, pathRoot_, trackIndex_ )
                                          : trackAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "plugin-native-editor: no track"
@@ -657,7 +663,7 @@ static const bool s_reg_pluginnativeeditor =
 
 SApplyResult SPluginGenericEditorAction::apply( SProject *project )
 {
-    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, pathRoot_, trackIndex_ )
                                          : trackAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "plugin-generic-editor: no track"
@@ -922,7 +928,7 @@ static const bool s_reg_assertpluginbrowser =
 
 SApplyResult SPluginRowCommandAction::apply( SProject *project )
 {
-    STrack *track = trackPath_.isEmpty() ? trackAt( project, trackIndex_ )
+    STrack *track = trackPath_.isEmpty() ? trackAt( project, pathRoot_, trackIndex_ )
                                          : trackAtPath( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "plugin-row-command: no track"

@@ -98,6 +98,22 @@ SObject *laneBySpec( SProject *project, const QString &spec,
 // back to the same object.
 QString specOf( SProject *project, SObject *obj );
 
+// THE ROOT OBJECT specOf() QUALIFIES ITS SPELLING WITH (QBX-246). Null when no
+// root reaches `obj`.
+//
+// For a caller that holds a POINTER and needs the root ITSELF rather than a
+// spelling -- to index a lane against it (sclipcolors::indexForLane), to walk
+// its children, to hand it to a widget. Such a caller must not re-derive the
+// root by parsing specOf()'s string and resolving the name again: the two
+// walks could disagree, and the pair would then describe different roots for
+// one object. Both answers come out of the same walk, in the same order, by
+// construction.
+//
+// It is NOT a replacement for rootNamed(): a caller that has a NAME (a case's
+// attribute, an action's pathRoot_) asks that one. This is for the inverse
+// direction only -- object first, root second.
+SObject *rootHolding( SProject *project, SObject *obj );
+
 SObject *placementLaneAt( SObject *root, const QList<int> &path,
                           const char *verb );
 
