@@ -3,7 +3,9 @@
 
 #include "app/actions/saction.h"
 
+#include <QMap>
 #include <QString>
+#include <QStringList>
 
 // sampler-test-install — give a NassauDigital slot a program and ONE sample
 // from a WAV file, for the gates that need the instrument to make a sound
@@ -45,6 +47,51 @@ private:
     QString mode_       = QStringLiteral( "oneshot" );
     qulonglong generation_ = 1;
     QString programFile_;
+};
+
+// assert-sampler-program — the Q1 gate on a NassauDigital slot's PROGRAM (proposal
+// 56 §4.5; GATES Q1.1 "asserted on the program", Q1.2 "structural equality").
+//
+// Reads the slot's SSamplerProgram through the same resolver the verbs use
+// (ssampler::programAt, never a copy of its walk) and compares with the CORE'S
+// OWN structural equality (twSamplerProgramModel::operator== -> nd::Program::
+// operator==). Every check is opt-in; an element that checks nothing is
+// REJECTED, so a typo cannot make an assertion vacuous.
+//
+//   trackPath, slotIndex = "0"         the address, as the verbs take it
+//   exists = "1" | "0"                 a program object is (not) there; "0" is
+//                                      the only check allowed on a slot without one
+//   readable = "1" | "0"               the stored program could (not) be read
+//   zones = N, zoneIds = "17;18"       the zone count / the ids in program order
+//   nextId = N
+//   equalsFile = path                  structurally equal to that program file
+//   capture = name                     remember the program under `name` (a check
+//                                      of its own: it always passes)
+//   equalsCaptured = name              structurally equal to what was captured,
+//   ignoreNextId = "1"                 ...nextId excepted (an undone add-zone keeps
+//                                      nextId, DESIGN §2 -- pair it with nextId=)
+//   differsFromCaptured = name         NOT equal: proves an edit changed something,
+//                                      so an equality after its undo is not vacuous
+//   scope = program|zone|layer, id, attr, value
+//                                      one parameter's value as the core writes it
+//   xmlContains = text                 a substring of the program as the core writes it
+//   selected = "3;7" (or "")           the selection: existing ids, in order
+//   installed = "1"                    EVERY live instance holds the program last
+//                                      published (twSamplerHostStats::installedSerial
+//                                      == SSamplerProgram::publishedSerial, non-zero,
+//                                      at least one instance)
+class SAssertSamplerProgramAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-sampler-program" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    int     slotIndex_ = 0;
+    QMap<QString, QString> checks_;   // every other attribute, by name
 };
 
 #endif

@@ -251,6 +251,7 @@ public:
     {
         program_       = std::move( program );
         programSerial_ = program_ ? program_->serial() : 0;
+        statInstalled_.store( programSerial_, std::memory_order_relaxed );
         core_.setProgram( program_ ? program_->impl().program : nullptr );
         recomputeTail();
     }
@@ -275,6 +276,7 @@ public:
         s.routedMask       = statMask_.load( std::memory_order_relaxed );
         s.samplesInstalled = statSamples_.load( std::memory_order_relaxed );
         s.activeVoices     = statVoices_.load( std::memory_order_relaxed );
+        s.installedSerial  = statInstalled_.load( std::memory_order_relaxed );
         return s;
     }
 
@@ -398,6 +400,7 @@ private:
     std::atomic<std::uint32_t> statMask_{ 0 };
     std::atomic<std::uint32_t> statSamples_{ 0 };
     std::atomic<int>           statVoices_{ 0 };
+    std::atomic<std::uint64_t> statInstalled_{ 0 };   // written by setProgram()
 };
 
 // ----------------------------------------------------------- registration ---

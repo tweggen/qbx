@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q1_verbs">
+
+  <!-- PROPOSAL 56 Q1 (QBX-253): NASSAUDIGITAL'S PROGRAM VERBS, EACH UNDONE BY
+       EXACTLY ONE UNDO, ASSERTED ON THE PROGRAM.
+
+       Q1.1  add-zone, set-zone, set-layer and select-zones (and the other Q1
+             rows of proposal 56 section 4.5: remove-zone, add-layer,
+             remove-layer, set-sampler-program) are actions addressed by
+             trackPath + slotIndex + a zone / layer id. Each section below
+             CAPTURES the program, runs ONE verb, proves the verb changed the
+             program (differsFromCaptured, so the equality after the undo is
+             not vacuous), undoes ONCE, and asserts the program is
+             structurally equal to the capture with the CORE'S OWN equality
+             (nd::Program::operator==, every parameter, id, layer and nextId).
+       Q1.q1 A relative edit on ALL clamps per zone, and its undo restores each
+             zone's previous ABSOLUTE value; a relative edit on an enum is
+             refused, announced, and changes nothing.
+       Q1.q2 An undone add-zone keeps nextId where the add put it (DESIGN
+             section 2: ids are never reused), so a NEW add-zone after the undo
+             gets a new id. That is also why add-zone's undo is compared with
+             ignoreNextId="1" AND an explicit nextId=: the program is exactly
+             the one before, plus the advanced counter, and nothing else.
+       Q1.q4 (qbx's own) every edit reaches every live instance, and a REBUILT
+             instance is born holding the current program (installed="1",
+             before and after a 2 -> 1 channel rebuild).
+
+       Ids, worked out by hand from the core's rule (addZone hands the zone
+       nextId, then each layer the next one):
+         empty program                      nextId 1
+         zone A (1 layer)                   zone 1, layer 2,       nextId 3
+         zone B (2 layers)                  zone 3, layers 4 + 5,  nextId 6
+         zone C (1 layer), undone           zone 6, layer 7,       nextId 8
+         zone D after the undo              zone 8, layer 9,       nextId 10
+         add-layer on zone 1                layer 10,              nextId 11
+  -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <!-- A slot with no edit has no program object (it is created by the first
+         edit that succeeds), and a refused add creates none either. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" bogus="1" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+    <!-- An id is assigned, never taken. -->
+    <add-zone trackPath="0" slotIndex="0" id="5" keyLo="36" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+    <!-- Not a NassauDigital slot: track 0 slot 1 does not exist. -->
+    <add-zone trackPath="0" slotIndex="1" keyLo="36" expectReject="true"/>
+
+    <!-- ========================================================= add-zone -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47" rootKey="40" mode="oneshot">
+      <layer src="test:a" velLo="0" velHi="127"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="48" keyHi="59" rootKey="52" mode="gated">
+      <layer src="test:b-soft" velLo="0" velHi="63"/>
+      <layer src="test:b-hard" velLo="64" velHi="127"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1" zones="2" zoneIds="1;3"
+                            nextId="6" installed="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="5" attr="src"
+                            value="test:b-hard"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeC"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="71" rootKey="64">
+      <layer src="test:c"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6" nextId="8"
+                            differsFromCaptured="beforeC" installed="1"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeC"
+                            ignoreNextId="1" nextId="8" zoneIds="1;3" installed="1"/>
+    <!-- The redo puts back the SAME zone with the SAME ids (it re-inserts,
+         it does not add again). -->
+    <redo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6" nextId="8"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="7" attr="src"
+                            value="test:c"/>
+    <!-- Q1.q2: undo it again, then a NEW add-zone: id 8, never 6. -->
+    <undo count="1"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="72" keyHi="83" rootKey="76">
+      <layer src="test:d"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;8" nextId="10"/>
+
+    <!-- ======================================================== set-zone -->
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeSetZone"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="+2" attack="0.25"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="2"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="attack"
+                            value="0.25" differsFromCaptured="beforeSetZone" installed="1"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeSetZone"
+                            installed="1"/>
+    <redo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="2"/>
+
+    <!-- A list, and a NEGATIVE ABSOLUTE value, spelled with "=". -->
+    <set-zone trackPath="0" slotIndex="0" zones="3;8" level="=-6"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="level" value="-6"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="8" attr="level" value="-6"/>
+    <set-zone trackPath="0" slotIndex="0" zone="3" tune="=-10"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="tune" value="-10"/>
+
+    <!-- Q1.q1: tune +95 on ALL from 2 / -10 / 0 clamps zone 1 at 96 and moves
+         the others from their own values; ONE undo restores 2 / -10 / 0. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeAll"/>
+    <set-zone trackPath="0" slotIndex="0" zone="all" tune="+95"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="96"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="tune" value="85"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="8" attr="tune" value="95"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeAll"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="2"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="tune" value="-10"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="8" attr="tune" value="0"/>
+
+    <!-- Q1.q1: a relative edit on an ENUM (and on a bool) is refused and
+         mutates nothing, even beside a valid edit in the same element. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" mode="+1" expectReject="true"/>
+    <set-zone trackPath="0" slotIndex="0" zone="all" tune="+1" keyTrack="-1" expectReject="true"/>
+    <set-zone trackPath="0" slotIndex="0" zone="99" tune="+1" expectReject="true"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" tun="+1" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeAll"/>
+
+    <!-- ======================================================= set-layer -->
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeSetLayer"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:kick.wav" tune="+1" pan="=-0.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="src"
+                            value="file:kick.wav"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="pan"
+                            value="-0.5" differsFromCaptured="beforeSetLayer"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeSetLayer"/>
+    <set-layer trackPath="0" slotIndex="0" layer="3" tune="+1" expectReject="true"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" reverse="+1" expectReject="true"/>
+
+    <!-- ============================================= set-sampler-program -->
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeSetProgram"/>
+    <set-sampler-program trackPath="0" slotIndex="0" name="Kit 1" polyphony="64" busDrive="0.25"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="program" attr="polyphony"
+                            value="64" differsFromCaptured="beforeSetProgram"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeSetProgram"/>
+    <set-sampler-program trackPath="0" slotIndex="0" polyphony="+1" expectReject="true"/>
+    <set-sampler-program trackPath="0" slotIndex="0" polyphony="48" expectReject="true"/>
+
+    <!-- ===================================================== select-zones -->
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="" capture="beforeSelect"/>
+    <select-zones trackPath="0" slotIndex="0" zones="1;3" mode="replace"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1;3"/>
+    <select-zones trackPath="0" slotIndex="0" zones="3;8" mode="toggle"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1;8"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1;3"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected=""/>
+    <select-zones trackPath="0" slotIndex="0" zones="8" mode="add"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="8"/>
+    <select-zones trackPath="0" slotIndex="0" zones="all" mode="add"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="8;1;3"/>
+    <select-zones trackPath="0" slotIndex="0" zones="4" mode="replace" expectReject="true"/>
+    <select-zones trackPath="0" slotIndex="0" zones="1" mode="swap" expectReject="true"/>
+    <!-- Selecting changes no sound: the program is untouched. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeSelect"
+                            selected="8;1;3"/>
+
+    <!-- ===================================================== remove-zone -->
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeRemoveZone"/>
+    <remove-zone trackPath="0" slotIndex="0" zone="3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;8" selected="8;1"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeRemoveZone"
+                            zoneIds="1;3;8" selected="8;1;3"/>
+    <remove-zone trackPath="0" slotIndex="0" zone="6" expectReject="true"/>
+    <!-- The inverse form validates what it puts back: an id that is in use,
+         or one the program never handed out (>= nextId), is refused. -->
+    <reinsert-zone trackPath="0" slotIndex="0" zone="1" at="0" expectReject="true"><![CDATA[<zone id="1" keyLo="1"/>]]></reinsert-zone>
+    <reinsert-zone trackPath="0" slotIndex="0" zone="50" at="0" expectReject="true"><![CDATA[<zone id="50" keyLo="1"/>]]></reinsert-zone>
+    <reinsert-zone trackPath="0" slotIndex="0" zone="6" at="0" expectReject="true"><![CDATA[<zone id="6"><layer id="2"/></zone>]]></reinsert-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeRemoveZone"/>
+
+    <!-- ================================================ add/remove-layer -->
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeAddLayer"/>
+    <add-layer trackPath="0" slotIndex="0" zone="1" src="test:a2" velLo="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="10" attr="velLo"
+                            value="100" nextId="11"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeAddLayer"
+                            ignoreNextId="1" nextId="11"/>
+    <add-layer trackPath="0" slotIndex="0" zone="6" src="x" expectReject="true"/>
+
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeRemoveLayer"/>
+    <remove-layer trackPath="0" slotIndex="0" layer="4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" differsFromCaptured="beforeRemoveLayer"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeRemoveLayer"/>
+
+    <!-- ============================================== installed, rebuilt -->
+    <!-- A 2 -> 1 channel project re-instantiates the plugin
+         (SPluginSlot::ensureChannels); the new instance must be born holding
+         the program the model last published, through the slot's instance
+         initializer the shell bound (invariant 4). -->
+    <assert-sampler-program trackPath="0" slotIndex="0" installed="1"/>
+    <set-project-channels channels="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" installed="1"/>
+    <set-zone trackPath="0" slotIndex="0" zone="8" release="1.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" installed="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+</SActionScript>

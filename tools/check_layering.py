@@ -149,6 +149,13 @@ APP_DEPS = {
     # objects/track must NOT depend on it - the track consults MIDI-ness only
     # through SObject::contentKind() and SObject::resolveEventClip().
     'objects/midi':   {'actions', 'model', 'objects/recplan', 'persistence'},
+    # objects/sampler (proposal 56 Q1) is NassauDigital's MODEL and verbs, at
+    # the RANK of objects/midi (DESIGN §9.2; Q-6 answered 2026-10-27): it does
+    # NOT depend on objects/track although the slot it configures lives there.
+    # The shell, which sees both, installs the two hooks that join them
+    # (ssampler::setResolver, SPluginSlot::setChildAdoptedHook). Nothing below
+    # the UI depends on it, and objects/track never does (proposal 56 inv. 12).
+    'objects/sampler': {'actions', 'model', 'persistence'},
     'objects/track':  {'actions', 'model', 'persistence'},
     # objects/fragment (proposal 41 M1) sits at the RANK of objects/track, not
     # inside it: a fragment is content an SCut windows (D1), not a track, and
@@ -301,9 +308,13 @@ APP_DEPS = {
     # recorder sees every armed lane of a pass -- so the recorder computes it,
     # with `srecplan::columnExtentFor` rather than with a second copy of
     # §3.1's rule living in `shell`.
+    # shell + objects/sampler since proposal 56 Q1: ssamplerwiring installs
+    # the resolver and the child-adopted hook that join objects/sampler to
+    # objects/track, which may not name each other (Q-6).
     'shell':          {'actions', 'eventui', 'media', 'mediabrowser',
                        'mixerui', 'model',
                        'objects/cut', 'objects/midi', 'objects/mixer',
+                       'objects/sampler',
                        'objects/recplan', 'objects/track', 'objects/wave',
                        'persistence',
                        'pluginui', 'selection', 'servicesui', 'testkit', 'theme',
@@ -333,8 +344,11 @@ APP_DEPS = {
     # persistence, same milestone: fragment_test's AC1.3 round-trips a
     # hand-authored document through the REAL SProjectLoader, exactly the
     # save/load machinery a project file goes through.
+    # testkit + objects/sampler since proposal 56 Q1: assert-sampler-program
+    # reads a slot's SSamplerProgram through ssampler::programAt.
     'testkit':        {'actions', 'media', 'mediabrowser', 'mixerui', 'model',
                        'objects/cut', 'objects/fragment', 'objects/midi',
+                       'objects/sampler',
                        'objects/mixer', 'objects/track', 'objects/wave',
                        'persistence', 'pluginui', 'servicesui', 'shell'},
 }
@@ -370,6 +384,12 @@ APP_ENG = {
     # gives it twEventSeq / twEventClipResolved / twTempoMap / twSmf and
     # nothing else - no pages, no mix, no plugins (proposal 37 3.5).
     'objects/midi':   _ENG_BASE | {'events'},
+    # objects/sampler (proposal 56 Q1): `sampler` for the editable program
+    # (twSamplerProgramModel) and the snapshot it hands the instrument,
+    # `plugins` for the `twPlugin &` its instance initializer takes (reached
+    # as a twSamplerHost by capability). Nothing else until Q2+ (sources,
+    # render, schedule, pages, sidecar arrive with generations and bounces).
+    'objects/sampler': _ENG_BASE | {'plugins', 'sampler'},
     # objects/track + events since proposal 37 P1: STrack owns the per-track
     # twEventClipSet and the twEventMerge feed (3.2.1).
     # objects/track + render + sidecar + sources since proposal 40 M1b:

@@ -57,7 +57,7 @@ app, never by naming it.
 | tw/metering | level meters: page probe + ballistics | tw303a/metering/CONTRACT.md |
 | tw/events | events, tempo map, SMF, curves, clip set | tw303a/events/CONTRACT.md |
 | tw/body | anthropometrics and joint mechanics (proposal 44); depends on NOTHING, not even tw/core | tw303a/body/CONTRACT.md |
-| tw/sampler | NassauDigital as a native `tw` instrument (proposal 56): the plugin, `twSamplerHost`, the snapshots; the nassau-digital core is linked PRIVATE and found by `smaragd/cmake/NassauDigital.cmake` | tw303a/sampler/CONTRACT.md |
+| tw/sampler | NassauDigital as a native `tw` instrument (proposal 56): the plugin, `twSamplerHost`, the snapshots, the editable program (`twSamplerProgramModel`, Q1); the nassau-digital core is linked PRIVATE and found by `smaragd/cmake/NassauDigital.cmake` | tw303a/sampler/CONTRACT.md |
 
 ## App (`smaragd/main/`) — one SCC, checker-enforced boundaries
 
@@ -114,6 +114,7 @@ minimal.
 | app/media | media SOURCES (local FS, Nextcloud/WebDAV), the fetch cache, the `media:` drop helper. **No widget, ever** | main/media/CONTRACT.md |
 | app/objects/cut | clip window (SCut) + renderer + window actions | main/objects/cut/CONTRACT.md |
 | app/objects/midi | event clip (SMidiSequence/SMidiCut) + renderer + event verbs | main/objects/midi/CONTRACT.md |
+| app/objects/sampler | NassauDigital's program model (SSamplerProgram, a model child of its plugin slot) + the program verbs (add-zone, set-zone, set-layer, select-zones, ...); the rank of objects/midi, joined to objects/track only by two shell hooks (proposal 56 Q1) | main/objects/sampler/CONTRACT.md |
 | app/objects/wave | sample object + renderer + sample actions; the GROWING recording content (proposal 21 L3b) | main/objects/wave/CONTRACT.md |
 | app/objects/track | track + clip sync to engine + placement actions | main/objects/track/CONTRACT.md |
 | app/objects/mixer | root mixer, plugin chain model, asset actions | main/objects/mixer/CONTRACT.md |

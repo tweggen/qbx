@@ -969,6 +969,27 @@ comes through here, which is what lets a `.qxa` say
 (`qxa.sampler_q0_engine_seam`). The edge is shell -> tw/sampler in
 `check_layering.py`'s APP_ENG.
 
+**Its model is joined to the slot here too (Q1, QBX-253).**
+`objects/sampler` keeps the rank of `objects/midi` and may not name
+`objects/track`, and the slot may not name the sampler (proposal 56 Q-6,
+answered 2026-10-27: "the shell installs the slot's instance initializer as a
+hook"). Right after `registerNassauDigital()`, `ssamplerwiring::install()`
+installs the two hooks that join them, and nothing else:
+
+- `ssampler::setResolver` — a sampler verb's `trackPath` (+ the action's
+  `pathRoot`) and `slotIndex` become the slot's `SSamplerProgram`, through
+  `splacements::laneBySpec`, the track's chain and the slot; refused unless the
+  slot hosts `tw.native.nassaudigital`; created with `adoptChild()` on the first
+  edit that asks for it.
+- `SPluginSlot::setChildAdoptedHook` — every `SSamplerProgram` that arrives
+  under a NassauDigital slot (adopted, or read back from a file) is BOUND: its
+  installer sets the slot's instance initializer to the program's snapshot and
+  then applies it to the live instances (`applyToInstances`, skipped while the
+  slot has no processor yet, as on the load path). Gated by
+  `assert-sampler-program installed="1"` in `qxa.sampler_q1_verbs` (after
+  every kind of edit and across a 2 -> 1 channel rebuild) and
+  `qxa.sampler_q1_persist` (after a reload).
+
 ## The media layer's two hooks (proposal 38 gate 3)
 
 Three injections, split across two classes because the status bar belongs to
