@@ -130,11 +130,12 @@ public:
         return b;
     }
 
-    // AUDIO INPUT buses (proposal 55 §3.1; routed by M3). Bus 0 is the main
-    // input and agrees with ioLayout().audioInputs; buses above it are the
-    // format's non-main inputs (a sidechain) in its own order. Reported now so
-    // the scanner can record them; nothing feeds a non-main input yet. A
-    // plugin with no audio input at all reports 0 buses.
+    // AUDIO INPUT buses (proposal 55 §3.1). Bus 0 is the main input and
+    // agrees with ioLayout().audioInputs; buses above it are the format's
+    // non-main inputs (a sidechain) in its own order. Since proposal 55 M3 the
+    // FIRST non-main input, bus 1, is fed when the slot is KEYED: the slot
+    // processor hands processBuses() a non-null inBuses[1] for it (see
+    // setRoutedInBuses). A plugin with no audio input at all reports 0 buses.
     virtual std::size_t audioInBusCount() const
     {
         return ioLayout().audioInputs > 0 ? 1u : 0u;
@@ -159,6 +160,17 @@ public:
     // as every backend has always done for every non-main bus. The default
     // does nothing: a backend that never writes an aux bus needs no mask.
     virtual void setRoutedOutBuses( std::uint32_t busMask ) { (void)busMask; }
+
+    // WHICH AUX INPUT BUSES THE HOST WILL FEED (proposal 55 M3): bit b set =
+    // input bus b carries host audio (a sidechain key); bit 0, the main
+    // input, is ignored. The input twin of setRoutedOutBuses, with the same
+    // contract: it takes effect at the NEXT prepare(), which the slot
+    // processor calls right after a change (VST3 activates the bus there),
+    // and in processBuses() a fed bus gets a non-null inBuses[b] while every
+    // other non-main input gets nullptr and the backend's own silent scratch.
+    // The default does nothing: a plugin that never reads a sidechain needs
+    // no mask.
+    virtual void setRoutedInBuses( std::uint32_t busMask ) { (void)busMask; }
 
     // How long the plugin keeps producing after its input goes silent (a
     // reverb tail, a synth release). Frames, at the prepared rate. Used to size
@@ -193,6 +205,33 @@ public:
         (void)ctx;
         process( in, ( outBuses && audioOutBusCount() > 0 ) ? outBuses[0] : nullptr,
                  nframes );
+    }
+
+    // The BUS-AWARE render call (proposal 55 D5, M3): the event-aware call
+    // with the INPUT side bus-indexed too.
+    //
+    //   inBuses   - inBuses[bus][channel], audioInBusCount() entries; entry 0
+    //               is the main input (what `in` is above), an entry above 0
+    //               is non-null only for a bus in the mask setRoutedInBuses()
+    //               gave (a keyed sidechain), and may be read only then
+    //
+    // Everything else is the event-aware call's. A distinct NAME rather than
+    // a third `process` overload: a generator passes `in` as a literal
+    // nullptr, which would make the two pointer overloads ambiguous, and a
+    // backend overriding one `process` would hide the other.
+    //
+    // The DEFAULT forwards inBuses[0] to the event-aware call - plugins inv.
+    // 33's byte-identity trick again: a backend that does not override this
+    // changes by not one instruction, and the slot processor calls it only
+    // while a key is APPLIED (an unkeyed slot makes exactly the calls it made
+    // before M3).
+    virtual void processBuses( const float *const *const *inBuses,
+                               float *const *const *outBuses, std::uint32_t nframes,
+                               const twEventList &events, twEventOut &eventsOut,
+                               const twProcessContext &ctx )
+    {
+        process( ( inBuses && audioInBusCount() > 0 ) ? inBuses[0] : nullptr, outBuses,
+                 nframes, events, eventsOut, ctx );
     }
 };
 

@@ -76,8 +76,15 @@ namespace {
 const TUID kTestGainCid = INLINE_UID( 0x54575445, 0x53545653, 0x54334741, 0x494E0000 );
 // "TWTESTVST3SPLT\0\0": TestSplit (proposal 55 M1), the gain with an aux output.
 const TUID kTestSplitCid = INLINE_UID( 0x54575445, 0x53545653, 0x54335350, 0x4C540000 );
+// "TWTESTVST3DUCK\0\0": TestDuck (proposal 55 M3), the keyed hard gate.
+const TUID kTestDuckCid  = INLINE_UID( 0x54575445, 0x53545653, 0x54334455, 0x434B0000 );
 
 constexpr uint32 kParamGain = 0;
+// TestDuck's two parameters (normalized == plain, as the gain's).
+constexpr uint32 kParamDuckThreshold = 0;
+constexpr uint32 kParamDuckGain      = 1;
+constexpr int32  kDuckHold           = 2048;
+constexpr uint32 kDuckStateMagic     = 0x54573344;   // 'TW3D'
 
 constexpr uint32 kStateMagic   = 0x54573356;   // 'TW3V'
 constexpr int32  kMaxChannels  = 2;
@@ -96,11 +103,22 @@ constexpr int32  kMaxChannels  = 2;
 // TestSine ignores an unactivated event bus (plugins inv. 31): a host that
 // hands the bus buffers but never switches it on reads silence, which is what
 // makes "the routed aux output is activated at prepare()" assertable.
+//
+// TESTDUCK (proposal 55 §5, M3) is this class built with `duck = true`: the
+// keyed hard gate of tw.test.clap.duck -- stereo main in/out plus a stereo
+// SIDECHAIN input bus (input bus 1, kAux, not active by default). While the
+// key is on (|key| > Threshold, held kDuckHold frames past the last hit)
+// out = in * DuckGain, otherwise out = in. It READS THE KEY ONLY WHEN THE HOST
+// HAS ACTIVATED THE BUS, the inv. 31 pattern again: a host that hands the key
+// but never switches the bus on gets no ducking at all, which is what makes
+// "the keyed aux input is activated at prepare()" a gate with teeth. Its
+// activation is reported as one frame of tail, as TestSplit's is.
 class TestGain final : public Vst::IComponent,
                        public Vst::IAudioProcessor,
                        public Vst::IEditController {
 public:
-    explicit TestGain( bool split = false ) : split_( split ) {}
+    explicit TestGain( bool split = false, bool duck = false )
+        : split_( split ), duck_( duck ) {}
 
     // --- FUnknown ------------------------------------------------------------
     tresult PLUGIN_API queryInterface( const TUID _iid, void **obj ) override
@@ -152,12 +170,22 @@ public:
     int32 PLUGIN_API getBusCount( Vst::MediaType type, Vst::BusDirection dir ) override
     {
         if( type != Vst::kAudio ) return 0;
+        if( duck_ && dir == Vst::kInput ) return 2;
         return ( split_ && dir == Vst::kOutput ) ? 2 : 1;
     }
 
     tresult PLUGIN_API getBusInfo( Vst::MediaType type, Vst::BusDirection dir,
                                    int32 index, Vst::BusInfo &bus ) override
     {
+        if( type == Vst::kAudio && duck_ && dir == Vst::kInput && index == 1 ) {
+            bus.mediaType    = Vst::kAudio;
+            bus.direction    = dir;
+            bus.channelCount = 2;
+            bus.busType      = Vst::kAux;
+            bus.flags        = 0;   // NOT default-active: the host must switch it on
+            copyName( bus.name, "Sidechain" );
+            return kResultOk;
+        }
         if( type == Vst::kAudio && split_ && dir == Vst::kOutput && index == 1 ) {
             bus.mediaType    = Vst::kAudio;
             bus.direction    = dir;
@@ -186,17 +214,36 @@ public:
     {
         if( split_ && type == Vst::kAudio && dir == Vst::kOutput && index == 1 )
             auxActive_ = state != 0;
+        if( duck_ && type == Vst::kAudio && dir == Vst::kInput && index == 1 )
+            keyActive_ = state != 0;
         return kResultOk;
     }
     tresult PLUGIN_API setActive( TBool state ) override
     {
         active_ = state != 0;
+        // TestDuck's gate re-opens on every (re)activation: the host's
+        // reset() is a deactivate/activate cycle, and the key state is DSP.
+        if( active_ ) duckSince_ = kDuckHold + 1;
         return kResultOk;
     }
 
     tresult PLUGIN_API setState( IBStream *state ) override
     {
         if( !state ) return kInvalidArgument;
+        if( duck_ ) {
+            uint32 magic = 0;
+            double v[2]  = { 0.01, 0.25 };
+            int32  got   = 0;
+            if( state->read( &magic, (int32)sizeof( magic ), &got ) != kResultOk ||
+                got != (int32)sizeof( magic ) || magic != kDuckStateMagic )
+                return kResultFalse;
+            if( state->read( v, (int32)sizeof( v ), &got ) != kResultOk ||
+                got != (int32)sizeof( v ) )
+                return kResultFalse;
+            duckThreshold_ = clamp01( v[0] );
+            duckGain_      = clamp01( v[1] );
+            return kResultOk;
+        }
         uint32 magic = 0;
         double gain  = 1.0;
         int32  got   = 0;
@@ -213,6 +260,16 @@ public:
     tresult PLUGIN_API getState( IBStream *state ) override
     {
         if( !state ) return kInvalidArgument;
+        if( duck_ ) {
+            uint32 magic = kDuckStateMagic;
+            double v[2]  = { duckThreshold_, duckGain_ };
+            int32  put   = 0;
+            if( state->write( &magic, (int32)sizeof( magic ), &put ) != kResultOk )
+                return kResultFalse;
+            if( state->write( v, (int32)sizeof( v ), &put ) != kResultOk )
+                return kResultFalse;
+            return kResultOk;
+        }
         uint32 magic = kStateMagic;
         double gain  = gain_;
         int32  put   = 0;
@@ -228,7 +285,8 @@ public:
                                            Vst::SpeakerArrangement *outputs,
                                            int32 numOuts ) override
     {
-        if( numIns != 1 || !inputs || !outputs ) return kResultFalse;
+        if( !inputs || !outputs ) return kResultFalse;
+        if( numIns != 1 && !( duck_ && numIns == 2 ) ) return kResultFalse;
         if( numOuts != 1 && !( split_ && numOuts == 2 ) ) return kResultFalse;
         if( inputs[0] != outputs[0] ) return kResultFalse;
         const int32 ch = countChannels( inputs[0] );
@@ -241,6 +299,10 @@ public:
                                           Vst::SpeakerArrangement &arr ) override
     {
         if( split_ && dir == Vst::kOutput && index == 1 ) {
+            arr = Vst::SpeakerArr::kStereo;
+            return kResultOk;
+        }
+        if( duck_ && dir == Vst::kInput && index == 1 ) {
             arr = Vst::SpeakerArr::kStereo;
             return kResultOk;
         }
@@ -276,6 +338,8 @@ public:
         if( !data.inputs || !data.outputs || data.numInputs < 1 || data.numOutputs < 1 )
             return kResultOk;
         if( data.symbolicSampleSize != Vst::kSample32 ) return kResultFalse;
+
+        if( duck_ ) return processDuck( data );
 
         const Vst::AudioBusBuffers &in  = data.inputs[0];
         Vst::AudioBusBuffers       &out = data.outputs[0];
@@ -319,6 +383,55 @@ public:
             }
             aux.silenceFlags = 0;
         }
+        return kResultOk;
+    }
+
+    // TESTDUCK: the keyed hard gate. Parameter points apply at the top of the
+    // block (no gate automates them). The key is read ONLY while its bus is
+    // ACTIVATED -- see the class comment.
+    tresult processDuck( Vst::ProcessData &data )
+    {
+        if( data.inputParameterChanges ) {
+            const int32 nq = data.inputParameterChanges->getParameterCount();
+            for( int32 q = 0; q < nq; ++q ) {
+                Vst::IParamValueQueue *queue = data.inputParameterChanges->getParameterData( q );
+                if( !queue ) continue;
+                const int32 nPoints = queue->getPointCount();
+                for( int32 pi = 0; pi < nPoints; ++pi ) {
+                    int32           off = 0;
+                    Vst::ParamValue v   = 0.0;
+                    if( queue->getPoint( pi, off, v ) != kResultOk ) continue;
+                    if( queue->getParameterId() == kParamDuckThreshold ) duckThreshold_ = clamp01( v );
+                    if( queue->getParameterId() == kParamDuckGain )      duckGain_      = clamp01( v );
+                }
+            }
+        }
+        const Vst::AudioBusBuffers &in  = data.inputs[0];
+        Vst::AudioBusBuffers       &out = data.outputs[0];
+        const Vst::AudioBusBuffers *key =
+            ( keyActive_ && data.numInputs >= 2 ) ? &data.inputs[1] : nullptr;
+        const float g = (float)duckGain_;
+        for( int32 s = 0; s < data.numSamples; ++s ) {
+            bool hit = false;
+            if( key && key->channelBuffers32 ) {
+                for( int32 c = 0; c < key->numChannels && !hit; ++c ) {
+                    const float *k = key->channelBuffers32[c];
+                    if( k && std::fabs( (double)k[s] ) > duckThreshold_ ) hit = true;
+                }
+            }
+            if( hit )                         duckSince_ = 0;
+            else if( duckSince_ <= kDuckHold ) ++duckSince_;
+            const bool on = duckSince_ <= kDuckHold;
+            for( int32 c = 0; c < out.numChannels; ++c ) {
+                float *o = out.channelBuffers32 ? out.channelBuffers32[c] : nullptr;
+                if( !o ) continue;
+                const float *i = ( c < in.numChannels && in.channelBuffers32 )
+                                     ? in.channelBuffers32[c] : nullptr;
+                const float v = i ? i[s] : 0.0f;
+                o[s] = on ? v * g : v;
+            }
+        }
+        out.silenceFlags = 0;
         return kResultOk;
     }
 
@@ -403,17 +516,33 @@ public:
     // what lets a gate say "the unrouted bus was NOT switched on" -- an
     // unrouted bus gets scratch buffers, so its audio could never say it. The
     // gain fixture is untouched: always 0.
-    uint32 PLUGIN_API getTailSamples() override { return ( split_ && auxActive_ ) ? 1 : 0; }
+    uint32 PLUGIN_API getTailSamples() override
+    {
+        if( duck_ ) return keyActive_ ? 1 : 0;   // TestDuck's witness, the same idiom
+        return ( split_ && auxActive_ ) ? 1 : 0;
+    }
 
     // --- IEditController -----------------------------------------------------
     tresult PLUGIN_API setComponentState( IBStream *state ) override
     {
         return setState( state );
     }
-    int32 PLUGIN_API getParameterCount() override { return 1; }
+    int32 PLUGIN_API getParameterCount() override { return duck_ ? 2 : 1; }
 
     tresult PLUGIN_API getParameterInfo( int32 paramIndex, Vst::ParameterInfo &info ) override
     {
+        if( duck_ ) {
+            if( paramIndex < 0 || paramIndex > 1 ) return kInvalidArgument;
+            std::memset( &info, 0, sizeof( info ) );
+            info.id                     = paramIndex == 0 ? kParamDuckThreshold : kParamDuckGain;
+            info.stepCount              = 0;
+            info.defaultNormalizedValue = paramIndex == 0 ? 0.01 : 0.25;
+            info.unitId                 = 0;
+            info.flags                  = Vst::ParameterInfo::kCanAutomate;
+            copyName( info.title, paramIndex == 0 ? "Threshold" : "Duck Gain" );
+            copyName( info.shortTitle, paramIndex == 0 ? "Threshold" : "Duck Gain" );
+            return kResultOk;
+        }
         if( paramIndex != 0 ) return kInvalidArgument;
         std::memset( &info, 0, sizeof( info ) );
         info.id                     = kParamGain;
@@ -446,6 +575,11 @@ public:
     }
     Vst::ParamValue PLUGIN_API getParamNormalized( Vst::ParamID id ) override
     {
+        if( duck_ ) {
+            if( id == kParamDuckThreshold ) return duckThreshold_;
+            if( id == kParamDuckGain )      return duckGain_;
+            return 0.0;
+        }
         return id == kParamGain ? gain_ : 0.0;
     }
     tresult PLUGIN_API setParamNormalized( Vst::ParamID id, Vst::ParamValue value ) override
@@ -453,6 +587,8 @@ public:
         // Deliberately does NOT change what process() uses. The controller and
         // the processor are the same object here, so honouring this would hide
         // exactly the host bug the fixture exists to catch.
+        if( duck_ ) return ( id == kParamDuckThreshold || id == kParamDuckGain )
+                               ? kResultOk : kInvalidArgument;
         if( id != kParamGain ) return kInvalidArgument;
         controllerGain_ = clamp01( value );
         return kResultOk;
@@ -484,7 +620,12 @@ private:
     }
 
     const bool split_      = false;
+    const bool duck_       = false;
     bool   auxActive_      = false;   // TestSplit: activateBus(kAudio, kOutput, 1)
+    bool   keyActive_      = false;   // TestDuck: activateBus(kAudio, kInput, 1)
+    double duckThreshold_  = 0.01;
+    double duckGain_       = 0.25;
+    int32  duckSince_      = kDuckHold + 1;   // > hold: the gate starts open
     int32  refs_           = 1;
     int32  channels_       = 2;
     int32  maxBlock_       = 0;
@@ -1098,8 +1239,8 @@ public:
     // plugins — a controller class is reached through getControllerClassId, not
     // by enumeration.
     // FOUR since proposal 55 M1: TestSplit is the fourth, so the existing
-    // indices keep their meaning.
-    int32 PLUGIN_API countClasses() override { return 4; }
+    // indices keep their meaning. FIVE since M3: TestDuck.
+    int32 PLUGIN_API countClasses() override { return 5; }
 
     tresult PLUGIN_API getClassInfo( int32 index, PClassInfo *info ) override
     {
@@ -1128,6 +1269,11 @@ public:
             std::memcpy( info->cid, kTestSplitCid, sizeof( TUID ) );
             std::strncpy( info->category, kVstAudioEffectClass, PClassInfo::kCategorySize - 1 );
             std::strncpy( info->name, "TW Test VST3 Split", PClassInfo::kNameSize - 1 );
+            return kResultOk;
+        case 4:
+            std::memcpy( info->cid, kTestDuckCid, sizeof( TUID ) );
+            std::strncpy( info->category, kVstAudioEffectClass, PClassInfo::kCategorySize - 1 );
+            std::strncpy( info->name, "TW Test VST3 Duck", PClassInfo::kNameSize - 1 );
             return kResultOk;
         default:
             return kInvalidArgument;
@@ -1172,6 +1318,12 @@ public:
             std::strncpy( info->name, "TW Test VST3 Split", PClassInfo::kNameSize - 1 );
             std::strncpy( info->subCategories, "Fx", PClassInfo2::kSubCategoriesSize - 1 );
             return kResultOk;
+        case 4:
+            std::memcpy( info->cid, kTestDuckCid, sizeof( TUID ) );
+            std::strncpy( info->category, kVstAudioEffectClass, PClassInfo::kCategorySize - 1 );
+            std::strncpy( info->name, "TW Test VST3 Duck", PClassInfo::kNameSize - 1 );
+            std::strncpy( info->subCategories, "Fx|Dynamics", PClassInfo2::kSubCategoriesSize - 1 );
+            return kResultOk;
         default:
             return kInvalidArgument;
         }
@@ -1192,6 +1344,13 @@ public:
         }
         if( FUnknownPrivate::iidEqual( cid, kTestSplitCid ) ) {
             TestGain *p = new( std::nothrow ) TestGain( true );
+            if( !p ) return kOutOfMemory;
+            const tresult r = p->queryInterface( _iid, obj );
+            p->release();
+            return r;
+        }
+        if( FUnknownPrivate::iidEqual( cid, kTestDuckCid ) ) {
+            TestGain *p = new( std::nothrow ) TestGain( false, true );
             if( !p ) return kOutOfMemory;
             const tresult r = p->queryInterface( _iid, obj );
             p->release();

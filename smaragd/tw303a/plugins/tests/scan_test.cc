@@ -373,6 +373,14 @@ int main( int argc, char **argv )
                                   split.inBusChannels[0] == 2,
                               "...and its one stereo input bus" );
             }
+            // Proposal 55 M3: the duck's sidechain is its second INPUT bus.
+            twPluginDescriptor duck;
+            if( audio::check( reg.findByUid( "clap", "tw.test.clap.duck", duck ),
+                              "the probe also reports the duck" ) ) {
+                audio::check( duck.nInBuses == 2 && duck.inBusChannels.size() == 2 &&
+                                  duck.inBusChannels[0] == 2 && duck.inBusChannels[1] == 2,
+                              "...with its stereo main AND stereo sidechain input bus" );
+            }
 
             twPluginDescriptor arp;
             if( audio::check( reg.findByUid( "clap", "tw.test.clap.arp", arp ),
@@ -449,6 +457,7 @@ int main( int argc, char **argv )
             const twPluginDescriptor *v3   = nullptr;
             const twPluginDescriptor *sine = nullptr;
             const twPluginDescriptor *split = nullptr;
+            const twPluginDescriptor *duck  = nullptr;
             int nVst3 = 0;
             for( const twPluginDescriptor &d : all ) {
                 if( d.format != "vst3" ) continue;
@@ -456,8 +465,14 @@ int main( int argc, char **argv )
                 if( d.name == "TW Test VST3 Gain" ) v3 = &d;
                 if( d.name == "TW Test VST3 Sine" ) sine = &d;
                 if( d.name == "TW Test VST3 Split" ) split = &d;
+                if( d.name == "TW Test VST3 Duck" )  duck  = &d;
             }
-            audio::check( nVst3 == 3, "all three audio-effect classes reached the registry" );
+            // FOUR since proposal 55 M3 (TestDuck).
+            audio::check( nVst3 == 4, "all four audio-effect classes reached the registry" );
+            if( audio::check( duck != nullptr, "TestDuck was scanned" ) )
+                audio::check( duck->nInBuses == 2 && duck->inBusChannels.size() == 2 &&
+                                  duck->inBusChannels[0] == 2 && duck->inBusChannels[1] == 2,
+                              "...with its stereo main AND stereo sidechain input bus" );
             if( audio::check( v3 != nullptr, "a format=\"vst3\" descriptor reached the registry" ) ) {
                 audio::check( v3->uid.size() == 32, "its uid is a 32-hex-digit class id" );
                 audio::check( v3->name == "TW Test VST3 Gain", "its name is the class name" );

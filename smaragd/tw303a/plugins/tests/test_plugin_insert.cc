@@ -1,5 +1,6 @@
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginauxtap.h"
+#include "tw/plugins/twpluginchain.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/events/tweventsource.h"
 #include "tw/events/twtempomap.h"
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <thread>
@@ -271,8 +273,11 @@ static int testBuiltinPlugin()
     // Since M3 an insert is a per-bus TAP: always exactly one mono wire in and
     // one out, whatever the plugin's own channel count is. Channel coherence
     // lives in the shared twPluginSlotProcessor, not in the component.
-    check( insert->getNInputs() == 1 && insert->getNOutputs() == 1,
-           "a tap is 1-in / 1-out regardless of the plugin's layout" );
+    // Proposal 55 M3 added port 1, the OPTIONAL sidechain key: two input
+    // ports, of which the series wiring only ever touches port 0.
+    check( insert->getNInputs() == 2 && insert->getNOutputs() == 1,
+           "a tap is 1-in (+ the optional key port) / 1-out regardless of the "
+           "plugin's layout" );
     check( insert->getPlugin() != nullptr, "the tap exposes its plugin" );
     check( insert->getPlugin()->paramCount() == 1, "PassThrough has 1 parameter" );
 
@@ -1171,12 +1176,12 @@ static int testVst3Backend()
     // --- resolving by explicit uid ------------------------------------------
     // What a saved project does: the hex class id round-trips through the
     // descriptor and finds the same class.
-    // THREE audio-effect classes since proposal 55 M1 (the gain effect, the
-    // sine instrument and TestSplit); the instrument's separate CONTROLLER
+    // FOUR audio-effect classes since proposal 55 M3 (the gain effect, the
+    // sine instrument, TestSplit and TestDuck); the instrument's separate CONTROLLER
     // class carries kVstComponentControllerClass and must NOT be enumerated as
     // a plugin.
     const std::vector<twPluginDescriptor> found = vst3ModuleDescriptors( TW_TESTVST3_PATH );
-    check( found.size() == 3, "the module reports exactly three audio-effect classes" );
+    check( found.size() == 4, "the module reports exactly four audio-effect classes" );
     const twPluginDescriptor *gainDesc = nullptr;
     const twPluginDescriptor *sineDesc = nullptr;
     for( const twPluginDescriptor &d : found ) {
@@ -2786,6 +2791,630 @@ static int testAuxBuses()
     return 0;
 }
 
+// ===========================================================================
+// Proposal 55 M3: sidechain inputs, engine only.
+//
+// An insert's OPTIONAL port 1 carries a KEY page; the processor maps it onto
+// the plugin's first non-main input bus by D4's key rows and calls the
+// bus-aware processBuses(). These gates hold AC3.1-AC3.5 to numbers.
+// ===========================================================================
+namespace {
+
+// A wide source whose every sample is a pure function of (channel, position).
+class FnSource : public twComponent {
+public:
+    using Fn = std::function<float( idx_t, offset_t )>;
+    FnSource( tw303aEnvironment &env, idx_t channels, Fn fn )
+        : twComponent( env ), channels_( channels < 1 ? 1 : channels ), fn_( std::move( fn ) ) {}
+
+    idx_t getNInputs() const override  { return 0; }
+    idx_t getNOutputs() const override { return 1; }
+    idx_t getOutputChannels() const override { return channels_; }
+    const char *getInputName( idx_t ) const override  { return nullptr; }
+    const char *getOutputName( idx_t ) const override { return nullptr; }
+    void createOutputLatches() override
+    {
+        pOutputLatches_.resize( 1 );
+        pOutputLatches_[0] = std::make_shared<twStreamingLatch>( shared_from_this(), 0, 4096 );
+    }
+    void reset() override {}
+    bool isSeekable() const override { return true; }
+    bool usesSerialCursor() const override { return true; }
+    int  seekTo( offset_t o ) override { pos_ = o; return 0; }
+    length_t renderPageWide( twOutputPage &page, length_t frames,
+                             const sample_t *, length_t ) override
+    {
+        length_t n = std::min<length_t>( frames, (length_t)page.channelFrames() );
+        for( idx_t c = 0; c < (idx_t)page.channels(); ++c )
+            for( length_t i = 0; i < n; ++i ) page.channelPtr( c )[i] = fn_( c, pos_ + i );
+        pos_ += n;
+        return n;
+    }
+    length_t renderFrames( sample_t *out, length_t len, const sample_t *, length_t,
+                           idx_t ) override
+    {
+        for( length_t i = 0; i < len; ++i ) out[i] = fn_( 0, pos_ + i );
+        pos_ += len;
+        return len;
+    }
+    float value( idx_t c, offset_t p ) const { return fn_( c, p ); }
+
+private:
+    idx_t    channels_;
+    Fn       fn_;
+    offset_t pos_ = 0;
+};
+
+constexpr offset_t kKeyOn  = 16384;
+constexpr offset_t kKeyOff = 40960;
+constexpr offset_t kHold   = 2048;
+
+// AC3.1's material: a constant sine as the main input (channel 1 at a
+// different level, so a swapped pair shows), a sine BURST in [16384, 40960)
+// as the key, silence elsewhere.
+float mainSine( idx_t c, offset_t p )
+{
+    const double s = std::sin( 2.0 * 3.14159265358979323846 * 440.0 * (double)p / 48000.0 );
+    return (float)( ( c == 0 ? 0.5 : 0.3 ) * s );
+}
+float keyBurst( idx_t, offset_t p )
+{
+    if( p < kKeyOn || p >= kKeyOff ) return 0.0f;
+    return (float)( 0.5 * std::sin( 2.0 * 3.14159265358979323846 * 1000.0 *
+                                    (double)( p - kKeyOn ) / 48000.0 ) );
+}
+
+double rmsOf( const twOutputPage &pg, idx_t c, offset_t a, offset_t b )
+{
+    double e = 0.0;
+    for( offset_t i = a; i < b; ++i ) {
+        const double v = pg.channelPtr( c )[i];
+        e += v * v;
+    }
+    return std::sqrt( e / (double)( b - a ) );
+}
+
+std::shared_ptr<FnSource> makeFn( tw303aEnvironment &env, idx_t ch, FnSource::Fn fn )
+{
+    auto f = std::make_shared<FnSource>( env, ch, std::move( fn ) );
+    f->init();
+    return f;
+}
+
+// A plugin with a configurable main layout and a sidechain bus of S channels
+// (S = 0: none). Through processBuses() it writes out[c] = key[c % S] when a
+// key is handed, which makes the MAPPING the slot chose directly readable on
+// the page; otherwise out = in. It counts which overload it was driven
+// through and what it was told.
+class KeyMock : public twPlugin {
+public:
+    KeyMock( int nIn, int nOut, int s ) : s_( s )
+    {
+        io_.audioInputs  = (std::uint16_t)nIn;
+        io_.audioOutputs = (std::uint16_t)nOut;
+    }
+    const twPluginIoLayout &ioLayout() const override { return io_; }
+    void prepare( std::uint32_t, std::uint32_t ) override { ++prepares_; }
+    void process( const float *const *in, float *const *out, std::uint32_t n ) override
+    {
+        ++legacyCalls_;
+        copyIn( in, out, n );
+    }
+    void process( const float *const *in, float *const *const *outBuses, std::uint32_t n,
+                  const twEventList &, twEventOut &, const twProcessContext & ) override
+    {
+        ++eventCalls_;
+        copyIn( in, outBuses[0], n );
+    }
+    void processBuses( const float *const *const *inBuses, float *const *const *outBuses,
+                       std::uint32_t n, const twEventList &, twEventOut &,
+                       const twProcessContext & ) override
+    {
+        ++busCalls_;
+        float *const *out = outBuses[0];
+        // Read bus 1 only when told it is fed: that is the promise.
+        const float *const *key = ( ( mask_ & 2u ) && s_ > 0 ) ? inBuses[1] : nullptr;
+        if( !key ) { copyIn( inBuses[0], out, n ); return; }
+        ++keyedCalls_;
+        if( s_ == 2 )
+            for( std::uint32_t i = 0; i < n; ++i )
+                if( key[0][i] != key[1][i] ) ++keyMismatch_;
+        for( int c = 0; c < io_.audioOutputs; ++c )
+            std::memcpy( out[c], key[c % s_], n * sizeof( float ) );
+    }
+    void reset() override {}
+    std::size_t       paramCount() const override { return 0; }
+    twPluginParamInfo paramInfo( std::size_t ) const override { return {}; }
+    double getParam( std::uint32_t ) const override { return 0.0; }
+    void   setParam( std::uint32_t, double ) override {}
+    std::vector<std::uint8_t> saveState() const override { return {}; }
+    bool loadState( const std::vector<std::uint8_t> & ) override { return true; }
+    std::size_t audioInBusCount() const override
+    {
+        return ( io_.audioInputs > 0 || s_ > 0 ? 1u : 0u ) + ( s_ > 0 ? 1u : 0u );
+    }
+    twPluginBusInfo audioInBus( std::size_t i ) const override
+    {
+        twPluginBusInfo b;
+        if( i == 0 ) { b.channels = io_.audioInputs; b.isMain = true; }
+        if( i == 1 && s_ > 0 ) b.channels = (std::uint16_t)s_;
+        return b;
+    }
+    void setRoutedInBuses( std::uint32_t m ) override { mask_ = m; ++maskCalls_; }
+
+    std::atomic<int> legacyCalls_{ 0 }, eventCalls_{ 0 }, busCalls_{ 0 }, keyedCalls_{ 0 };
+    std::atomic<long> keyMismatch_{ 0 };
+    int              prepares_ = 0, maskCalls_ = 0;
+    std::uint32_t    mask_ = 0;
+
+private:
+    void copyIn( const float *const *in, float *const *out, std::uint32_t n )
+    {
+        for( int c = 0; c < io_.audioOutputs; ++c ) {
+            if( c < io_.audioInputs && in && in[c] )
+                std::memcpy( out[c], in[c], n * sizeof( float ) );
+            else
+                std::memset( out[c], 0, n * sizeof( float ) );
+        }
+    }
+    twPluginIoLayout io_{};
+    int              s_;
+};
+
+struct KeyRig {
+    std::shared_ptr<twPluginSlotProcessor> proc;
+    std::shared_ptr<FnSource>              main, key;
+    std::shared_ptr<twPluginInsert>        insert;
+    KeyMock                               *mock = nullptr;   // instance 0
+};
+
+// A slot of KeyMock(nIn, nOut, S) on a `width` page, its main input a
+// position ramp, keyed (when keyWidth > 0) from a source of keyWidth
+// channels whose channel c is (c+1) x keyBurst.
+KeyRig buildKeyRig( tw303aEnvironment &env, int width, int nIn, int nOut, int S,
+                    int keyWidth )
+{
+    KeyRig r;
+    KeyMock **first = &r.mock;
+    r.proc = std::make_shared<twPluginSlotProcessor>(
+        env,
+        [nIn, nOut, S, first]() {
+            auto p = std::make_unique<KeyMock>( nIn, nOut, S );
+            if( !*first ) *first = p.get();
+            return std::unique_ptr<twPlugin>( std::move( p ) );
+        },
+        twPluginIoLayout{ (std::uint16_t)nIn, (std::uint16_t)nOut } );
+    r.proc->setChannelCount( (idx_t)width );
+    r.insert = std::make_shared<twPluginInsert>( env, r.proc );
+    r.insert->init();
+    r.main = makeFn( env, (idx_t)width,
+                     []( idx_t c, offset_t p ) { return (float)( c + 1 ) * 0.001f * (float)( p % 97 ); } );
+    r.insert->setInput( 0, r.main->linkOutput( 0 ) );
+    if( keyWidth > 0 ) {
+        r.key = makeFn( env, (idx_t)keyWidth,
+                        []( idx_t c, offset_t p ) { return (float)( c + 1 ) * keyBurst( c, p ); } );
+        r.insert->setKeySource( r.key );
+    }
+    return r;
+}
+
+struct DuckNumbers {
+    double inKey[2]  = { 0, 0 };   // RMS out / RMS dry over [16384+2048, 40960)
+    double before[2] = { 0, 0 };   // ...over [0, 16384)
+    double after[2]  = { 0, 0 };   // ...over [40960+2048, 65536)
+    bool   ok = false;
+};
+
+// AC3.1's measurement, for one backend: a 2-channel slot of `desc`, main =
+// mainSine, keyed (or not) from a 2-channel keyBurst, one page at 0.
+DuckNumbers measureDuck( tw303aEnvironment &env, const twPluginDescriptor &desc,
+                         bool keyed, twPlugin **instanceOut = nullptr,
+                         std::shared_ptr<twPluginInsert> *insertOut = nullptr )
+{
+    // The sources outlive this call whenever the insert does: a plug does not
+    // keep its producer alive, and a dead producer reads as silence.
+    static std::vector<std::shared_ptr<twComponent>> keepAlive;
+    DuckNumbers d;
+    auto &registry = pluginRegistry();
+    auto proc = std::make_shared<twPluginSlotProcessor>(
+        env, [&registry, desc]() { return registry.instantiate( desc ); },
+        twPluginIoLayout{ 2, 2 } );
+    proc->setChannelCount( 2 );
+    auto insert = std::make_shared<twPluginInsert>( env, proc );
+    insert->init();
+    auto main = makeFn( env, 2, mainSine );
+    insert->setInput( 0, main->linkOutput( 0 ) );
+    auto key = makeFn( env, 2, keyBurst );
+    if( keyed ) insert->setKeySource( key );
+    if( insertOut ) { keepAlive.push_back( main ); keepAlive.push_back( key ); }
+    if( instanceOut ) *instanceOut = proc->plugin();
+    if( insertOut ) *insertOut = insert;
+
+    const int rate = env.getSRate();
+    auto out = freezeInsert( insert, 0, rate );
+    auto dry = main->requestPage( 0, nullptr, 0, (length_t)twOutputPage::FRAME_CAPACITY,
+                                  rate, nullptr );
+    if( !out || !dry || out->channels() != 2 ||
+        out->validFrames < twOutputPage::FRAME_CAPACITY )
+        return d;
+    const offset_t N = (offset_t)twOutputPage::FRAME_CAPACITY;
+    for( idx_t c = 0; c < 2; ++c ) {
+        d.inKey[c]  = rmsOf( *out, c, kKeyOn + kHold, kKeyOff ) /
+                      rmsOf( *dry, c, kKeyOn + kHold, kKeyOff );
+        d.before[c] = rmsOf( *out, c, 0, kKeyOn ) / rmsOf( *dry, c, 0, kKeyOn );
+        d.after[c]  = rmsOf( *out, c, kKeyOff + kHold, N ) / rmsOf( *dry, c, kKeyOff + kHold, N );
+    }
+    d.ok = true;
+    return d;
+}
+
+void reportDuck( const DuckNumbers &d, const std::string &label )
+{
+    std::cout << "       " << label << ": out/dry RMS  in-key " << d.inKey[0] << " / "
+              << d.inKey[1] << "   before " << d.before[0] << " / " << d.before[1]
+              << "   after " << d.after[0] << " / " << d.after[1] << std::endl;
+}
+
+bool within( double v, double want, double rel ) { return std::fabs( v / want - 1.0 ) <= rel; }
+
+void checkDuck( tw303aEnvironment &env, const twPluginDescriptor &desc, const std::string &label )
+{
+    const DuckNumbers d = measureDuck( env, desc, true );
+    reportDuck( d, label + " keyed" );
+    check( d.ok, ( label + ": the keyed slot renders a full stereo page" ).c_str() );
+    check( within( d.inKey[0], 0.25, 0.005 ) && within( d.inKey[1], 0.25, 0.005 ),
+           ( label + ": AC3.1 RMS over [18432, 40960) = 0.25 x dry +/-0.5 %, both channels" ).c_str() );
+    check( within( d.before[0], 1.0, 0.005 ) && within( d.before[1], 1.0, 0.005 ),
+           ( label + ": AC3.1 RMS over [0, 16384) = dry +/-0.5 %" ).c_str() );
+    check( within( d.after[0], 1.0, 0.005 ) && within( d.after[1], 1.0, 0.005 ),
+           ( label + ": AC3.1 RMS over [43008, 65536) = dry +/-0.5 %" ).c_str() );
+}
+
+}  // namespace
+
+static int testSidechain()
+{
+    std::cout << "=== proposal 55 M3: sidechain inputs ===" << std::endl;
+    tw303aEnvironment env;
+    env.setSRate( 48000 );
+    const int rate = env.getSRate();
+    const std::size_t N = twOutputPage::FRAME_CAPACITY;
+
+    // ---- AC3.2: an UNKEYED slot is today's insert ---------------------------
+    {
+        KeyRig r = buildKeyRig( env, 2, 2, 2, 2, 0 );
+        check( !r.insert->keyWired(), "AC3.2 port 1 starts unwired" );
+        check( r.proc->keyMapping() == twKeyMapping::None, "...and the slot reports no key" );
+        check( r.insert->planPage( 0 ).deps.size() == 1,
+               "AC3.2 an unkeyed insert plans exactly ONE dependency (its main input)" );
+        auto page = freezeInsert( r.insert, 0, rate );
+        auto dry  = freezeAt( r.main, 0, rate );
+        bool same = page && dry && page->channels() == 2;
+        for( idx_t c = 0; same && c < 2; ++c )
+            same = std::memcmp( page->channelPtr( c ), dry->channelPtr( c ), N * sizeof( float ) ) == 0;
+        check( same, "AC3.2 the unkeyed page is byte-identical to the input (the mock copies)" );
+        check( r.mock && r.mock->legacyCalls_ > 0 && r.mock->busCalls_ == 0 &&
+                   r.mock->eventCalls_ == 0,
+               "AC3.2 the processor makes the LEGACY process() call, never processBuses()" );
+        check( r.mock && r.mock->maskCalls_ == 0,
+               "AC3.2 ...and never tells the plugin about a sidechain at all" );
+        const twComponent::PageStats st = r.insert->pageStats();
+        check( st.pages == 1 && st.bytes == 2 * twOutputPage::PAGE_SIZE,
+               "AC3.2 ...and its page costs exactly what it did: 524288 B" );
+
+        // Keying stales the insert, plans the key, and switches the call.
+        const std::uint64_t e0 = r.insert->contentEpochNow();
+        auto key = makeFn( env, 2, []( idx_t c, offset_t p ) { return (float)( c + 1 ) * keyBurst( c, p ); } );
+        r.insert->setKeySource( key );
+        check( r.insert->contentEpochNow() > e0, "keying the slot bumps the insert's content epoch" );
+        check( r.insert->keyWired() && r.proc->keyChannels() == 2 &&
+                   r.proc->keyMapping() == twKeyMapping::Copy,
+               "...port 1 is wired, the key is 2 channels and the mapping is COPY" );
+        check( r.mock && r.mock->mask_ == 2u && r.mock->prepares_ >= 2,
+               "...the plugin learns input bus 1 is fed and is RE-PREPARED" );
+        check( r.insert->planPage( 0 ).deps.size() == 2,
+               "a keyed insert plans the KEY as a second dependency (base planPage)" );
+        auto keyed = freezeInsert( r.insert, 0, rate );
+        check( keyed && keyed != page, "the next render at the same position is a NEW page" );
+        check( r.mock && r.mock->busCalls_ > 0 && r.mock->keyedCalls_ > 0,
+               "...rendered through processBuses() with the key in hand" );
+
+        // ...and back: unkeyed again is the legacy call again.
+        const std::uint64_t e1 = r.insert->contentEpochNow();
+        const int legacyBefore = r.mock ? r.mock->legacyCalls_.load() : 0;
+        const int busBefore    = r.mock ? r.mock->busCalls_.load() : 0;
+        r.insert->setKeySource( nullptr );
+        check( r.insert->contentEpochNow() > e1 && !r.insert->keyWired() &&
+                   r.proc->keyMapping() == twKeyMapping::None,
+               "unkeying stales the pages and unwires port 1" );
+        check( r.mock && r.mock->mask_ == 0, "...and the plugin is told nothing is fed" );
+        auto back = freezeInsert( r.insert, 0, rate );
+        bool backSame = back && dry;
+        for( idx_t c = 0; backSame && c < 2; ++c )
+            backSame = std::memcmp( back->channelPtr( c ), dry->channelPtr( c ), N * sizeof( float ) ) == 0;
+        check( backSame && r.mock && r.mock->legacyCalls_ > legacyBefore &&
+                   r.mock->busCalls_ == busBefore,
+               "...and renders through the legacy call, byte-identical to the input" );
+    }
+
+    // ---- AC3.4 + D4: the key rows ------------------------------------------
+    {
+        // COPY: a 2-channel key into a stereo sidechain, channel for channel.
+        KeyRig r = buildKeyRig( env, 2, 2, 2, 2, 2 );
+        check( r.proc->describeKey() == "keyChannels=2|busChannels=2|mapping=copy",
+               "D4 2 -> 2 is the COPY row (describeKey)" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto kp = freezeAt( r.key, 0, rate );
+        bool same = pg && kp;
+        for( idx_t c = 0; same && c < 2; ++c )
+            same = std::memcmp( pg->channelPtr( c ), kp->channelPtr( c ), N * sizeof( float ) ) == 0;
+        check( same, "D4 COPY: the plugin's sidechain carries the key page byte for byte" );
+        check( !allZero( *pg, 1, N ), "...and it is not silence" );
+    }
+    {
+        // MEAN: a stereo key into a MONO sidechain bus averages.
+        KeyRig r = buildKeyRig( env, 2, 2, 2, 1, 2 );
+        check( r.proc->keyMapping() == twKeyMapping::Mean, "AC3.4 2 -> 1 is the MEAN row" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto kp = freezeAt( r.key, 0, rate );
+        bool mean = pg && kp;
+        for( std::size_t i = 0; mean && i < N; ++i ) {
+            const float want = ( kp->channelPtr( 0 )[i] + kp->channelPtr( 1 )[i] ) / 2.0f;
+            mean = pg->channelPtr( 0 )[i] == want && pg->channelPtr( 1 )[i] == want;
+        }
+        check( mean, "AC3.4 a stereo key into a mono sidechain bus is the MEAN of the pair" );
+        check( pg && !allZero( *pg, 0, N ), "...and it is not silence" );
+    }
+    {
+        // DUPLICATE (Direct): a mono key into a stereo sidechain on a mono page.
+        KeyRig r = buildKeyRig( env, 1, 1, 1, 2, 1 );
+        check( r.proc->mode() == twPluginSlotMode::Direct &&
+                   r.proc->keyMapping() == twKeyMapping::Duplicate,
+               "AC3.4 1 -> 2 is the DUPLICATE row (a 1->1 plugin on one channel is Direct)" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto kp = freezeAt( r.key, 0, rate );
+        bool dup = pg && kp &&
+                   std::memcmp( pg->channelPtr( 0 ), kp->channelPtr( 0 ), N * sizeof( float ) ) == 0;
+        check( dup && r.mock && r.mock->keyedCalls_ > 0 && r.mock->keyMismatch_ == 0,
+               "AC3.4 a mono key into a stereo sidechain DUPLICATES: both inputs carry it" );
+        check( pg && !allZero( *pg, 0, N ), "...and it is not silence" );
+    }
+    {
+        // DUPLICATE under MonoFold: the other single-instance effect row.
+        KeyRig r = buildKeyRig( env, 1, 2, 2, 2, 1 );
+        check( r.proc->mode() == twPluginSlotMode::MonoFold &&
+                   r.proc->keyMapping() == twKeyMapping::Duplicate,
+               "a 2->2 plugin with a stereo sidechain on one channel folds, keyed by DUPLICATE" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto kp = freezeAt( r.key, 0, rate );
+        bool fold = pg && kp;
+        for( std::size_t i = 0; fold && i < N; ++i )
+            fold = pg->channelPtr( 0 )[i] ==
+                   0.5f * ( kp->channelPtr( 0 )[i] + kp->channelPtr( 0 )[i] );
+        check( fold && r.mock && r.mock->keyMismatch_ == 0,
+               "...and the MonoFold path hands the plugin the key (out = fold of key, key)" );
+    }
+    {
+        // A GENERATOR keyed: bus 0 is null, bus 1 the key, plus the
+        // pass-through sum of an unwired (silent) main input.
+        KeyRig r = buildKeyRig( env, 2, 0, 2, 2, 2 );
+        check( r.proc->mode() == twPluginSlotMode::DirectGen &&
+                   r.proc->keyMapping() == twKeyMapping::Copy,
+               "a 0->2 generator with a stereo sidechain is keyable (DirectGen, COPY)" );
+        r.insert->setInput( 0, nullptr );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto kp = freezeAt( r.key, 0, rate );
+        bool same = pg && kp;
+        for( idx_t c = 0; same && c < 2; ++c )
+            same = std::memcmp( pg->channelPtr( c ), kp->channelPtr( c ), N * sizeof( float ) ) == 0;
+        check( same, "...and the generator path hands it the key, byte for byte" );
+    }
+    {
+        // REFUSED: no row (2 -> 3), and no sidechain bus at all.
+        KeyRig r = buildKeyRig( env, 2, 2, 2, 3, 2 );
+        check( r.proc->describeKey() == "keyChannels=2|busChannels=3|mapping=refused",
+               "D4 2 -> 3 has no row and is REFUSED (describeKey says so)" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto dry = freezeAt( r.main, 0, rate );
+        bool same = pg && dry;
+        for( idx_t c = 0; same && c < 2; ++c )
+            same = std::memcmp( pg->channelPtr( c ), dry->channelPtr( c ), N * sizeof( float ) ) == 0;
+        check( same && r.mock && r.mock->busCalls_ == 0 && r.mock->maskCalls_ == 0,
+               "...the plugin is never told and never keyed: its sidechain is silent" );
+        KeyRig n = buildKeyRig( env, 2, 2, 2, 0, 2 );
+        check( n.proc->describeKey() == "keyChannels=2|busChannels=0|mapping=refused",
+               "a plugin with NO sidechain bus refuses the key" );
+    }
+    {
+        // D9: DualMono has no "the plugin's sidechain".
+        KeyRig r = buildKeyRig( env, 2, 1, 1, 1, 2 );
+        check( r.proc->mode() == twPluginSlotMode::DualMono &&
+                   r.proc->keyMapping() == twKeyMapping::Unroutable,
+               "D9 a keyed DualMono slot is UNROUTABLE" );
+        check( r.proc->keyChannels() == 2, "D9 ...but the key is KEPT" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        check( pg && r.mock && r.mock->busCalls_ == 0 && r.mock->maskCalls_ == 0,
+               "D9 ...and no instance is keyed or told" );
+    }
+    {
+        // A key gathered under ANOTHER width than the mapping was decided for
+        // (a rewire racing a render) is fed as silence, never mis-mapped.
+        KeyRig r = buildKeyRig( env, 2, 2, 2, 2, 2 );
+        std::vector<float> in0( 4096, 0.25f ), in1( 4096, 0.5f ), o0( 4096 ), o1( 4096 );
+        std::vector<float> k0( 4096, 0.75f ), k1( 4096, 0.75f ), k2( 4096, 0.75f );
+        const float *inP[2]  = { in0.data(), in1.data() };
+        float       *outP[2] = { o0.data(), o1.data() };
+        const float *k3[3]   = { k0.data(), k1.data(), k2.data() };
+        r.proc->render( inP, outP, 4096, 0, true, rate, nullptr, k3, 3 );
+        bool silent = true;
+        for( std::size_t i = 0; silent && i < 4096; ++i ) silent = o0[i] == 0.0f && o1[i] == 0.0f;
+        check( silent, "a key of the wrong width reaches the plugin as SILENCE" );
+        r.proc->render( inP, outP, 4096, 4096, true, rate, nullptr, k3, 2 );
+        bool fed = true;
+        for( std::size_t i = 0; fed && i < 4096; ++i ) fed = o0[i] == 0.75f && o1[i] == 0.75f;
+        check( fed, "...and the same buffers at the decided width reach it as the key" );
+    }
+    {
+        // A REBUILT slot keeps its key (setFactory, the reload path of
+        // proposal 08 M4): the new instance is told BEFORE its first prepare()
+        // and the next render is keyed again.
+        KeyRig r = buildKeyRig( env, 2, 2, 2, 2, 2 );
+        r.proc->setFactory( []() { return std::unique_ptr<twPlugin>( new KeyMock( 2, 2, 2 ) ); } );
+        KeyMock *fresh = static_cast<KeyMock *>( r.proc->plugin() );
+        // (Not compared with the old pointer: the allocator may hand the new
+        // instance the old one's address.)
+        check( fresh && fresh->maskCalls_ == 1 && fresh->prepares_ == 1 && fresh->mask_ == 2u &&
+                   r.proc->keyMapping() == twKeyMapping::Copy,
+               "a rebuilt slot KEEPS its key: the new instance is told input bus 1 is fed" );
+        auto pg = freezeInsert( r.insert, 0, rate );
+        auto kp = freezeAt( r.key, 0, rate );
+        bool same = pg && kp && fresh && fresh->keyedCalls_ > 0;
+        for( idx_t c = 0; same && c < 2; ++c )
+            same = std::memcmp( pg->channelPtr( c ), kp->channelPtr( c ), N * sizeof( float ) ) == 0;
+        check( same, "...and renders keyed" );
+    }
+    {
+        // setKeySource must not disturb the MAIN input's teardown bookkeeping.
+        // twComponent::setInput() records the producer of whatever it installs
+        // as the teardown "parent" and clears it on an unwire; teardown then
+        // calls parent->removeInput(myInputIndex_). Observed through a main
+        // producer that HAS an input: a wire + unwire of the key must leave
+        // teardown still reaching the main producer.
+        KeyRig a = buildKeyRig( env, 2, 2, 2, 2, 0 );
+        KeyRig b = buildKeyRig( env, 2, 2, 2, 2, 0 );
+        b.insert->setInput( 0, a.insert->linkOutput( 0 ) );
+        check( a.insert->getInputPlug( 0 ) != nullptr, "(the upstream insert is wired)" );
+        auto key = makeFn( env, 2, keyBurst );
+        b.insert->setKeySource( key );
+        b.insert->setKeySource( nullptr );
+        b.insert->teardown();
+        check( a.insert->getInputPlug( 0 ) == nullptr,
+               "a key wired and unwired leaves teardown's bookkeeping on the MAIN input's producer" );
+    }
+    {
+        // The chain's series wiring is port 0 only: a rebuild (add, reorder)
+        // leaves port 1 alone. (Re-asserting the key after a SLOT rebuild is
+        // the model's job, proposal 55 M4.)
+        KeyRig a = buildKeyRig( env, 2, 2, 2, 2, 2 );
+        KeyRig b = buildKeyRig( env, 2, 2, 2, 2, 0 );
+        auto chain = std::make_shared<twPluginChain>( env, 2 );
+        chain->init();
+        chain->setInput( 0, a.main->linkOutput( 0 ) );
+        chain->addPlugin( a.insert );
+        chain->addPlugin( b.insert );
+        twLatchOutput *plug = a.insert->getInputPlug( twPluginInsert::kKeyPort );
+        chain->reorderPlugin( 0, 1 );
+        check( a.insert->keyWired() && a.insert->getInputPlug( twPluginInsert::kKeyPort ) == plug &&
+                   a.proc->keyMapping() == twKeyMapping::Copy,
+               "T4 (engine half) a chain reorder leaves an insert's key port wired" );
+        check( !b.insert->keyWired(), "...and wires no key into the other insert" );
+    }
+
+#ifdef TW_TESTCLAP_PATH
+    // ---- AC3.1 (CLAP) + AC3.2 on a real effect ------------------------------
+    {
+        twPluginDescriptor desc;
+        desc.format = "clap";
+        desc.uid    = "tw.test.clap.duck";
+        desc.path   = TW_TESTCLAP_PATH;
+        desc.name   = "Smaragd Test Duck";
+        auto probe = pluginRegistry().instantiate( desc );
+        if( check( probe != nullptr, "tw.test.clap.duck instantiates" ) ) {
+            check( probe->audioInBusCount() == 2 && probe->audioInBus( 1 ).channels == 2 &&
+                       !probe->audioInBus( 1 ).isMain && probe->audioInBus( 0 ).isMain,
+                   "...with a stereo SIDECHAIN input as bus 1" );
+            check( probe->audioOutBusCount() == 1, "...and one output bus" );
+            probe.reset();
+            checkDuck( env, desc, "CLAP duck" );
+
+            const DuckNumbers u = measureDuck( env, desc, false );
+            reportDuck( u, "CLAP duck unkeyed" );
+            check( u.ok && u.inKey[0] == 1.0 && u.inKey[1] == 1.0,
+                   "AC3.2 the same slot with port 1 UNWIRED does not duck: out/dry = 1 exactly" );
+            // ...byte for byte.
+            std::shared_ptr<twPluginInsert> ins;
+            measureDuck( env, desc, false, nullptr, &ins );
+            auto pg  = freezeInsert( ins, 0, rate );
+            auto src = makeFn( env, 2, mainSine );
+            auto dry = freezeAt( src, 0, rate );
+            bool same = pg && dry;
+            for( idx_t c = 0; same && c < 2; ++c )
+                same = std::memcmp( pg->channelPtr( c ), dry->channelPtr( c ), N * sizeof( float ) ) == 0;
+            check( same, "AC3.2 ...its page is byte-identical to its input (the duck is an identity)" );
+
+            // Keyed, then UNKEYED: CLAP's prepare() is idempotent at one rate,
+            // so nothing re-points the sidechain port but process() itself.
+            // It must get its silent scratch back, never the last key. The key
+            // here is LOUD to the very last chunk, so a port left pointing at
+            // it would duck the whole unkeyed page.
+            auto key = makeFn( env, 2, []( idx_t, offset_t ) { return 0.5f; } );
+            ins->setKeySource( key );
+            auto keyedPg = freezeInsert( ins, 0, rate );
+            check( keyedPg && within( rmsOf( *keyedPg, 0, kHold, (offset_t)N ) /
+                                          rmsOf( *dry, 0, kHold, (offset_t)N ), 0.25, 0.005 ),
+                   "(keyed by a constant key, the same CLAP slot ducks the whole page)" );
+            ins->setKeySource( nullptr );
+            auto unkeyedPg = freezeInsert( ins, 0, rate );
+            bool back = unkeyedPg && dry;
+            for( idx_t c = 0; back && c < 2; ++c )
+                back = std::memcmp( unkeyedPg->channelPtr( c ), dry->channelPtr( c ),
+                                    N * sizeof( float ) ) == 0;
+            check( back, "unkeyed AGAIN, the CLAP sidechain port is back on its silent scratch: "
+                         "an identity, byte for byte" );
+        }
+    }
+#endif
+
+#ifdef TW_TESTVST3_PATH
+    // ---- AC3.1 + AC3.3 (VST3) ------------------------------------------------
+    {
+        twPluginDescriptor desc;
+        for( const twPluginDescriptor &d : vst3ModuleDescriptors( TW_TESTVST3_PATH ) )
+            if( d.name == "TW Test VST3 Duck" ) desc = d;
+        if( check( !desc.uid.empty(), "TestDuck is in the VST3 fixture module" ) ) {
+            checkDuck( env, desc, "VST3 TestDuck" );
+
+            // AC3.3: the aux INPUT is activated only when keyed. TestDuck
+            // reports its activation as one frame of tail, read live.
+            twPlugin *inst = nullptr;
+            std::shared_ptr<twPluginInsert> ins;
+            measureDuck( env, desc, false, &inst, &ins );
+            check( inst && inst->tailFrames() == 0, "AC3.3 unkeyed: the sidechain bus is NOT activated" );
+            auto key = makeFn( env, 2, keyBurst );
+            ins->setKeySource( key );
+            check( inst && ins->getPlugin() == inst && inst->tailFrames() == 1,
+                   "AC3.3 keyed: prepare() ACTIVATES the sidechain bus" );
+            ins->setKeySource( nullptr );
+            check( inst && inst->tailFrames() == 0, "AC3.3 unkeyed again: prepare() deactivates it" );
+
+            // AC3.3 THE TEETH: the same keyed slot down a deliberately BROKEN
+            // host path that hands TestDuck the key but never activates the
+            // bus. TestDuck must then NOT duck, or the activation above would
+            // be proving nothing.
+#if defined( _WIN32 )
+            _putenv( (char *)"SMARAGD_VST3_NO_SIDECHAIN_BUS=1" );
+#else
+            setenv( "SMARAGD_VST3_NO_SIDECHAIN_BUS", "1", 1 );
+#endif
+            twPlugin *broken = nullptr;
+            std::shared_ptr<twPluginInsert> brokenIns;   // keeps `broken` alive
+            const DuckNumbers b = measureDuck( env, desc, true, &broken, &brokenIns );
+#if defined( _WIN32 )
+            _putenv( (char *)"SMARAGD_VST3_NO_SIDECHAIN_BUS=" );
+#else
+            unsetenv( "SMARAGD_VST3_NO_SIDECHAIN_BUS" );
+#endif
+            reportDuck( b, "VST3 TestDuck keyed, bus NOT activated" );
+            check( b.ok && b.inKey[0] == 1.0 && b.inKey[1] == 1.0,
+                   "AC3.3 keyed but NOT activated, TestDuck does not duck - so the "
+                   "activation is load-bearing" );
+            check( broken && broken->tailFrames() == 0, "...and it reports the bus inactive" );
+        }
+    }
+#endif
+    return 0;
+}
+
 int testPluginInsert()
 {
     testBuiltinPlugin();
@@ -2797,6 +3426,7 @@ int testPluginInsert()
     testGeneratorSlot();
     testLiveCatchUp();
     testAuxBuses();
+    testSidechain();
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
     testClapEditor();
