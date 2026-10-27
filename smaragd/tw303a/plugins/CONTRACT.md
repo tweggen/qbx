@@ -51,7 +51,8 @@ event source, and every other slot is an effect exactly as before.
   13 was written about; both the fan-out and the cache are gone.
 
 Public headers: twplugin.h, twpluginevents.h, twplugindescriptor.h,
-twpluginsearchpaths.h, twpluginchain.h, twplugininsert.h, twpluginslotproc.h.
+twpluginsearchpaths.h, twpluginchain.h, twplugininsert.h, twpluginslotproc.h,
+twpluginauxtap.h.
 
 Depends on: tw/core, tw/graph, tw/events. Forbidden: app headers,
 devices/sinks, tw/mix (design F15). tw/events is a CORE-ONLY leaf outside the
@@ -546,13 +547,16 @@ Invariants:
    overloads with independent implementations. `acceptsNotes()` likewise stays
    as a forwarder to `capabilities().acceptsNotes` for one release; a backend
    overrides `capabilities()` and gets it for free.
-34. AUX OUTPUT BUSES ARE DISCOVERED AND NOT YET ROUTED (proposal 37 P2).
-   `audioOutBusCount()` / `audioOutBus(i)` report every audio output bus — CLAP
-   ports, VST3 buses, AU output ELEMENTS — and the scanner records them
-   (`nOutBuses`, `outBusChannels`). Only bus 0 is wired: the event-aware
-   `process()` reads `outBuses[0]` and nothing consumes the rest. Proposal 37
-   §5.4 routes them to return tracks in P9; reporting them now is what stops
-   that from needing an ABI change.
+34. AUX OUTPUT BUSES ARE DISCOVERED (proposal 37 P2) AND, SINCE PROPOSAL 55
+   M1, A ROUTED ONE REACHES THE HOST. `audioOutBusCount()` / `audioOutBus(i)`
+   report every audio output bus — CLAP ports, VST3 buses, AU output ELEMENTS —
+   and the scanner records them (`nOutBuses`, `outBusChannels`), and since
+   scanner version 3 the inputs too (`audioInBusCount()` / `audioInBus(i)`,
+   `nInBuses`, `inBusChannels`). The index is a BUS, not a port: bus 0 is the
+   main bus wherever the format declared it and the rest follow in the
+   format's order with the main one taken out (CLAP and VST3 were port-indexed
+   before M1, which agreed only while the main port was port 0). The routing
+   is invariants 58-62. AU stays unrouted (proposal 55 §7).
 35. AU IS macOS-ONLY AND ITS EVENT PATH IS UNVERIFIED (proposal 37 P2). The
    `aumu`/`aumi` enumeration, `MusicDeviceMIDIEvent` posted BEFORE
    `AudioUnitRender` with its own `inOffsetSampleFrame`,
@@ -915,9 +919,9 @@ Known debt:
   represents a moving timeline whether it came from playback or an offline
   render, and there is no third state to report; a plugin that wanted "stopped"
   has nothing to distinguish it from a readahead page.
-- The WideGen surplus channels are rendered and DROPPED (invariant 16). They are
-  design 5.4's aux outputs and there is no return track to route them to until
-  P9; the cost is one chunk buffer per surplus channel.
+- The WideGen surplus channels are rendered and DROPPED (invariant 16). They
+  are surplus channels of the MAIN bus, not an aux bus, and proposal 55 keeps
+  them dropped (§1.1, §7); the cost is one chunk buffer per surplus channel.
 
 ## Parameter automation (proposal 37 P5, design D5 / §4.5)
 
@@ -1261,3 +1265,63 @@ different views of the same type.
     and reaching these two refusals needs a host that offers a bad value — which
     the host no longer does. The gate that bites is the host-side one,
     `minContainerAtLeast` on `qxa.plugin_native_editor`.
+
+## Aux output buses reach the host (proposal 55 M1)
+
+58. **AN AUX BUS IS RENDERED IN THE SAME `process()` CALL AS THE MAIN BUS AND
+    CACHED IN THE SAME PAGE ENTRY** (55 inv. 1). `twPluginSlotProcessor::render(
+    ..., &aux )` allocates a SIDE page of the routed width under its own lock,
+    fills it from the same calls that fill the main page, stamps it with its bus
+    layout (`twOutputPage::auxSlices`) and hands it back; `twPluginInsert` hangs
+    it on its own page (`twOutputPage::aux`) before the page is published. Main
+    and aux go stale together and are evicted together; there is no second
+    cache (inv. 13/15's hazard is not re-created). No component other than the
+    insert calls the plugin.
+
+59. **AN UNROUTED SLOT IS UNCHANGED** (55 inv. 2, T8). With the mask empty the
+    processor allocates no side page, never calls `setRoutedOutBuses()`, and
+    makes exactly the `process()` calls it made before -- the legacy overload on
+    the non-automated Direct path. Gated by `plugins_test` (a counting double)
+    and the committed goldens.
+
+60. **THE ROUTED MASK IS STATE, AND WHAT IS APPLIED IS WHAT IS RENDERED.**
+    `setRoutedOutBuses( mask )` keeps the mask (it outlives a rebuild, a
+    missing plugin, a DualMono mapping), but the plugin is told only the buses
+    the slot actually renders -- none on DualMono (55 D9: "the plugin's bus b"
+    has N candidates), Transparent, Unsupported or Missing. A change of the
+    applied mask re-prepares every instance (VST3 may activate a bus only
+    there) and bumps the insert's epoch, so the next render hears it from its
+    first frame. A rebuilt slot tells its new instances BEFORE their first
+    `prepare()`.
+
+61. **A BACKEND READS `outBuses[b]` FOR A ROUTED BUS ONLY, AND EVERY CALLER
+    PASSES A FULL-LENGTH ARRAY ONCE ONE IS ROUTED.** The ABI always said the
+    array has `audioOutBusCount()` entries, but before M1 every caller in the
+    tree passed ONE (the legacy overloads, the processor's automation and
+    generator paths), which was harmless only because nothing read past entry
+    0. Now: a backend reads an aux entry only when its bus is in the mask it
+    was given, and while the applied mask is non-zero the processor passes
+    `busArrayForChunk_nolock()` (full length, unrouted and side-page-less
+    entries null) on every event-aware call, and the CLAP and VST3 legacy
+    overloads pass a member array as long as the bus list. A null entry gets
+    the backend's own scratch, as every non-main bus always did. VST3
+    ACTIVATES exactly the routed aux outputs at `prepare()` (main buses on as
+    before); CLAP needs no activation. Gated by `TestSplit`, which writes its
+    aux only when activated and reports activation as one frame of tail.
+
+62. **`twPluginAuxTap` READS ONE BUS, THROUGH AN ORDINARY INPUT PLUG, BY THE
+    LAYOUT THE SIDE PAGE CARRIES.** One input plug wired to the insert's
+    output, so the scheduler plans it like any dependency and the lock order
+    stays downstream -> upstream. The width mapping is proposal 55 D4's aux
+    table, decided at construction: copy (A == C, a byte copy), spread
+    (A == 1), fold (A == 2, C == 1), else REFUSED (silent, logged once,
+    `describe()` says `mapping=refused`). A side page that lacks this bus at
+    this width, or whose slice would run past it, renders SILENCE and is
+    counted (`silentRenders()`); it never reads past the side page (55 T10,
+    gated by a race of renders against mask flips: every page is the exact
+    aux or silence). The tap caches its own pages against its OWN epoch, like
+    every component: a mask change stales the insert, not the tap -- whoever
+    re-points a tap (55 M2's mixer pass) must re-wire it, which re-stamps.
+    Memory: 256 kB per routed aux channel per cached page of the insert,
+    counted in its page statistics (`accountedBytesWithAux`), so
+    `describePageMemory` shows it (55 T11).

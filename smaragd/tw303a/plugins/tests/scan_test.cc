@@ -252,14 +252,17 @@ int main( int argc, char **argv )
         audio::check( other.empty(), "...and yields nothing partially trusted" );
     }
 
-    // ---- 6b: AC7 — a version-1 cache is invalidated and rescanned ONCE -------
+    // ---- 6b: AC7 — a previous-version cache is invalidated and rescanned ONCE
     //
-    // kScannerVersion went 1 -> 2 in proposal 37 P2, because the descriptor
-    // gained fields a v1 record cannot supply. The concrete promise is: an
-    // existing plugincache.json from the previous build is thrown away, every
-    // module is re-probed exactly once, and the SECOND scan is a cache hit again
-    // — i.e. the invalidation is a one-off, not a permanent cold start.
-    std::cout << "=== a scanner-v1 cache is invalidated once (proposal 37 P2) ===" << std::endl;
+    // kScannerVersion went 1 -> 2 in proposal 37 P2, and 2 -> 3 in proposal 55
+    // M1 (AC1.6), each time because the descriptor gained fields an older
+    // record cannot supply. The concrete promise is: an existing cache from the
+    // previous build is thrown away, every module is re-probed exactly once,
+    // and the SECOND scan is a cache hit again — i.e. the invalidation is a
+    // one-off, not a permanent cold start. Written against kScannerVersion - 1,
+    // so it is the shape of the CURRENT bump, whichever that is.
+    std::cout << "=== a previous-version (v" << ( twPluginRegistry::kScannerVersion - 1 )
+              << ") cache is invalidated once ===" << std::endl;
     {
         const QString v1Cache = QDir( root ).filePath( "plugincache_v1.json" );
 
@@ -278,9 +281,10 @@ int main( int argc, char **argv )
                 f.close();
                 QJsonDocument doc = QJsonDocument::fromJson( raw );
                 QJsonObject   root2 = doc.object();
-                audio::check( root2.value( "scannerVersion" ).toInt( -1 ) == 2,
-                              "this build writes scannerVersion 2" );
-                root2["scannerVersion"] = 1;   // pretend it came from the old build
+                audio::check( root2.value( "scannerVersion" ).toInt( -1 ) == 3,
+                              "this build writes scannerVersion 3" );
+                // pretend it came from the previous build
+                root2["scannerVersion"] = twPluginRegistry::kScannerVersion - 1;
                 if( f.open( QIODevice::WriteOnly | QIODevice::Truncate ) ) {
                     f.write( QJsonDocument( root2 ).toJson( QJsonDocument::Compact ) );
                     f.close();
@@ -296,7 +300,7 @@ int main( int argc, char **argv )
         const twPluginScanStats s = reg.scanStats();
         std::cout << "       after v1: " << audio::statsLine( s ) << std::endl;
         audio::check( s.modulesProbed == expectFound,
-                      "a v1 cache is discarded and every module is re-probed" );
+                      "a previous-version cache is discarded and every module is re-probed" );
         audio::check( s.modulesCached == 0, "...nothing was served from it" );
 
         reg.rescan( false );
@@ -350,7 +354,26 @@ int main( int argc, char **argv )
                                   sine.outBusChannels[0] == 2 &&
                                   sine.outBusChannels[1] == 1,
                               "...and both output buses (stereo main + mono aux)" );
+                audio::check( sine.nInBuses == 0 && sine.inBusChannels.empty(),
+                              "...and no audio input bus" );
             }
+            // Proposal 55 AC1.6: the probe's JSON carries the scanner-v3 INPUT
+            // bus fields, and the split fixture's aux is its second output bus.
+            audio::check( d.nInBuses == 1 && d.inBusChannels.size() == 1 &&
+                              d.inBusChannels[0] == 2,
+                          "...and the effect's one stereo INPUT bus (scanner v3)" );
+            twPluginDescriptor split;
+            if( audio::check( reg.findByUid( "clap", "tw.test.clap.split", split ),
+                              "the probe also reports the split effect" ) ) {
+                audio::check( split.nOutBuses == 2 && split.outBusChannels.size() == 2 &&
+                                  split.outBusChannels[0] == 2 &&
+                                  split.outBusChannels[1] == 2,
+                              "...with its stereo main AND stereo aux output bus" );
+                audio::check( split.nInBuses == 1 && split.inBusChannels.size() == 1 &&
+                                  split.inBusChannels[0] == 2,
+                              "...and its one stereo input bus" );
+            }
+
             twPluginDescriptor arp;
             if( audio::check( reg.findByUid( "clap", "tw.test.clap.arp", arp ),
                               "the probe also reports the arpeggiator" ) ) {
@@ -419,20 +442,22 @@ int main( int argc, char **argv )
             audio::check( s.modulesProbed == 1, "...and probes it" );
             audio::check( s.modulesFailed == 0, "...successfully" );
 
-            // TWO vst3 descriptors since proposal 37 P2 (the gain effect and
-            // the SPLIT sine instrument); the instrument's controller class is
-            // not an audio-effect class and must not appear.
+            // THREE vst3 descriptors since proposal 55 M1 (the gain effect,
+            // the SPLIT sine instrument and TestSplit); the instrument's
+            // controller class is not an audio-effect class and must not appear.
             const std::vector<twPluginDescriptor> all = reg.plugins();
             const twPluginDescriptor *v3   = nullptr;
             const twPluginDescriptor *sine = nullptr;
+            const twPluginDescriptor *split = nullptr;
             int nVst3 = 0;
             for( const twPluginDescriptor &d : all ) {
                 if( d.format != "vst3" ) continue;
                 ++nVst3;
                 if( d.name == "TW Test VST3 Gain" ) v3 = &d;
                 if( d.name == "TW Test VST3 Sine" ) sine = &d;
+                if( d.name == "TW Test VST3 Split" ) split = &d;
             }
-            audio::check( nVst3 == 2, "both audio-effect classes reached the registry" );
+            audio::check( nVst3 == 3, "all three audio-effect classes reached the registry" );
             if( audio::check( v3 != nullptr, "a format=\"vst3\" descriptor reached the registry" ) ) {
                 audio::check( v3->uid.size() == 32, "its uid is a 32-hex-digit class id" );
                 audio::check( v3->name == "TW Test VST3 Gain", "its name is the class name" );
@@ -454,7 +479,24 @@ int main( int argc, char **argv )
                 audio::check( sine->nOutBuses == 1 && sine->outBusChannels.size() == 1 &&
                                   sine->outBusChannels[0] == 2,
                               "...and one stereo output bus" );
+                audio::check( sine->nInBuses == 0 && sine->inBusChannels.empty(),
+                              "...and no audio input bus (scanner v3)" );
             }
+            // Proposal 55 AC1.6: the scanner (version 3) records INPUT buses,
+            // and TestSplit's aux output is the second output bus.
+            if( audio::check( split != nullptr, "TestSplit was scanned" ) ) {
+                audio::check( split->nOutBuses == 2 && split->outBusChannels.size() == 2 &&
+                                  split->outBusChannels[0] == 2 &&
+                                  split->outBusChannels[1] == 2,
+                              "...with its stereo main AND stereo aux output bus" );
+                audio::check( split->nInBuses == 1 && split->inBusChannels.size() == 1 &&
+                                  split->inBusChannels[0] == 2,
+                              "...and its one stereo input bus" );
+            }
+            if( v3 )
+                audio::check( v3->nInBuses == 1 && v3->inBusChannels.size() == 1 &&
+                                  v3->inBusChannels[0] == 2,
+                              "the gain effect records one stereo input bus" );
 
             reg.rescan( false );
             audio::check( reg.scanStats().modulesProbed == 0,
@@ -464,14 +506,36 @@ int main( int argc, char **argv )
 
             // The version-2 fields must survive the JSON round trip, or a
             // cached instrument would come back looking like an effect.
+            // reg.plugins() returns BY VALUE: hold the vector, or the pointers
+            // below dangle into a destroyed temporary (proposal 55 M1 found the
+            // cachedSplit read returning garbage that way; this one had the
+            // same shape and passed by luck).
+            const std::vector<twPluginDescriptor> cachedAll = reg.plugins();
             const twPluginDescriptor *cachedSine = nullptr;
-            for( const twPluginDescriptor &d : reg.plugins() )
+            for( const twPluginDescriptor &d : cachedAll )
                 if( d.name == "TW Test VST3 Sine" ) cachedSine = &d;
             if( audio::check( cachedSine != nullptr, "the cached instrument is back" ) ) {
                 audio::check( cachedSine->isInstrument && cachedSine->acceptsNotes &&
                                   cachedSine->eventPortsIn == 1 &&
                                   cachedSine->nOutBuses == 1,
                               "the scanner-v2 fields round-trip through plugincache.json" );
+            }
+            const twPluginDescriptor *cachedSplit = nullptr;
+            for( const twPluginDescriptor &d : cachedAll )
+                if( d.name == "TW Test VST3 Split" ) cachedSplit = &d;
+            if( audio::check( cachedSplit != nullptr, "the cached TestSplit is back" ) ) {
+                std::cout << "       cached TestSplit: nInBuses=" << cachedSplit->nInBuses
+                          << " inBusChannels=" << cachedSplit->inBusChannels.size()
+                          << " nOutBuses=" << cachedSplit->nOutBuses
+                          << " outBusChannels=" << cachedSplit->outBusChannels.size()
+                          << std::endl;
+                audio::check( cachedSplit->nInBuses == 1 &&
+                                  cachedSplit->inBusChannels.size() == 1 &&
+                                  cachedSplit->inBusChannels[0] == 2,
+                              "the scanner-v3 INPUT bus fields round-trip through the cache" );
+                audio::check( cachedSplit->nOutBuses == 2 &&
+                                  cachedSplit->outBusChannels.size() == 2,
+                              "...and both output buses do" );
             }
         }
     }
@@ -539,8 +603,8 @@ int main( int argc, char **argv )
             int nVst3 = 0;
             for( const twPluginDescriptor &d : reg.plugins() )
                 if( d.format == "vst3" ) ++nVst3;
-            audio::check( nVst3 == 2,
-                          "both classes came out of a BUNDLE probed out of process, so "
+            audio::check( nVst3 == 3,
+                          "all three classes came out of a BUNDLE probed out of process, so "
                           "bundleEntry got a real CFBundleRef AND the plugin's stdout "
                           "noise did not corrupt the result" );
         }

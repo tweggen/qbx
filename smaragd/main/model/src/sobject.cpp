@@ -1095,16 +1095,19 @@ void SObject::revalCompleted(uint32_t aspects)
 // go stale first; harmless either way (staleness is checked per producer),
 // but it mirrors the render pull order. Multiple links to the same object
 // bump it more than once — a spare atomic increment, not a problem.
-bool SObject::invalidateRenderChainsContaining(SObject *target)
+bool SObject::invalidateRenderChainsContaining(SObject *target,
+                                               QList<SObject *> *bumped)
 {
     bool contains = (this == target);
     for (SLink *lk : childLinks()) {
         if (!lk) continue;
-        if (lk->getSObject().invalidateRenderChainsContaining(target))
+        if (lk->getSObject().invalidateRenderChainsContaining(target, bumped))
             contains = true;
     }
-    if (contains)
+    if (contains) {
         bumpRenderChainEpoch();
+        if (bumped) bumped->append(this);
+    }
     return contains;
 }
 
@@ -1144,7 +1147,18 @@ void SObject::invalidateRenderPath()
     const QList<SObject *> roots = invalidationRootsOf(project);
     bool found = false;
     for (SObject *root : roots) {
-        if (root->invalidateRenderChainsContaining(this)) found = true;
+        // Proposal 55 D7: the walk reports what it bumped, and the root hands
+        // those chains' routing dependents the same invalidation. Asked of
+        // EVERY root that contains the edit, for the reason the roots list
+        // exists at all: an arrangement has its own mixer and its own sends.
+        QList<SObject *> bumped;
+        if (root->invalidateRenderChainsContaining(this, &bumped)) {
+            found = true;
+            QList<QPair<SObject *, QList<SDirtyRange> > > chains;
+            for (SObject *o : bumped)
+                chains.append(qMakePair(o, QList<SDirtyRange>()));
+            root->invalidateRoutingDependents(chains, true);
+        }
     }
     if (!found) {
         // Not reachable from ANY root — during construction or teardown, or an
@@ -1159,7 +1173,13 @@ void SObject::invalidateRenderPath()
         // is carried by its mixer's chain. Delegating here rather than at every
         // call site is what stops the next edit kind from being silently
         // inaudible again.
-        if (SObject *owner = renderPathOwner()) owner->invalidateRenderPath();
+        if (SObject *owner = renderPathOwner()) {
+            owner->invalidateRenderPath();
+            // ...and THIS lane's routing dependents (proposal 55 D7): a send
+            // lane may itself feed a send lane, and the owner's own walk only
+            // ever finds the owner.
+            owner->invalidateRoutingDependents({ { this, {} } }, true);
+        }
     }
 }
 
@@ -1193,7 +1213,8 @@ QList<SObject::SDirtyRange> SObject::mapChildRangesToSelf(
 // bumps nothing on that branch even though the branch contains the target.
 bool SObject::invalidateRenderChainsContainingRange(
     SObject *target, offset_t targetStart, offset_t targetEnd,
-    QList<SDirtyRange> &rangesInSelf )
+    QList<SDirtyRange> &rangesInSelf,
+    QList<QPair<SObject *, QList<SDirtyRange> > > *bumped )
 {
     bool contains = (this == target);
     if (contains)
@@ -1202,7 +1223,7 @@ bool SObject::invalidateRenderChainsContainingRange(
         if (!lk) continue;
         QList<SDirtyRange> childRanges;
         if (lk->getSObject().invalidateRenderChainsContainingRange(
-                target, targetStart, targetEnd, childRanges)) {
+                target, targetStart, targetEnd, childRanges, bumped)) {
             contains = true;
             rangesInSelf.append( mapChildRangesToSelf(lk, childRanges) );
         }
@@ -1211,6 +1232,7 @@ bool SObject::invalidateRenderChainsContainingRange(
         for (const SDirtyRange &r : rangesInSelf)
             if (r.end > r.start)
                 bumpRenderChainEpochRange(r.start, r.end);
+        if (bumped) bumped->append({ this, rangesInSelf });
     }
     return contains;
 }
@@ -1226,8 +1248,13 @@ void SObject::invalidateRenderPathRange( offset_t start, offset_t end )
         // per-branch scratch, and sharing it across two disjoint trees would
         // carry one root's mapped ranges into the other's.
         QList<SDirtyRange> ranges;
-        if (root->invalidateRenderChainsContainingRange(this, start, end, ranges))
+        QList<QPair<SObject *, QList<SDirtyRange> > > bumped;
+        if (root->invalidateRenderChainsContainingRange(this, start, end, ranges,
+                                                        &bumped)) {
             found = true;
+            // Proposal 55 D7, the range twin of invalidateRenderPath()'s.
+            root->invalidateRoutingDependents(bumped, false);
+        }
     }
     if (!found) {
         bumpRenderChainEpoch();
@@ -1235,8 +1262,11 @@ void SObject::invalidateRenderPathRange( offset_t start, offset_t end )
         // the SAME range: a system lane sits in its mixer's chain at the same
         // positions, so no mapping is needed -- unlike a clip window, which is
         // why mapChildRangesToSelf exists for the ordinary walk.
-        if (SObject *owner = renderPathOwner())
+        if (SObject *owner = renderPathOwner()) {
             owner->invalidateRenderPathRange( start, end );
+            owner->invalidateRoutingDependents(
+                { { this, { { start, end } } } }, false );
+        }
     }
 }
 

@@ -8,7 +8,7 @@ interface views implement.
 
 Public headers: app/model/{sobject,slink,sproject,sprojectprops,
 ssortedobjlist,sexternfile,sexternfilelist,sfilepathref,sobjectrenderer,
-sclipwindow}.h
+sclipwindow,sroutinggraph}.h
 
 Depends on (engine): tw/core, tw/graph, tw/pages, tw/schedule, tw/sources,
 tw/events (SProject owns the twTempoMap — the single tempo authority — and
@@ -98,9 +98,19 @@ What to reach for instead:
 
 | the question | the answer |
 |---|---|
-| the root that HOLDS this object | `splacements::specOf()` (the inverse of `laneBySpec()`), then `rootNamed()` or `parseQualified()` |
+| the SPELLING that addresses this object | `splacements::specOf()`, the inverse of `laneBySpec()` |
+| the ROOT OBJECT that holds this object | `splacements::rootHolding()` (QBX-246) |
+| a path that may name its own root | `splacements::laneBySpec( project, spec, rootName )` |
+| a root by NAME (empty = the master) | `splacements::rootNamed()` |
 | the root the ACTIVE VIEW edits | `stimeline::submitActive()` / `submitFor( view, a )` / `submitRooted()` |
 | genuinely the master | keep it, and carry a marker saying why |
+
+`specOf()` and `rootHolding()` share one walk, deliberately: the spelling the
+first returns must resolve back to the same object, and the second returns the
+root that spelling is qualified with. Two copies of the root order could
+disagree, and the pair would then describe different roots for one object.
+**Never re-derive the root by parsing `specOf()`'s string and resolving the
+name again** — ask `rootHolding()`.
 
 ### `SProject::masterRoot()`, and why the rename was necessary
 
@@ -125,7 +135,52 @@ and the reason is required — a marker with no prose fails too. A site that is
 known-wrong and not yet fixed carries `suspect <TICKET>` instead, which needs a
 ticket key and is COUNTED AND PRINTED on every run, so the debt is a number
 somebody sees. At QBX-242 that was 33 master sites and 63 suspects across
-QBX-243 … QBX-246. The honest end state is zero suspects.
+QBX-243 … QBX-246; **QBX-246 closed its own cluster and the count is now 35
+master sites and 44 suspects** across QBX-243, QBX-244, QBX-245 and QBX-247.
+The honest end state is zero suspects.
+
+### Why the testkit's own seams had to go first (QBX-246)
+
+`SActionRunner::assertTrackCount_` — the trailing `<assertions>` block every
+case ends with — and `verifyUndo_` were **master-rooted**, so a case that built
+an arrangement and broke it still reported the master's unchanged count as
+correct. **A gate that cannot see the arrangement cannot fail for the
+arrangement**, and that is the self-reinforcing part of this whole defect class:
+it is why QBX-230 … QBX-234 had to be found by clicking rather than by the
+suite, and why QBX-246 had to land before QBX-243, QBX-244 and QBX-245 could be
+gated at all.
+
+`assert-track-count` now takes `root=` (absent = the master) and `verify-undo`
+compares **every** root's count, the root SET included — undoing an
+arrangement's creation unregisters it, so a root the final state had may
+legitimately be gone after a full undo and must be back after the redo.
+
+The describe/grab/click seams on `SMainWindow` were wrong **twice over**: they
+assumed the master AND parsed `trackPath` with a bare `stringToPath()`. They all
+resolve `splacements::laneBySpec()` now, which peels the qualifier, resolves the
+root by name and **fails closed** on a name it does not know.
+
+**A CORRECTION TO WHAT QBX-242 WROTE HERE, measured at QBX-246.** QBX-242 said a
+bare parse of `"Drums:0"` became master-rooted and so "resolved a real object in
+the wrong tree and succeeded". That has not been true since proposal 45 D9:
+`stringToPath` yields `SPATH_INVALID` for an unparsable component, and
+`resolveByPath` returns `nullptr` on it, so a bare parse of a QUALIFIED path
+**fails closed** — the seam answers nothing. Watched, with the seams reverted:
+`trackPath="Drums:1"` refused rather than reading the master.
+
+So the two halves of the class differ, and conflating them is what QBX-242 got
+wrong:
+
+| half | checker | what goes wrong |
+|---|---|---|
+| a QUALIFIED path parsed bare | `check_pathroot` | fails closed since D9: a **dead** gesture |
+| a BARE path resolved against the master | `check_root_resolution` | index `{0}` exists in every root, so it **succeeds on the wrong object** |
+
+The consequence for anyone writing a gate: `trackPath="Nope:0"` with
+`expectReject="true"` looks like the obvious arm and **passes on the broken
+build too**, because the D9 parse refuses it as well. The arm that bites is a
+qualified path that must REACH its arrangement, such as `trackPath="Drums:1"`
+at an index the master does not have.
 
 **`tools/check_pathroot.py` is the same class from the parsing side** and is now
 in `ci/gates.sh` too. It had not been: it was committed on 2026-08-20 by
@@ -810,6 +865,27 @@ mirrors `SObject::serialize` body-for-body rather than hooking into it, so an
 inline child that is not repeated there is silently dropped on save with no
 error anywhere — gated by `qxa.send_tap_model`'s round trip, and watched
 failing by deleting exactly that one call.
+
+## The ROUTING GRAPH type and the routing hook on the invalidation walk (proposal 55 M0)
+
+`app/model/sroutinggraph.h` is a PURE graph over opaque node identities
+(`sroute::Node` is `const void *`, never dereferenced) with four edge kinds:
+containment, send, aux, key. `add()` takes any edge; `accept()` takes one only
+when it closes no cycle among the edges already in the graph (a self edge is a
+cycle of one); `acceptInOrder()` is the mixer pass's whole break algorithm,
+spelled once so `routinggraph_test` drives exactly what the pass runs. It lives
+here because both the verbs and the pass (`objects/mixer`) must see it and
+naming no object type keeps it legal in this layer.
+
+**The invalidation walk reports what it bumped.**
+`invalidateRenderChainsContaining( target, bumped )` and its range twin append
+every object whose chain they bumped (with the ranges in that object's own
+domain), and `invalidateRenderPath[Range]()` hands the list to the ROOT's
+`invalidateRoutingDependents( bumped, whole )`. The default does nothing; only
+a root that owns routing (`SStdMixer`, `objects/mixer` inv. 29) overrides it.
+When the walk cannot find the edited object and falls to `renderPathOwner()`
+(45 D11, a system lane), the owner is handed the object itself as well, so a
+send lane's OWN routing dependents are reached from an edit on that lane.
 
 ## The recorder's TAKE NAME, and the one test for "this take came from a recording" (plan 53 §8 P4, D5, QBX-182)
 

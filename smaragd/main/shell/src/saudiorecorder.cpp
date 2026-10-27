@@ -134,7 +134,7 @@ bool SAudioRecorder::collectArmed_()
     SProject *project = app_ ? app_->getCurrentProject() : nullptr;
     if( !project ) return false;
     std::vector<std::pair<STrack *, QList<int> > > found;
-    // check_root_resolution: master -- arming is about capture through the device, which only the master reaches
+    // check_root_resolution: suspect QBX-247 -- this reason was WRONG: arm-track resolves splacements::rootNamed(), so a track in an arrangement CAN be armed and is then never collected, and start() refuses with "no armed tracks"
     collectArmed( project->masterRoot(), QList<int>(), found );
     for( const auto &pr : found ) {
         Armed a;
@@ -280,7 +280,7 @@ bool SAudioRecorder::start()
 void SAudioRecorder::placeGrowingClips_()
 {
     SProject *project = app_->getCurrentProject();
-    // check_root_resolution: suspect QBX-246 -- where recorded material LANDS is a placement; decide whether a pass lands in the active arrangement
+    // check_root_resolution: suspect QBX-247 -- the pass lands where collectArmed_ looked; QBX-247 decides which roots that is, and this must use the SAME one
     SObject *mixer = splacements::rootContainer( project );
     for( Armed &a : armed_ ) {
         // `placementLaneAt`, not `laneAt`, FOR SYMMETRY WITH THE VERB (plan 53
@@ -560,7 +560,7 @@ void SAudioRecorder::snapPassWide_( std::int64_t *a, std::int64_t *b ) const
     if( n <= 0 ) return;
 
     SProject *project = app_ ? app_->getCurrentProject() : nullptr;
-    // check_root_resolution: suspect QBX-246 -- where recorded material LANDS is a placement; decide whether a pass lands in the active arrangement
+    // check_root_resolution: suspect QBX-247 -- the pass lands where collectArmed_ looked; QBX-247 decides which roots that is, and this must use the SAME one
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return;
 
@@ -796,7 +796,7 @@ void SAudioRecorder::commitPlacement_()
     // that function alone would leave a punch-out's placements unwrapped --
     // one undo step per segment per track. The scope is re-entrant, so when
     // stopRecording DID call us this just nests.
-    // check_root_resolution: suspect QBX-246 -- where recorded material LANDS is a placement; decide whether a pass lands in the active arrangement
+    // check_root_resolution: suspect QBX-247 -- the pass lands where collectArmed_ looked; QBX-247 decides which roots that is, and this must use the SAME one
     SObject *mixer = splacements::rootContainer( project );
 
     // THE TAKE'S NAME CARRIES THE WALL-CLOCK MINUTE (plan 53 §8 P4, QBX-182),
@@ -1072,7 +1072,7 @@ void SAudioRecorder::applyLandingFeedback_( const QList<QList<int>> &landed,
     const int tracks = (int) want.size();
     const int takes  = tracks * ( takesPerLane > 0 ? takesPerLane : 1 );
 
-    // check_root_resolution: suspect QBX-246 -- where recorded material LANDS is a placement; decide whether a pass lands in the active arrangement
+    // check_root_resolution: suspect QBX-247 -- the pass lands where collectArmed_ looked; QBX-247 decides which roots that is, and this must use the SAME one
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return;
 

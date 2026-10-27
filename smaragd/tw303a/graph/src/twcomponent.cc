@@ -623,7 +623,7 @@ bool twComponent::pageStatsTry( PageStats &out ) const
             continue;
         }
         out.pages += 1;
-        out.bytes += kv.second->accountedBytes();
+        out.bytes += kv.second->accountedBytesWithAux();
         if (kv.second->validAspects.load() != 0) {
             out.frozen += 1;
         }
@@ -644,7 +644,7 @@ twComponent::PageStats twComponent::pageStats() const
             continue;
         }
         s.pages += 1;
-        s.bytes += kv.second->accountedBytes();
+        s.bytes += kv.second->accountedBytesWithAux();
         if (kv.second->validAspects.load() != 0) {
             s.frozen += 1;
         }
@@ -1261,13 +1261,10 @@ length_t twComponent::freezePage_nolock(
     if (page->channels() > 1) {
         rendered = renderPageWide(*page, toRender, pageInput, pageInputLength);
     } else {
-        rendered = renderFrames(
-            page->channelPtr(0),
-            toRender,
-            pageInput,
-            pageInputLength,
-            0  // idx = 0 (first output)
-        );
+        // renderPageNarrow()'s default is exactly renderFrames( channelPtr(0),
+        // ..., idx 0 ), the call that stood here; only an insert routing aux
+        // buses overrides it (proposal 55 M1).
+        rendered = renderPageNarrow(*page, toRender, pageInput, pageInputLength);
     }
 
     // Capture new internal state for next page resumption

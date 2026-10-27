@@ -208,10 +208,12 @@ tw_module(plugins
         plugins/include/tw/plugins/twplugindescriptor.h
         plugins/include/tw/plugins/twpluginchain.h
         plugins/include/tw/plugins/twplugininsert.h
+        plugins/include/tw/plugins/twpluginauxtap.h
         plugins/include/tw/plugins/twpluginslotproc.h
         plugins/include/tw/plugins/twpluginsearchpaths.h
         plugins/src/twpluginchain.cc
         plugins/src/twplugininsert.cc
+        plugins/src/twpluginauxtap.cc
         plugins/src/twpluginslotproc.cc
         plugins/src/twpassthrough.cc
         plugins/src/twnullplugin.cc

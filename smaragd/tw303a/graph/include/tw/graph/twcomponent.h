@@ -189,6 +189,20 @@ public:
     virtual length_t renderPageWide( twOutputPage &page, length_t frames,
                                      const sample_t *input, length_t inputLength );
 
+    // NARROW rendering with the PAGE in hand (proposal 55 M1). freezePage_nolock
+    // calls this, not renderFrames(), for a width-1 page. The default IS
+    // renderFrames() on channel 0 -- the same call as before, one frame down --
+    // so every component that does not override it renders byte-identically.
+    // It exists for the one component that must attach something to the page
+    // itself at width 1: a plugin insert hanging its routed aux buses on the
+    // page as a side page (twOutputPage::aux), which renderFrames(), handed a
+    // bare channel pointer, cannot reach.
+    virtual length_t renderPageNarrow( twOutputPage &page, length_t frames,
+                                       const sample_t *input, length_t inputLength )
+    {
+        return renderFrames( page.channelPtr( 0 ), frames, input, inputLength, 0 );
+    }
+
     // PROPOSAL 36 §4.4 RULE (2), added by B4 — "a wide component reads its
     // bound input PAGES directly and picks channels itself".
     //

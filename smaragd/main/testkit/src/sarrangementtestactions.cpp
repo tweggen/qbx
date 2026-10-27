@@ -2,6 +2,7 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/sproject.h"
 #include "app/model/sobject.h"
+#include "app/model/splacements.h"
 #include <QDebug>
 #include <QDomElement>
 #include <QStringList>
@@ -17,11 +18,16 @@ static SObject *rootFor( SProject *project, const QString &arrangement,
         qWarning() << who << ": no project";
         return nullptr;
     }
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    if( arrangement.isEmpty() ) return project->masterRoot();
-    SObject *root = project->arrangement( arrangement );
+    // splacements::rootNamed() IS this resolution (QBX-246), and spelling it
+    // out here read as an assumption of the master while actually being the
+    // correct rule. It also gains the ASSET branch, which the hand-written
+    // version did not have: `rootNamed` resolves a fragment name too.
+    SObject *root = splacements::rootNamed( project, arrangement );
     if( !root ) {
-        qWarning() << who << ": no arrangement named" << arrangement;
+        if( arrangement.isEmpty() )
+            qWarning() << who << ": the project has no master root";
+        else
+            qWarning() << who << ": no root named" << arrangement;
         return nullptr;
     }
     return root;

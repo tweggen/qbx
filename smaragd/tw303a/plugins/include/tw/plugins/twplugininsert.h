@@ -101,6 +101,13 @@ public:
                            const sample_t *input, length_t inputLength,
                            idx_t idx ) override;
 
+    // The width-1 PAGE render (proposal 55 M1). The same core as
+    // renderFrames(), with the page in hand so a routed slot's side page can
+    // be hung on it; with nothing routed it renders exactly what renderFrames()
+    // renders.
+    length_t renderPageNarrow( twOutputPage &page, length_t frames,
+                               const sample_t *input, length_t inputLength ) override;
+
     // The legacy streaming-pull equivalent: read len frames from the input plug.
     // The plug is snapshotted under a brief lock and the lock RELEASED before
     // the pull — a component's own mutex must never be held across a call into
@@ -127,8 +134,11 @@ private:
     // The shared render core, used by both renderPageWide (nCh = page width)
     // and renderFrames (nCh = 1). `outCh` are nCh writable planar buffers of
     // `frames` frames.
+    // `aux` (proposal 55 M1): where the processor hands back the side page
+    // of a routed slot; null asks for none.
     length_t renderCore_( sample_t **outCh, idx_t nCh, offset_t startPos,
-                          length_t frames, bool positional );
+                          length_t frames, bool positional,
+                          std::shared_ptr<twOutputPage> *aux = nullptr );
 
     std::shared_ptr<twPluginSlotProcessor> proc_;
 

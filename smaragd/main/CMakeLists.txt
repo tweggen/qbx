@@ -41,6 +41,7 @@ set(APP_MODEL_FILES
     model/include/app/model/srecordingfiles.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/ssolorules.h
+    model/include/app/model/sroutinggraph.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
     model/src/sautofade.cpp
@@ -60,6 +61,7 @@ set(APP_MODEL_FILES
     model/src/splacements.cpp
     model/src/sproject.cpp
     model/src/srecordingfiles.cpp
+    model/src/sroutinggraph.cpp
 )
 
 set(APP_CORE_FILES
@@ -1113,6 +1115,18 @@ target_link_libraries(recordingfiles_test
 )
 add_test(NAME recordingfiles_test COMMAND recordingfiles_test)
 set_tests_properties(recordingfiles_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The routing graph (proposal 55 D7, M0 AC0.3): a pure graph over opaque node
+# identities, driven over synthetic graphs with all four edge kinds -- aux and
+# key as stub edges, since no model carries them before M2 and M4.
+add_executable(routinggraph_test model/tests/routinggraph_test.cpp)
+target_link_libraries(routinggraph_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME routinggraph_test COMMAND routinggraph_test)
+set_tests_properties(routinggraph_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The stale-INI plugin search-path merge (fix/mac-vst3-loading). A pure

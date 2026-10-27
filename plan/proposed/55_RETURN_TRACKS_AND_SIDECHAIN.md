@@ -170,6 +170,10 @@ So there is today exactly one place a slot's output can live: the insert's
   ROUTING edit audible (`sstdmixer.cpp:706-725`); none of them edits a source
   after the first render. Not claimed either way here; M0 measures it.
 
+  **Measured in M0 (2026-10-27, QBX-248): the hole is real and total.** See
+  §8 M0's record: an edit to a send's source left the send lane
+  byte-identical to the pre-edit render.
+
 ### 1.5 Mute, solo and live ownership
 
 - A user track's mute is STRUCTURAL: its summing parent nulls its plug; its own
@@ -648,6 +652,50 @@ M2 and M4 add edge kinds to a tested walk.
 - **AC0.4** Goldens byte-identical; `./ci/gates.sh` green against the platform
   gate docs.
 
+**M0 as built (2026-10-27, QBX-248).**
+
+- **AC0.1, measured on `main` `a3671ad9` before any change: THE HOLE IS REAL.**
+  `send_source_edit_heard.qxa` (a pre-fader send at 0 dB, the source's fader
+  at −1000 dB so the dry path is exactly 0.0; render; `move-clip` the source's
+  clip from 0 s to 2 s; re-render): the second render's `[0 s, 2 s)` was
+  **byte-identical** to the first, RMS 0.23096 where silence was due. The send
+  bus and the send lane's chain, gain stage and rewire kept every page frozen
+  before the edit. Routing edits were audible only because
+  `reconnectTracksToMixer()` re-wires every plug, which re-stamps (this is why
+  47 M2 could ablate the bus and lane bumps from `sendRoutingChanged()`); an
+  edit on the SOURCE re-wires nothing. No existing mechanism covered sends, so
+  M0 built the follow-the-graph walk of D7: after the containment walk under a
+  root has found an edit, the root (`SStdMixer::invalidateRoutingDependents`)
+  hands the same ranges to the routing dependents of every chain the walk
+  bumped, transitively, over the ACCEPTED graph the pass wired. The system-lane
+  branch (an edit ON a send lane, which no containment walk finds, 45 D11)
+  hands the lane's own dependents the same, so send → send is covered from
+  both ends. Five sections of the case cover the range walk, the transitive
+  walk, the whole-chain walk, and both system-lane branches; every one failed
+  on the baseline.
+- **A trap found while measuring:** a −144 dB fader is not a silent dry path
+  for a byte comparison. It flips 16-bit LSBs, which alone satisfied the
+  case's `assert-file-identical expectReject` over a render that was otherwise
+  stale. −1000 dB (1e-50, exactly 0.0 in a float) is.
+- **"Only `invalidateRenderPath(Range)` is load-bearing" (D7) does not carry
+  over to dependents.** A send lane is in no root's `childLinks()`, so
+  `invalidateRenderPath()` on it can only reach its own chain (whole, not
+  ranged) and its owner — never its bus, which is the mixer's. The walk
+  therefore bumps the dependent's bus and chain over the range directly; each
+  of the two was ablated alone and each is load-bearing (see the mixer
+  CONTRACT's inv. 29 for the measured sabotages).
+- **AC0.2:** the shared walk is `sroute::Graph` (`app/model/sroutinggraph.h`),
+  the lowest slice both the verbs and the pass can see. `add-send`/`set-send`
+  ask `SStdMixer::routingGraph().wouldCloseCycle()` (the model's edges, every
+  tap, cyclic or not); `rewireSendBuses()` wires the subgraph
+  `sroute::acceptInOrder` accepts from the same candidate list, in the same
+  order as before. Containment edges are in both and can change nothing for
+  sends (a send edge only enters a send lane, and a send lane is in no
+  folder). Every send case passes unchanged.
+- **AC0.3:** `routinggraph_test` (unit), every shape in D7 including the two
+  containment-only ones, the not-cycles (sibling key, diamond), and the drop
+  order forwards and reversed.
+
 ### M1 — Aux buses reach the host (engine only)
 
 D2, D4 (aux rows), §3.1 outputs half; `tw.test.clap.split`, `TestSplit`.
@@ -671,6 +719,53 @@ D2, D4 (aux rows), §3.1 outputs half; `tw.test.clap.split`, `TestSplit`.
 - **AC1.6** Goldens byte-identical (T8). Scanner version 3 re-probes every
   module exactly once (the 37 P2 gate's shape) and the probe JSON carries
   `nInBuses`/`inBusChannels`.
+
+**M1 as built (2026-10-27, QBX-248).** Every AC holds as written; what the
+build found that this document did not say:
+
+- **The bus array's length is a promise, and nobody kept it.** `twPlugin`'s
+  event-aware `process()` always documented `outBuses` as `audioOutBusCount()`
+  entries, but every caller in the tree passed ONE (both backends' legacy
+  overloads, the processor's automation path, the generator path), harmless
+  only while nothing read past entry 0. §3.1's "a backend substitutes its own
+  scratch for a null entry" is therefore not enough on its own: a backend now
+  reads `outBuses[b]` only for a bus in the mask it was given
+  (`twPlugin::setRoutedOutBuses`, new), and once any bus is routed every
+  event-aware call carries a full-length array (the processor's
+  `busArrayForChunk_nolock`, a member array in each legacy overload).
+  plugins CONTRACT inv. 61.
+- **The mask applied to the plugin is the set the slot renders, not the set
+  asked for.** A DualMono, Transparent, Unsupported or Missing slot keeps its
+  mask (it comes back with the plugin, D9) but tells the plugin nothing, so no
+  backend is promised an array the slot will not hand it. inv. 60.
+- **The width-1 page needed a hook.** At a project width of 1,
+  `freezePage_nolock` called `renderFrames()` with a bare channel pointer, which
+  cannot carry a side page. `twComponent::renderPageNarrow( page, ... )` now
+  stands there, defaulting to exactly that `renderFrames()` call; only the
+  insert and the tap override it. graph CONTRACT inv. 11.
+- **CLAP and VST3 `audioOutBus(i)` were PORT-indexed**, which agreed with
+  twPlugin's "bus 0 is the main bus" only while the main port was port 0. They
+  are bus-indexed now (and the new `audioInBus(i)` likewise), part of why the
+  scanner went to version 3. D5's input ABI is otherwise M3's: only the bus
+  REPORTING (`audioInBusCount()`/`audioInBus(i)`) landed here, because AC1.6's
+  `nInBuses` needs it.
+- **AC1.5 needed a plugin-side witness for "not activated".** An unrouted bus
+  gets the backend's scratch, so its audio can never show whether it was
+  switched on. `TestSplit` reports its aux activation as one frame of tail
+  (`getTailSamples()`, which `twPlugin::tailFrames()` reads live); the routed
+  half is shown by the aux audio itself, which TestSplit writes only when
+  activated.
+- **The tap's pages are stamped against the tap's own epoch** (inv. 15's
+  rule), so a mask change stales the insert and not the tap. Harmless in M1
+  (nothing re-points a tap); M2's pass must re-wire the tap when it re-points
+  it, which re-stamps.
+- **Measured (T11):** a stereo routed aux costs exactly one more 2-channel
+  page per cached page of the insert: 1,048,576 B for main + side against
+  524,288 B unrouted, now counted in the insert's page statistics
+  (`twOutputPage::accountedBytesWithAux`) and so in `describePageMemory`.
+- **T10, measured as a race:** a tap rendered 60 times while another thread
+  flipped the routed bus between 1 and 2 (~25,000 flips per run, three runs):
+  every page was the exact aux or silence (e.g. 32 / 28 / 0 other).
 
 ### M2 — Return tracks: model, verbs, persistence (X2.1)
 

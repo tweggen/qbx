@@ -20,6 +20,15 @@
 // Forward declaration
 class twComponent;
 
+// Where one routed AUX OUTPUT bus of a plugin lives inside a side page
+// (proposal 55 D2): `channels` channels starting at channel `offset`. `bus` is
+// the plugin's own bus index (0 is the main bus and is never routed).
+struct twAuxBusSlice {
+    std::uint16_t bus      = 0;
+    std::uint16_t offset   = 0;
+    std::uint16_t channels = 0;
+};
+
 // Phase 5 Gap 11: Unified page size constant
 // All frozen pages (component, SObject) use this size for alignment
 // 256 kB provides ~0.68 seconds at 48kHz stereo, balancing:
@@ -106,6 +115,23 @@ struct twOutputPage : public PageBase {
     // Internal state snapshot (for sequential components like reverbs, delays)
     // Allows resuming rendering from this page's endpoint without losing state
     std::any internalState;
+
+    // THE SIDE PAGE (proposal 55 D2, M1). A plugin insert whose slot routes
+    // aux output buses renders them in the SAME process() call as the main
+    // bus and hangs them here, on its own cached page, so main and aux are one
+    // cache entry: they go stale together and are evicted together, and no
+    // second cache exists to keep coherent (plugins inv. 13/15). Null on every
+    // other page, which is therefore unchanged in size and behaviour.
+    //
+    // Written by the producer BEFORE the page is published (validAspects) and
+    // never after, so a consumer that holds the page may read it without a
+    // lock. Only a twPluginAuxTap reads it.
+    std::shared_ptr<twOutputPage> aux;
+
+    // On a SIDE page: which bus sits at which channels. Empty everywhere else.
+    // It travels with the samples, so a consumer never pairs a page with a
+    // layout from a different routing mask (proposal 55 T10).
+    std::vector<twAuxBusSlice> auxSlices;
 
     // Timing for stale-data fallback logic
     std::chrono::steady_clock::time_point createdAt;
@@ -203,6 +229,15 @@ struct twOutputPage : public PageBase {
 
     // Sample bytes this page reported to the accounting when it was built.
     size_t accountedBytes() const { return accountedBytes_; }
+
+    // ...plus the side page's, which belongs to this cache entry (proposal 55
+    // D2). What a component's page statistics count, so a routed insert's cost
+    // is visible in describePageMemory (T11) and an unrouted one reads exactly
+    // what it read before.
+    size_t accountedBytesWithAux() const
+    {
+        return accountedBytes_ + (aux ? aux->accountedBytes() : 0);
+    }
 
     // PageBase interface implementation
     std::mutex& getMutex() const override { return pageMutex; }

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-246: the testkit's seams address the root their path names, so a .qxa can
+  see inside an arrangement tab. Until they did, QBX-230, 231, 232, 233 and 234
+  each had to be found by a human clicking something that did nothing.
+
+  WHICH ARMS BITE, MEASURED RATHER THAN ASSUMED. Both arms below were watched
+  failing on a deliberately sabotaged build, and the first draft of this header
+  had them the wrong way round:
+
+    1. THE COUNTS DIFFER, and this one gates the <assertions> block. The master
+       has one lane, the arrangement two. Sabotaging SActionRunner to ignore
+       root= fails the case with "assert-track-count: expected 2, got 1". This
+       is the headline seam: the trailing <assertions> block EVERY case ends
+       with, which could only ever see the master, and so the reason the whole
+       family could not be gated.
+
+    2. A QUALIFIED PATH REACHES THE ARRANGEMENT. Reverting the shell's seams to
+       the pre-QBX-246 spelling (rootContainer() plus a bare stringToPath())
+       fails the three Drums:1 lines below.
+
+  WHY IT FAILS THERE, which is NOT the story told in QBX-242 and
+  check_pathroot.py. Proposal 45 D9 hardened stringToPath: an unparsable
+  component becomes SPATH_INVALID, not 0, and resolveByPath returns nullptr on
+  it. So a bare parse of "Drums:1" does NOT become the master's lane 1 and does
+  NOT resolve the wrong object. It FAILS CLOSED, and the seam answers nothing.
+  The defect is a dead seam, not a seam reading the wrong tree.
+
+  That is also why the Nope:0 lines, which look like the obvious gate, pass on
+  BOTH builds and are kept only to pin the refusal: an unknown root must
+  resolve to nothing, and since D9 a bare parse refuses it too, so the two
+  defences agree and neither is isolated by this case. Saying so is the point.
+  The wrong-tree half of the class is real but lives on the ROOT-RESOLUTION
+  side, where a BARE path like "0" is resolved against the master while the
+  object sits in an arrangement, and index {0} exists in every root.
+
+  There is no positive per-track arm: the section-collapse state is a PROJECT
+  property (SProjectProps::TrackDetail*Collapsed), not a per-track one, so no
+  field of describeTrackDetailSections() differs between the master's lane and
+  the arrangement's.
+-->
+<SActionScript version="1" name="arrangement_seams_see_the_root">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Deliberately confusable, as arrangement_verbs_scoped.qxa builds it:
+         both roots carry a lane at index 0. The COUNTS are what differ. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="DrumLane"/>
+    <set-track-name trackPath="Drums:1" name="DrumLaneTwo"/>
+
+    <!-- The action verb assert-track-count has been root-aware all along;
+         stating it here pins the fixture that the <assertions> block reads. -->
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+
+    <!-- ==== arm 2: a qualified path REACHES the arrangement's lane =====
+         These are what fail when the seams go back to rootContainer() plus a
+         bare parse: since proposal 45 D9 that parse fails closed, so the seam
+         answers nothing at all. Drums:1 is an index the master does not even
+         have, which is the point. -->
+    <assert-track-detail-sections trackPath="Drums:1" contains="plugins="/>
+    <assert-track-detail-layout trackPath="Drums:1" contains="w="/>
+    <assert-ui-fonts trackPath="Drums:1" contains="small="/>
+
+    <!-- ==== the refusal, pinned but NOT isolated (passes either way) ====
+         An unknown root must resolve to nothing, never to the master's lane 0.
+         Two defences give that answer today (rootNamed fails closed, and so
+         does the D9 parse), so this gates the property without separating
+         them. It is here so that losing BOTH is noticed. -->
+    <assert-track-detail-sections trackPath="Nope:0" contains="plugins="
+                                  expectReject="true"/>
+    <assert-track-detail-layout trackPath="Nope:0" contains="w="
+                                expectReject="true"/>
+    <assert-ui-fonts trackPath="Nope:0" contains="small="
+                     expectReject="true"/>
+
+    <!-- and a refusal changes nothing in the master -->
+    <assert-track-name trackPath="0" name="MasterLane"/>
+  </actions>
+
+  <!-- ==== arm 1: the headline seam, and the counts differ ============
+       An absent root= is the master (one lane); root="Drums" is the
+       arrangement (two). A runner that ignores root= reads the master twice
+       and fails the second with "expected 2, got 1". -->
+  <assertions>
+    <assert-track-count equals="1"/>
+    <assert-track-count root="Drums" equals="2"/>
+  </assertions>
+
+</SActionScript>

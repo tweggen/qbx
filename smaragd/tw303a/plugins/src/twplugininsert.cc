@@ -142,7 +142,8 @@ length_t twPluginInsert::pullInputStreaming( sample_t *dst, length_t len )
 // total scratch across a slot went down, not up.
 length_t twPluginInsert::renderCore_( sample_t **outCh, idx_t nCh,
                                       offset_t startPos, length_t frames,
-                                      bool positional )
+                                      bool positional,
+                                      std::shared_ptr<twOutputPage> *aux )
 {
     if( !outCh || nCh <= 0 || frames <= 0 || !proc_ ) return 0;
 
@@ -170,7 +171,7 @@ length_t twPluginInsert::renderCore_( sample_t **outCh, idx_t nCh,
     }
 
     proc_->render( inPtrs_.data(), outCh, frames, startPos, positional,
-                   env.getSRate() );
+                   env.getSRate(), aux );
     return frames;
 }
 
@@ -191,7 +192,13 @@ length_t twPluginInsert::renderPageWide( twOutputPage &page, length_t frames,
     std::vector<sample_t *> outCh( (std::size_t)nCh );
     for( idx_t c = 0; c < nCh; ++c ) outCh[c] = page.channelPtr( c );
 
-    const length_t got = renderCore_( outCh.data(), nCh, page.startPosition, n, true );
+    // THE SIDE PAGE (proposal 55 D2): a routed slot's aux buses come out of
+    // the same process() calls and are hung on THIS page before it is
+    // published, so main and aux are one cache entry with one stamp.
+    std::shared_ptr<twOutputPage> side;
+    const length_t got = renderCore_( outCh.data(), nCh, page.startPosition, n, true,
+                                      &side );
+    page.aux = std::move( side );
     if( got <= 0 ) {
         page.fillSilence();
         return 0;
@@ -216,6 +223,22 @@ length_t twPluginInsert::renderFrames( sample_t *output, length_t length,
         std::fill( output, output + length, 0.0f );
     }
     return length;
+}
+
+length_t twPluginInsert::renderPageNarrow( twOutputPage &page, length_t frames,
+                                           const sample_t * /*input*/,
+                                           length_t /*inputLength*/ )
+{
+    // freezePage_nolock has just seeked to page.startPosition, so the page's
+    // own position is the one renderFrames() would have read from renderPos_.
+    sample_t *outCh[1] = { page.channelPtr( 0 ) };
+    if( frames <= 0 || !proc_ ) return 0;
+    std::shared_ptr<twOutputPage> side;
+    if( renderCore_( outCh, 1, page.startPosition, frames, true, &side ) <= 0 ) {
+        std::fill( outCh[0], outCh[0] + frames, 0.0f );
+    }
+    page.aux = std::move( side );
+    return frames;
 }
 
 // ------------------------------------------------------------ legacy pull path

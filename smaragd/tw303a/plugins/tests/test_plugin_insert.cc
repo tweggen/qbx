@@ -1,4 +1,5 @@
 #include "tw/plugins/twplugininsert.h"
+#include "tw/plugins/twpluginauxtap.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/events/tweventsource.h"
 #include "tw/events/twtempomap.h"
@@ -1170,11 +1171,12 @@ static int testVst3Backend()
     // --- resolving by explicit uid ------------------------------------------
     // What a saved project does: the hex class id round-trips through the
     // descriptor and finds the same class.
-    // TWO audio-effect classes since proposal 37 P2 (the gain effect and the
-    // sine instrument); the instrument's separate CONTROLLER class carries
-    // kVstComponentControllerClass and must NOT be enumerated as a plugin.
+    // THREE audio-effect classes since proposal 55 M1 (the gain effect, the
+    // sine instrument and TestSplit); the instrument's separate CONTROLLER
+    // class carries kVstComponentControllerClass and must NOT be enumerated as
+    // a plugin.
     const std::vector<twPluginDescriptor> found = vst3ModuleDescriptors( TW_TESTVST3_PATH );
-    check( found.size() == 2, "the module reports exactly two audio-effect classes" );
+    check( found.size() == 3, "the module reports exactly three audio-effect classes" );
     const twPluginDescriptor *gainDesc = nullptr;
     const twPluginDescriptor *sineDesc = nullptr;
     for( const twPluginDescriptor &d : found ) {
@@ -2317,6 +2319,473 @@ static int testEventAbi()
     return 0;
 }
 
+// ===========================================================================
+// PROPOSAL 55 M1: AUX OUTPUT BUSES REACH THE HOST (engine only).
+//
+// A routed slot renders its aux buses in the SAME process() call as the main
+// bus and hangs them on the insert's own page as a SIDE page; a twPluginAuxTap
+// reads one bus out of it through an ordinary input plug. These gates hold the
+// proposal's AC1.1-AC1.5 to numbers.
+// ===========================================================================
+namespace {
+
+// A 2-in / 2-out effect with TWO aux buses, counting which overload it is
+// driven through. Main = input; aux 1 (stereo) = 3 x input; aux 2 (mono) =
+// 5 x input channel 0. Distinct factors, so a tap reading the wrong slice of
+// the side page reads a wrong NUMBER rather than a plausible one.
+class AuxMock : public twPlugin {
+public:
+    AuxMock() { io_.audioInputs = 2; io_.audioOutputs = 2; }
+    const twPluginIoLayout &ioLayout() const override { return io_; }
+    void prepare( std::uint32_t, std::uint32_t ) override { ++prepares_; }
+    void process( const float *const *in, float *const *out, std::uint32_t n ) override
+    {
+        ++legacyCalls_;
+        for( int c = 0; c < 2; ++c ) std::memcpy( out[c], in[c], n * sizeof( float ) );
+    }
+    void process( const float *const *in, float *const *const *outBuses, std::uint32_t n,
+                  const twEventList &, twEventOut &, const twProcessContext & ) override
+    {
+        ++busCalls_;
+        for( int c = 0; c < 2; ++c )
+            std::memcpy( outBuses[0][c], in[c], n * sizeof( float ) );
+        // Read an aux entry only when told it is routed: that is the promise
+        // that the array is long enough (twPlugin::setRoutedOutBuses).
+        if( ( mask_ & 2u ) && outBuses[1] ) {
+            ++aux1Writes_;
+            for( int c = 0; c < 2; ++c )
+                for( std::uint32_t i = 0; i < n; ++i ) outBuses[1][c][i] = 3.0f * in[c][i];
+        }
+        if( ( mask_ & 4u ) && outBuses[2] ) {
+            for( std::uint32_t i = 0; i < n; ++i ) outBuses[2][0][i] = 5.0f * in[0][i];
+        }
+    }
+    void reset() override {}
+    std::size_t       paramCount() const override { return 0; }
+    twPluginParamInfo paramInfo( std::size_t ) const override { return {}; }
+    double getParam( std::uint32_t ) const override { return 0.0; }
+    void   setParam( std::uint32_t, double ) override {}
+    std::vector<std::uint8_t> saveState() const override { return {}; }
+    bool loadState( const std::vector<std::uint8_t> & ) override { return true; }
+
+    std::size_t audioOutBusCount() const override { return 3; }
+    twPluginBusInfo audioOutBus( std::size_t i ) const override
+    {
+        twPluginBusInfo b;
+        if( i == 0 ) { b.channels = 2; b.isMain = true; }
+        if( i == 1 ) b.channels = 2;
+        if( i == 2 ) b.channels = 1;
+        return b;
+    }
+    void setRoutedOutBuses( std::uint32_t m ) override { mask_ = m; ++maskCalls_; }
+
+    std::atomic<int> legacyCalls_{ 0 }, busCalls_{ 0 }, aux1Writes_{ 0 };
+    int              prepares_ = 0, maskCalls_ = 0;
+    std::uint32_t    mask_ = 0;
+
+private:
+    twPluginIoLayout io_{};
+};
+
+// A 1-in / 1-out mock with an aux bus: on a stereo page it is DualMono, which
+// has no "the plugin's bus 1" (proposal 55 D9).
+class MonoAuxMock : public twPlugin {
+public:
+    MonoAuxMock() { io_.audioInputs = 1; io_.audioOutputs = 1; }
+    const twPluginIoLayout &ioLayout() const override { return io_; }
+    void prepare( std::uint32_t, std::uint32_t ) override {}
+    void process( const float *const *in, float *const *out, std::uint32_t n ) override
+    {
+        std::memcpy( out[0], in[0], n * sizeof( float ) );
+    }
+    void reset() override {}
+    std::size_t       paramCount() const override { return 0; }
+    twPluginParamInfo paramInfo( std::size_t ) const override { return {}; }
+    double getParam( std::uint32_t ) const override { return 0.0; }
+    void   setParam( std::uint32_t, double ) override {}
+    std::vector<std::uint8_t> saveState() const override { return {}; }
+    bool loadState( const std::vector<std::uint8_t> & ) override { return true; }
+    std::size_t audioOutBusCount() const override { return 2; }
+    twPluginBusInfo audioOutBus( std::size_t i ) const override
+    {
+        twPluginBusInfo b;
+        b.channels = 1;
+        b.isMain   = ( i == 0 );
+        return b;
+    }
+    void setRoutedOutBuses( std::uint32_t m ) override { told_ = m; }
+    std::uint32_t told_ = 0xffffffffu;
+private:
+    twPluginIoLayout io_{};
+};
+
+// A slot over a factory, its insert fed by `source` (or unwired when null).
+struct AuxRig {
+    std::shared_ptr<twPluginSlotProcessor> proc;
+    std::shared_ptr<TestSource>            source;
+    std::shared_ptr<twPluginInsert>        insert;
+};
+
+AuxRig buildAuxRig( tw303aEnvironment &env, int nChannels, twPluginSlotProcessor::Factory f,
+                    twPluginIoLayout io, bool withSource = true )
+{
+    AuxRig r;
+    r.proc = std::make_shared<twPluginSlotProcessor>( env, std::move( f ), io );
+    r.proc->setChannelCount( (idx_t)nChannels );
+    r.insert = std::make_shared<twPluginInsert>( env, r.proc );
+    r.insert->init();
+    if( withSource ) {
+        r.source = std::make_shared<TestSource>( env, (idx_t)nChannels );
+        r.source->init();
+        r.insert->setInput( 0, r.source->linkOutput( 0 ) );
+    }
+    return r;
+}
+
+std::shared_ptr<twPluginAuxTap> buildTap( tw303aEnvironment &env,
+                                          const std::shared_ptr<twPluginInsert> &insert,
+                                          idx_t width, std::uint16_t bus,
+                                          std::uint16_t busChannels )
+{
+    auto tap = std::make_shared<twPluginAuxTap>( env, width, bus, busChannels );
+    tap->init();
+    tap->setInput( 0, insert->linkOutput( 0 ) );
+    return tap;
+}
+
+std::shared_ptr<twOutputPage> freezeAt( const std::shared_ptr<twComponent> &c,
+                                        offset_t pos, int rate )
+{
+    return c->requestPage( pos, nullptr, 0, (length_t)twOutputPage::FRAME_CAPACITY,
+                           rate, nullptr );
+}
+
+bool allZero( const twOutputPage &p, idx_t c, std::size_t n )
+{
+    const float *s = p.channelPtr( c );
+    for( std::size_t i = 0; i < n; ++i )
+        if( s[i] != 0.0f ) return false;
+    return true;
+}
+
+// AC1.1's whole claim, for one backend: a full page at a NON-ZERO position,
+// memcmp-equal to the insert's input page on both channels.
+void checkSplitCopy( tw303aEnvironment &env, const twPluginDescriptor &desc,
+                     const char *label )
+{
+    auto &registry = pluginRegistry();
+    AuxRig r = buildAuxRig( env, 2,
+                            [&registry, desc]() { return registry.instantiate( desc ); },
+                            twPluginIoLayout{ 2, 2 } );
+    check( r.proc->mode() == twPluginSlotMode::Direct,
+           ( std::string( label ) + ": a 2->2 split on a stereo page is Direct" ).c_str() );
+    r.proc->setRoutedOutBuses( 1u << 1 );
+    const std::vector<twAuxBusSlice> lay = r.proc->auxLayout();
+    check( lay.size() == 1 && lay[0].bus == 1 && lay[0].offset == 0 && lay[0].channels == 2,
+           ( std::string( label ) + ": bus 1 is routed, two channels at offset 0" ).c_str() );
+
+    auto tap = buildTap( env, r.insert, 2, 1, 2 );
+    check( tap->mapping() == twPluginAuxTap::Mapping::Copy,
+           ( std::string( label ) + ": a 2-channel bus onto a 2-channel page is a COPY" ).c_str() );
+
+    const offset_t pos  = (offset_t)twOutputPage::FRAME_CAPACITY * 3;   // non-zero
+    const int      rate = env.getSRate();
+    auto tp = freezeAt( tap, pos, rate );
+    auto sp = freezeAt( r.source, pos, rate );
+    const std::size_t n = twOutputPage::FRAME_CAPACITY;
+    bool same = tp && sp && tp->channels() == 2 && tp->validFrames >= n && sp->validFrames >= n;
+    for( idx_t c = 0; same && c < 2; ++c )
+        same = std::memcmp( tp->channelPtr( c ), sp->channelPtr( c ), n * sizeof( float ) ) == 0;
+    check( same, ( std::string( label ) +
+                   ": AC1.1 the tap's page is memcmp-EQUAL to the insert's input page, "
+                   "both channels, 65536 frames at position 196608" ).c_str() );
+    check( !allZero( *tp, 0, n ),
+           ( std::string( label ) + ": ...and it is not silence" ).c_str() );
+    check( tap->silentRenders() == 0,
+           ( std::string( label ) + ": ...and the tap never answered silence" ).c_str() );
+}
+
+}  // namespace
+
+static int testAuxBuses()
+{
+    std::cout << "=== proposal 55 M1: aux output buses reach the host ===" << std::endl;
+    tw303aEnvironment env;
+    const int rate = env.getSRate();
+    const std::size_t N = twOutputPage::FRAME_CAPACITY;
+
+    // ---- AC1.3: an UNROUTED slot is unchanged -------------------------------
+    {
+        AuxMock *mock = nullptr;
+        AuxRig r = buildAuxRig( env, 2,
+                                [&mock]() {
+                                    auto p = std::make_unique<AuxMock>();
+                                    mock = p.get();
+                                    return std::unique_ptr<twPlugin>( std::move( p ) );
+                                },
+                                twPluginIoLayout{ 2, 2 } );
+        auto page = freezeInsert( r.insert, 0, rate );
+        check( page && !page->aux, "AC1.3 an unrouted slot's page carries NO side page" );
+        check( page && page->auxSlices.empty(), "...and no aux layout" );
+        const twComponent::PageStats st = r.insert->pageStats();
+        check( st.pages == 1 && st.bytes == 2 * twOutputPage::PAGE_SIZE,
+               "AC1.3 ...and costs exactly what a 2-channel page cost before: 524288 B" );
+        check( mock && mock->legacyCalls_ > 0 && mock->busCalls_ == 0,
+               "AC1.3 the processor makes the LEGACY process() call, never the bus-aware one" );
+        check( mock && mock->maskCalls_ == 0,
+               "AC1.3 ...and never tells the plugin about routing at all" );
+
+        // ---- AC1.4: changing the mask stales the insert's pages ----------
+        const std::uint64_t e0 = r.insert->contentEpochNow();
+        r.proc->setRoutedOutBuses( 1u << 1 );
+        check( r.insert->contentEpochNow() > e0,
+               "AC1.4 setting the mask bumps the insert's content epoch (its pages are stale)" );
+        check( mock && mock->mask_ == ( 1u << 1 ) && mock->prepares_ >= 2,
+               "AC1.4 ...the plugin learns the mask and is RE-PREPARED, where a format "
+               "activates buses" );
+        auto routed = freezeInsert( r.insert, 0, rate );
+        check( routed && routed != page && routed->aux,
+               "AC1.4 the next render at the same position is a NEW page, with a side page" );
+        check( routed && routed->aux && routed->aux->channels() == 2 &&
+                   routed->aux->auxSlices.size() == 1 && routed->aux->auxSlices[0].bus == 1,
+               "...two channels wide, stamped with bus 1's slice" );
+        check( mock && mock->busCalls_ > 0, "...rendered through the bus-aware call" );
+        const twComponent::PageStats st2 = r.insert->pageStats();
+        check( st2.bytes == 4 * twOutputPage::PAGE_SIZE,
+               "T11 a routed stereo aux costs 256 kB per channel per cached page: 1048576 B "
+               "(main + side), counted in the insert's page statistics" );
+
+        // The aux content: 3 x the input, read through a tap.
+        auto tap = buildTap( env, r.insert, 2, 1, 2 );
+        auto tp  = freezeAt( tap, 0, rate );
+        auto sp  = freezeAt( r.source, 0, rate );
+        bool exact = tp && sp;
+        for( idx_t c = 0; exact && c < 2; ++c )
+            for( std::size_t i = 0; exact && i < N; ++i )
+                exact = tp->channelPtr( c )[i] == 3.0f * sp->channelPtr( c )[i];
+        check( exact, "the tap reads bus 1 (3 x input) out of the side page, both channels" );
+
+        // ...and back to unrouted: no side page again, and the mock is told.
+        const std::uint64_t e1 = r.insert->contentEpochNow();
+        r.proc->setRoutedOutBuses( 0 );
+        check( r.insert->contentEpochNow() > e1, "clearing the mask stales the pages too" );
+        auto cleared = freezeInsert( r.insert, 0, rate );
+        check( cleared && !cleared->aux, "...and the next page carries no side page" );
+        check( mock && mock->mask_ == 0, "...and the plugin is told nothing is routed" );
+    }
+
+    // ---- T10: a side page from another mask renders silence, never past it --
+    {
+        AuxRig r = buildAuxRig( env, 2, []() { return std::make_unique<AuxMock>(); },
+                                twPluginIoLayout{ 2, 2 } );
+        r.proc->setRoutedOutBuses( 1u << 2 );   // ONLY the mono bus 2
+        auto wantBus1 = buildTap( env, r.insert, 2, 1, 2 );
+        auto p1 = freezeAt( wantBus1, 0, rate );
+        check( p1 && allZero( *p1, 0, N ) && allZero( *p1, 1, N ),
+               "T10 a tap for bus 1 over a side page holding only bus 2 renders SILENCE" );
+        check( wantBus1->silentRenders() >= 1, "...and counts it" );
+        auto wrongWidth = buildTap( env, r.insert, 2, 2, 2 );   // bus 2 IS mono
+        auto p2 = freezeAt( wrongWidth, 0, rate );
+        check( p2 && allZero( *p2, 0, N ) && wrongWidth->silentRenders() >= 1,
+               "T10 a tap built for a width the side page's slice does not have is silent" );
+        auto bus2 = buildTap( env, r.insert, 2, 2, 1 );
+        auto p3 = freezeAt( bus2, 0, rate );
+        auto sp = freezeAt( r.source, 0, rate );
+        bool spread = p3 && sp;
+        for( std::size_t i = 0; spread && i < N; ++i )
+            spread = p3->channelPtr( 0 )[i] == 5.0f * sp->channelPtr( 0 )[i] &&
+                     p3->channelPtr( 1 )[i] == p3->channelPtr( 0 )[i];
+        check( spread, "D4 MonoSpread: the mono bus 2 (5 x ch0) on both channels of the tap" );
+
+        // A render IN FLIGHT across mask changes: one thread renders the tap
+        // while another flips the routed bus between 1 and 2. Every page the
+        // tap produces must be either the exact aux (3 x input) or silence --
+        // never a mixture, never another bus's samples, never a crash.
+        auto tap = buildTap( env, r.insert, 2, 1, 2 );
+        std::atomic<bool> stop{ false };
+        std::atomic<int>  bad{ 0 }, copies{ 0 }, silences{ 0 };
+        std::atomic<int> flips{ 0 };
+        std::thread flipper( [&]() {
+            // Flips until the renders are done, so every render can race one.
+            for( int k = 0; !stop.load(); ++k ) {
+                r.proc->setRoutedOutBuses( ( k & 1 ) ? ( 1u << 1 ) : ( 1u << 2 ) );
+                ++flips;
+                std::this_thread::yield();
+            }
+        } );
+        for( int k = 0; k < 60; ++k ) {
+            const offset_t pos = (offset_t)( k & 1 ) * (offset_t)N;
+            tap->bumpContentEpoch();
+            auto tp = freezeAt( tap, pos, rate );
+            auto src = freezeAt( r.source, pos, rate );
+            if( !tp || !src ) { ++bad; continue; }
+            const bool silent = allZero( *tp, 0, N ) && allZero( *tp, 1, N );
+            bool copy = true;
+            for( idx_t c = 0; copy && c < 2; ++c )
+                for( std::size_t i = 0; copy && i < N; ++i )
+                    copy = tp->channelPtr( c )[i] == 3.0f * src->channelPtr( c )[i];
+            if( copy ) ++copies; else if( silent ) ++silences; else ++bad;
+        }
+        stop.store( true );
+        flipper.join();
+        std::cout << "       T10 race: " << copies.load() << " exact, " << silences.load()
+                  << " silent, " << bad.load() << " other, over " << flips.load()
+                  << " mask flips" << std::endl;
+        check( bad.load() == 0,
+               "T10 a render across mask changes is the exact aux or silence, nothing else" );
+    }
+
+    // ---- D4: the FOLD row, and the REFUSED row ------------------------------
+    {
+        AuxRig r = buildAuxRig( env, 2, []() { return std::make_unique<AuxMock>(); },
+                                twPluginIoLayout{ 2, 2 } );
+        r.proc->setRoutedOutBuses( 1u << 1 );
+        auto fold = buildTap( env, r.insert, 1, 1, 2 );   // stereo bus onto mono
+        check( fold->mapping() == twPluginAuxTap::Mapping::Fold, "D4 2 -> 1 is the FOLD row" );
+        auto fp = freezeAt( fold, 0, rate );
+        auto sp = freezeAt( r.source, 0, rate );
+        bool mean = fp && sp && fp->channels() == 1;
+        for( std::size_t i = 0; mean && i < N; ++i )
+            mean = fp->channelPtr( 0 )[i] ==
+                   0.5f * ( 3.0f * sp->channelPtr( 0 )[i] + 3.0f * sp->channelPtr( 1 )[i] );
+        check( mean, "D4 FOLD: the mono tap is the mean of the stereo bus's pair" );
+
+        auto refused = buildTap( env, r.insert, 4, 1, 2 );   // 2 onto 4: no row
+        check( refused->mapping() == twPluginAuxTap::Mapping::Refused,
+               "D4 2 -> 4 has no row and is REFUSED" );
+        check( refused->describe() == "bus=1|busChannels=2|width=4|mapping=refused",
+               "...and describe() says so" );
+        auto rp = freezeAt( refused, 0, rate );
+        bool silent = rp && rp->channels() == 4;
+        for( idx_t c = 0; silent && c < 4; ++c ) silent = allZero( *rp, c, N );
+        check( silent, "...and renders silence" );
+    }
+
+    // ---- the WIDTH-1 page: the side page is hung on a narrow page too -------
+    {
+        // A 2->2 plugin on ONE channel is MonoFold (both inputs read the one
+        // channel), and at width 1 the page goes through renderPageNarrow.
+        AuxRig r = buildAuxRig( env, 1, []() { return std::make_unique<AuxMock>(); },
+                                twPluginIoLayout{ 2, 2 } );
+        check( r.proc->mode() == twPluginSlotMode::MonoFold, "a 2->2 plugin on 1 channel folds" );
+        r.proc->setRoutedOutBuses( 1u << 2 );
+        auto page = freezeInsert( r.insert, 0, rate );
+        check( page && page->channels() == 1 && page->aux && page->aux->channels() == 1,
+               "a width-1 insert page carries its side page (renderPageNarrow)" );
+        auto tap = buildTap( env, r.insert, 1, 2, 1 );
+        auto tp = freezeAt( tap, 0, rate );
+        auto sp = freezeAt( r.source, 0, rate );
+        bool exact = tp && sp;
+        for( std::size_t i = 0; exact && i < N; ++i )
+            exact = tp->channelPtr( 0 )[i] == 5.0f * sp->channelPtr( 0 )[i];
+        check( exact, "...and a width-1 tap copies the mono bus out of it" );
+    }
+
+    // ---- D9: DualMono cannot route ------------------------------------------
+    {
+        MonoAuxMock *first = nullptr;
+        AuxRig r = buildAuxRig( env, 2,
+                                [&first]() {
+                                    auto p = std::make_unique<MonoAuxMock>();
+                                    if( !first ) first = p.get();
+                                    return std::unique_ptr<twPlugin>( std::move( p ) );
+                                },
+                                twPluginIoLayout{ 1, 1 } );
+        check( r.proc->mode() == twPluginSlotMode::DualMono, "a 1->1 plugin on 2 channels is DualMono" );
+        r.proc->setRoutedOutBuses( 1u << 1 );
+        check( r.proc->routedOutBuses() == ( 1u << 1 ), "D9 the mask is KEPT on a DualMono slot" );
+        check( r.proc->auxLayout().empty(), "D9 ...but nothing is routed" );
+        check( first && first->told_ == 0xffffffffu,
+               "D9 ...and no instance is told to expect a bus array it will not get" );
+        auto page = freezeInsert( r.insert, 0, rate );
+        check( page && !page->aux, "D9 ...so its pages carry no side page" );
+    }
+
+    // ---- AC1.2: the INSTRUMENT row, through tw.test.clap.sine's mono aux ----
+#ifdef TW_TESTCLAP_PATH
+    {
+        auto &registry = pluginRegistry();
+        twPluginDescriptor desc;
+        desc.format = "clap";
+        desc.uid    = "tw.test.clap.sine";
+        desc.path   = TW_TESTCLAP_PATH;
+        desc.name   = "Smaragd Test Sine";
+        AuxRig r = buildAuxRig( env, 2, [&registry, desc]() { return registry.instantiate( desc ); },
+                                twPluginIoLayout{ 0, 2 }, /*withSource=*/false );
+        auto feed = std::make_shared<MockEventSource>();
+        feed->add( 100, 1000000, 69, 100.0 );   // A4, velocity 100, held all page
+        r.proc->setEventSource( feed );
+        check( r.proc->mode() == twPluginSlotMode::DirectGen,
+               "the sine instrument on a stereo page is DirectGen" );
+        r.proc->setRoutedOutBuses( 1u << 1 );
+        const std::vector<twAuxBusSlice> lay = r.proc->auxLayout();
+        check( lay.size() == 1 && lay[0].channels == 1, "its aux bus 1 is mono" );
+        auto tap = buildTap( env, r.insert, 2, 1, 1 );
+        check( tap->mapping() == twPluginAuxTap::Mapping::Spread, "mono onto stereo is the SPREAD row" );
+        auto tp = freezeAt( tap, 0, rate );
+        auto ip = freezeInsert( r.insert, 0, rate );
+        bool both = tp && ip, half = tp && ip;
+        double energy = 0.0;
+        for( std::size_t i = 0; tp && ip && i < N; ++i ) {
+            const float a = tp->channelPtr( 0 )[i], b = tp->channelPtr( 1 )[i];
+            both = both && a == b;
+            half = half && a == 0.5f * ip->channelPtr( 0 )[i];
+            energy += (double)a * a;
+        }
+        check( both, "AC1.2 both channels of the tap are equal (MonoSpread)" );
+        check( half, "AC1.2 ...and each sample is EXACTLY 0.5 x the insert's main channel 0" );
+        check( energy > 1.0, "...and it is not silence" );
+    }
+
+    // ---- AC1.1 (CLAP) ------------------------------------------------------
+    {
+        twPluginDescriptor desc;
+        desc.format = "clap";
+        desc.uid    = "tw.test.clap.split";
+        desc.path   = TW_TESTCLAP_PATH;
+        desc.name   = "Smaragd Test Split";
+        auto probe = pluginRegistry().instantiate( desc );
+        if( check( probe != nullptr, "tw.test.clap.split instantiates" ) ) {
+            check( probe->audioOutBusCount() == 2 && probe->audioOutBus( 1 ).channels == 2 &&
+                       !probe->audioOutBus( 1 ).isMain,
+                   "...with a stereo AUX output as bus 1" );
+            check( probe->audioInBusCount() == 1 && probe->audioInBus( 0 ).channels == 2,
+                   "...and one stereo input bus" );
+            probe.reset();
+            checkSplitCopy( env, desc, "CLAP split" );
+        }
+    }
+#endif
+
+    // ---- AC1.1 + AC1.5 (VST3) ---------------------------------------------
+#ifdef TW_TESTVST3_PATH
+    {
+        twPluginDescriptor desc;
+        for( const twPluginDescriptor &d : vst3ModuleDescriptors( TW_TESTVST3_PATH ) )
+            if( d.name == "TW Test VST3 Split" ) desc = d;
+        if( check( !desc.uid.empty(), "TestSplit is in the VST3 fixture module" ) ) {
+            checkSplitCopy( env, desc, "VST3 TestSplit" );
+
+            // AC1.5: the routed aux output is ACTIVATED at prepare(), an
+            // unrouted one is not. TestSplit reports its activation as one
+            // frame of tail (see the fixture), read live from the plugin.
+            auto plugin = pluginRegistry().instantiate( desc );
+            if( check( plugin != nullptr, "TestSplit instantiates" ) ) {
+                plugin->prepare( 48000, twPluginInsert::kChunkFrames );
+                check( plugin->tailFrames() == 0, "AC1.5 unrouted: the aux bus is NOT activated" );
+                plugin->setRoutedOutBuses( 1u << 1 );
+                plugin->prepare( 48000, twPluginInsert::kChunkFrames );
+                check( plugin->tailFrames() == 1, "AC1.5 routed: prepare() ACTIVATES the aux bus" );
+                plugin->setRoutedOutBuses( 0 );
+                plugin->prepare( 48000, twPluginInsert::kChunkFrames );
+                check( plugin->tailFrames() == 0, "AC1.5 unrouted again: prepare() deactivates it" );
+            }
+        }
+    }
+#endif
+    return 0;
+}
+
 int testPluginInsert()
 {
     testBuiltinPlugin();
@@ -2327,6 +2796,7 @@ int testPluginInsert()
     testEventAbi();
     testGeneratorSlot();
     testLiveCatchUp();
+    testAuxBuses();
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
     testClapEditor();

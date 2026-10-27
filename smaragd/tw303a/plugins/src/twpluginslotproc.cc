@@ -108,6 +108,122 @@ std::size_t twPluginSlotProcessor::applyToInstances(
     return n;
 }
 
+// --------------------------------------------------------- aux output buses
+
+void twPluginSlotProcessor::setRoutedOutBuses( std::uint32_t busMask )
+{
+    busMask &= ~1u;   // bit 0 is the main bus: the track's own output, never routed
+    std::lock_guard<std::mutex> lock( mutex_ );
+    if( busMask == routedMask_ ) return;
+    routedMask_ = busMask;
+    loggedAuxUnroutable_ = false;
+
+    // The layout first: what is APPLIED to the plugin is the set of buses this
+    // slot actually renders (none on DualMono, a missing plugin, ...), so a
+    // backend is never told to expect a bus array the slot will not hand it.
+    const std::uint32_t before = appliedMask_;
+    computeAuxLayout_nolock();
+
+    // Every instance learns the applied mask, then is RE-PREPARED: a format
+    // that must activate an aux bus before writing it (VST3) may do so only
+    // there. A re-prepare is a reconfiguration, so the DSP does not continue
+    // across it.
+    if( appliedMask_ != before ) {
+        for( const std::unique_ptr<twPlugin> &p : instances_ )
+            if( p ) p->setRoutedOutBuses( appliedMask_ );
+        if( preparedRate_ > 0 ) {
+            for( const std::unique_ptr<twPlugin> &p : instances_ )
+                if( p ) p->prepare( (std::uint32_t)preparedRate_,
+                                    (std::uint32_t)kChunkFrames );
+        }
+        haveLastEnd_ = false;
+    }
+
+    // THE ROUTED MASK IS STATE (55 D7): the insert's pages were rendered with
+    // the old set of side-page buses, so they are stale from the first frame.
+    bumpParamEpoch_nolock();
+}
+
+std::uint32_t twPluginSlotProcessor::routedOutBuses() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return routedMask_;
+}
+
+std::vector<twAuxBusSlice> twPluginSlotProcessor::auxLayout() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return auxLayout_;
+}
+
+bool twPluginSlotProcessor::auxRoutable_nolock() const
+{
+    switch( mode_ ) {
+    case twPluginSlotMode::Direct:
+    case twPluginSlotMode::MonoFold:
+    case twPluginSlotMode::DirectGen:
+    case twPluginSlotMode::MonoSpread:
+    case twPluginSlotMode::GenFold:
+    case twPluginSlotMode::WideGen:
+        return !instances_.empty() && state_ == twPluginSlotState::Active;
+    default:
+        return false;
+    }
+}
+
+void twPluginSlotProcessor::computeAuxLayout_nolock()
+{
+    auxLayout_.clear();
+    auxChannels_ = 0;
+    appliedMask_ = 0;
+    if( routedMask_ == 0 ) return;
+    if( !auxRoutable_nolock() ) {
+        if( !loggedAuxUnroutable_ ) {
+            loggedAuxUnroutable_ = true;
+            TW_LOGW( "plugins", "[slot] aux output buses 0x%x are routed, but this slot "
+                     "cannot route them (mode %d, state %d): only a single-instance "
+                     "mapping of a present plugin has 'the plugin's bus b' (proposal 55 "
+                     "D9). Its returns stay silent until it can.",
+                     (unsigned)routedMask_, (int)mode_, (int)state_ );
+        }
+        return;
+    }
+    const twPlugin   *p  = instances_[0].get();
+    const std::size_t nb = std::min<std::size_t>( p->audioOutBusCount(), 32 );
+    std::uint32_t     off = 0;
+    for( std::size_t b = 1; b < nb; ++b ) {
+        if( !( routedMask_ & ( 1u << b ) ) ) continue;
+        const std::uint16_t ch = p->audioOutBus( b ).channels;
+        if( ch == 0 ) continue;
+        twAuxBusSlice sl;
+        sl.bus      = (std::uint16_t)b;
+        sl.offset   = (std::uint16_t)off;
+        sl.channels = ch;
+        auxLayout_.push_back( sl );
+        appliedMask_ |= ( 1u << b );
+        off += ch;
+    }
+    auxChannels_ = (std::uint16_t)off;
+    busArr_.assign( nb, nullptr );
+    auxChunk_.assign( (std::size_t)auxChannels_, nullptr );
+}
+
+float *const *const *twPluginSlotProcessor::busArrayForChunk_nolock( float *const *mainBus,
+                                                                     length_t off,
+                                                                     bool withAux )
+{
+    for( float *const *&b : busArr_ ) b = nullptr;
+    if( busArr_.empty() ) busArr_.assign( 1, nullptr );
+    busArr_[0] = mainBus;
+    if( withAux && auxBase_ ) {
+        for( std::size_t c = 0; c < auxChunk_.size(); ++c )
+            auxChunk_[c] = auxBase_[c] + off;
+        for( const twAuxBusSlice &sl : auxLayout_ )
+            if( sl.bus < busArr_.size() ) busArr_[sl.bus] = auxChunk_.data() + sl.offset;
+    }
+    return busArr_.data();
+}
+
 // --- automation (proposal 37 P5, design D5) ---------------------------------
 
 void twPluginSlotProcessor::setParamCurves(
@@ -412,6 +528,9 @@ std::vector<twPlugin *> twPluginSlotProcessor::plugins() const
 void twPluginSlotProcessor::rebuild_nolock()
 {
     instances_.clear();
+    auxLayout_.clear();
+    auxChannels_  = 0;
+    appliedMask_  = 0;
     preparedRate_ = 0;
     mode_         = twPluginSlotMode::Transparent;
     state_        = twPluginSlotState::Active;
@@ -535,6 +654,15 @@ void twPluginSlotProcessor::rebuild_nolock()
 
     if( substituted ) state_ = twPluginSlotState::Missing;
 
+    // A rebuilt slot keeps its routing (proposal 55 M1): the new instances
+    // learn the mask BEFORE their first prepare(), which is where a format
+    // activates its buses. Not called at all when nothing is routed, so an
+    // unrouted slot makes exactly the calls it made before.
+    computeAuxLayout_nolock();
+    if( appliedMask_ != 0 )
+        for( const std::unique_ptr<twPlugin> &p : instances_ )
+            p->setRoutedOutBuses( appliedMask_ );
+
     // prepare() is reached from setChannelCount(), i.e. from the UI thread —
     // which is where CLAP says activate() belongs.
     const int rate = env_.getSRate();
@@ -627,7 +755,20 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
                 inPtrs_[c]  = in[c]  + off;
                 outPtrs_[c] = out[c] + off;
             }
-            if( automate ) {
+            if( appliedMask_ != 0 ) {
+                // ROUTED AUX (proposal 55 M1): the bus-aware call, with a bus
+                // array as long as the plugin's bus list -- the main bus where
+                // it always went and each routed aux bus into this chunk of
+                // the side page (null on a render with no side page, e.g. the
+                // legacy pull). An empty list and an all-invalid context when
+                // nothing is automated, which is the event-aware call's
+                // spelling of the legacy one.
+                twEventOut noSink;
+                instances_[0]->process( inPtrs_.data(),
+                                        busArrayForChunk_nolock( outPtrs_.data(), off, true ),
+                                        (std::uint32_t)n, list,
+                                        automate ? autoSink_ : noSink, ctx );
+            } else if( automate ) {
                 float *const *const buses[1] = { outPtrs_.data() };
                 instances_[0]->process( inPtrs_.data(), buses, (std::uint32_t)n,
                                         list, autoSink_, ctx );
@@ -661,7 +802,13 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
             inPtrs_[1]  = in[0] + off;
             outPtrs_[0] = foldOut_[0].data();
             outPtrs_[1] = foldOut_[1].data();
-            if( automate ) {
+            if( appliedMask_ != 0 ) {
+                twEventOut noSink;
+                instances_[0]->process( inPtrs_.data(),
+                                        busArrayForChunk_nolock( outPtrs_.data(), off, true ),
+                                        (std::uint32_t)n, list,
+                                        automate ? autoSink_ : noSink, ctx );
+            } else if( automate ) {
                 float *const *const buses[1] = { outPtrs_.data() };
                 instances_[0]->process( inPtrs_.data(), buses, (std::uint32_t)n,
                                         list, autoSink_, ctx );
@@ -985,8 +1132,20 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
         }
 
         sink.clear();
-        float *const *const buses[1] = { genPtrs_.data() };
-        plug->process( nullptr, buses, (std::uint32_t)n, list, sink, ctx );
+        if( appliedMask_ != 0 ) {
+            // ROUTED AUX (proposal 55 M1): the generator's aux buses go to the
+            // side page in the same call. Never while discarding -- a bypassed
+            // instrument's returns are silent like its main output, and the
+            // pre-roll runs with auxBase_ null -- but the ARRAY is always as
+            // long as the bus list once a bus is routed, because the backend
+            // was told to read it.
+            plug->process( nullptr,
+                           busArrayForChunk_nolock( genPtrs_.data(), off, !discard ),
+                           (std::uint32_t)n, list, sink, ctx );
+        } else {
+            float *const *const buses[1] = { genPtrs_.data() };
+            plug->process( nullptr, buses, (std::uint32_t)n, list, sink, ctx );
+        }
 
         if( !out ) continue;      // pre-roll: the audio is deliberately dropped
 
@@ -1040,11 +1199,35 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
 
 void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
                                     length_t len, offset_t startPos,
-                                    bool positional, int sampleRate )
+                                    bool positional, int sampleRate,
+                                    std::shared_ptr<twOutputPage> *auxOut )
 {
+    if( auxOut ) auxOut->reset();
     if( len <= 0 ) return;
 
     std::lock_guard<std::mutex> lock( mutex_ );
+
+    // THE SIDE PAGE (proposal 55 D2). Allocated under this lock, from the
+    // layout in force under it, so the page and the bus layout stamped on it
+    // are one mask's. Zero-filled at birth, so a bus the plugin does not write
+    // this call (bypass, a refused render) reads as silence, never as garbage.
+    // Cleared on every exit by the guard below.
+    std::shared_ptr<twOutputPage> side;
+    struct AuxGuard {
+        sample_t **&base;
+        ~AuxGuard() { base = nullptr; }
+    } auxGuard{ auxBase_ };
+    if( auxOut && !auxLayout_.empty() && auxChannels_ > 0 &&
+        len <= (length_t)twOutputPage::FRAME_CAPACITY ) {
+        side = std::make_shared<twOutputPage>( auxChannels_ );
+        side->auxSlices = auxLayout_;
+        side->setStartPosition( startPos );
+        side->setValidFrames( (std::uint32_t)len );
+        auxBaseStore_.assign( (std::size_t)auxChannels_, nullptr );
+        for( std::uint16_t c = 0; c < auxChannels_; ++c )
+            auxBaseStore_[c] = side->channelPtr( (idx_t)c );
+        *auxOut = side;
+    }
 
     // THE OWNERSHIP GUARD (design D4). While the slot is live-owned, the pump
     // is its only legal renderer; anybody else gets silence and is counted.
@@ -1184,6 +1367,7 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
             liveEvents_->collect( (std::int64_t)startPos, (std::int64_t)len, liveBlock_ );
             mergeLiveBlock_nolock( pageBlock_, liveBlock_ );
         }
+        if( side ) auxBase_ = auxBaseStore_.data();
         runGenerator_nolock( in, out, len, startPos, pageBlock_, false, sampleRate );
         return;
     }
@@ -1214,6 +1398,7 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
         haveLastEnd_ = false;
     }
 
+    if( side ) auxBase_ = auxBaseStore_.data();
     runChunked_nolock( in, out, len, startPos, positional );
 }
 

@@ -11,7 +11,7 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * SEVEN entry points:
+ * EIGHT entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
@@ -20,6 +20,20 @@
  *   tw.test.clap.gui          gain + a WINDOWLESS clap.gui          (33 M6)
  *   tw.test.clap.restart      gui + request_restart on every reset
  *   tw.test.clap.reopen       gui that answers 0x0 after its first attach (QBX-219)
+ *   tw.test.clap.split        stereo in / stereo main + stereo AUX out   (55 M1)
+ *
+ * --- tw.test.clap.split (proposal 55 §5, M1) -----------------------------------
+ *
+ * An EFFECT with a second output bus, for the aux-routing gates. Main and aux
+ * both carry the input, and the aux is a COPY with no arithmetic at all:
+ *
+ *   aux[c][i]  = in[c][i]
+ *   main[c][i] = in[c][i] * MainLevel      (param id 0, default 1.0)
+ *
+ * so a return track fed by the aux can be compared BYTE FOR BYTE with a plain
+ * track playing the same material, and a case can silence the main path with
+ * MainLevel 0 and leave nothing but the aux. The aux port is NOT main, so it
+ * is the plugin's bus 1.
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -141,11 +155,13 @@
 #define TW_TESTCLAP_GUI_ID  "tw.test.clap.gui"
 #define TW_TESTCLAP_RESTART_ID "tw.test.clap.restart"
 #define TW_TESTCLAP_REOPEN_ID  "tw.test.clap.reopen"
+#define TW_TESTCLAP_SPLIT_ID   "tw.test.clap.split"
 
 /* Which behaviour this instance has. tw.test.clap.gui and
  * tw.test.clap.restart share GAIN's, and are told apart by hasGui /
  * restartsOnReset rather than by a kind of their own. */
-enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP = 3 };
+enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP = 3,
+               TW_KIND_SPLIT = 4 };
 
 #define TW_SINE_VOICES 16
 #define TW_ARP_GRID    4096u
@@ -187,6 +203,19 @@ static const clap_plugin_descriptor_t s_desc = {
    .support_url  = "",
    .version      = "1.0.0",
    .description  = "Test fixture: stereo gain with a block-size reporter and a clipper",
+   .features     = s_features,
+};
+
+static const clap_plugin_descriptor_t s_desc_split = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_SPLIT_ID,
+   .name         = "Smaragd Test Split",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: stereo main out at MainLevel plus a stereo aux COPY of the input",
    .features     = s_features,
 };
 
@@ -392,6 +421,8 @@ static uint32_t tc_params_count( const clap_plugin_t *p )
       return 0;
    if( self->kind == TW_KIND_SINE )
       return 2;   /* Gain, Stereo Skew */
+   if( self->kind == TW_KIND_SPLIT )
+      return 1;   /* Main Level */
    return 3;      /* Gain, Report Block Size, Clip Threshold */
 }
 
@@ -406,9 +437,12 @@ static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
       info->min_value     = 0.0;
       info->max_value     = 4.0;
       info->default_value = 1.0;
-      strncpy( info->name, "Gain", CLAP_NAME_SIZE - 1 );
+      strncpy( info->name, self->kind == TW_KIND_SPLIT ? "Main Level" : "Gain",
+               CLAP_NAME_SIZE - 1 );
       return true;
    }
+   if( self->kind == TW_KIND_SPLIT )
+      return false;
    if( self->kind == TW_KIND_SINE && index == 1 ) {
       /* STEREO SKEW (proposal 37 stereo gates, 2026-08-17). OFF by default, so
        * every render made before this parameter existed is byte-identical: the
@@ -453,6 +487,7 @@ static bool tc_params_get_value( const clap_plugin_t *p, clap_id id, double *out
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
    if( id == 0 ) { *out = self->gain;   return true; }
+   if( self->kind == TW_KIND_SPLIT ) return false;
    if( self->kind == TW_KIND_SINE && id == 3 ) { *out = self->skew; return true; }
    if( self->kind == TW_KIND_SINE || self->kind == TW_KIND_ARP )
       return false;
@@ -575,6 +610,8 @@ static uint32_t tc_ports_count( const clap_plugin_t *p, bool is_input )
       return 0;                       /* a note effect makes no sound */
    if( self->kind == TW_KIND_SINE )
       return is_input ? 0u : 2u;      /* an instrument: main stereo + aux mono */
+   if( self->kind == TW_KIND_SPLIT )
+      return is_input ? 1u : 2u;      /* main stereo in; main + aux stereo out */
    return 1;
 }
 
@@ -614,6 +651,15 @@ static bool tc_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
       return false;
    }
 
+   if( self->kind == TW_KIND_SPLIT && !is_input && index == 1 ) {
+      /* The AUX out: not main, so the plugin's bus 1. A copy of the input. */
+      info->id            = 2;
+      info->flags         = 0;
+      info->channel_count = 2;
+      info->port_type     = CLAP_PORT_STEREO;
+      strncpy( info->name, "Aux Out", CLAP_NAME_SIZE - 1 );
+      return true;
+   }
    if( index != 0 )
       return false;
    info->id            = is_input ? 0 : 1;
@@ -968,7 +1014,7 @@ static void tc_render_effect( tw_testclap_t *self, const clap_audio_buffer_t *ib
          memset( o + from, 0, (size_t)( to - from ) * sizeof( float ) );
          continue;
       }
-      if( !self->kind || self->kind == TW_KIND_GAIN ) {
+      if( !self->kind || self->kind == TW_KIND_GAIN || self->kind == TW_KIND_SPLIT ) {
          for( uint32_t i = from; i < to; ++i )
             o[i] = in[i] * g;
       } else if( c == 0 && ib->channel_count > 1 && ib->data32[1] ) {
@@ -1256,6 +1302,31 @@ static clap_process_status tc_process( const clap_plugin_t *p, const clap_proces
       return tc_process_sine( self, proc );
    if( self->kind == TW_KIND_ARP )
       return tc_process_arp( self, proc );
+   if( self->kind == TW_KIND_SPLIT ) {
+      /* The aux is written FIRST and from the input alone, so it is a copy
+       * whatever the main path's parameters do. A host that hands the aux
+       * port no buffer (an unrouted bus gets scratch, never nothing) is a
+       * host bug and fails loudly. */
+      if( proc->audio_outputs_count > 1 && proc->audio_inputs_count > 0 ) {
+         const clap_audio_buffer_t *ib  = &proc->audio_inputs[0];
+         clap_audio_buffer_t       *aux = &proc->audio_outputs[1];
+         if( !aux->data32 || !ib->data32 )
+            return CLAP_PROCESS_ERROR;
+         for( uint32_t c = 0; c < aux->channel_count; ++c ) {
+            float       *o  = aux->data32[c];
+            const float *in = c < ib->channel_count ? ib->data32[c] : NULL;
+            if( !o )
+               continue;
+            if( in )
+               memcpy( o, in, (size_t)proc->frames_count * sizeof( float ) );
+            else
+               memset( o, 0, (size_t)proc->frames_count * sizeof( float ) );
+         }
+      }
+      /* The main out is the gain effect's arithmetic with MainLevel as the
+       * gain: same segmenting, same params, same blob. */
+      return tc_process_effect( self, proc );
+   }
    return tc_process_effect( self, proc );
 }
 
@@ -1495,7 +1566,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 7;
+   return 8;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1509,6 +1580,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 4 ) return &s_desc_gui;
    if( index == 5 ) return &s_desc_restart;
    if( index == 6 ) return &s_desc_reopen;
+   if( index == 7 ) return &s_desc_split;
    return NULL;
 }
 
@@ -1526,6 +1598,7 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    else if( !strcmp( id, TW_TESTCLAP_SKEW_ID ) ) { kind = TW_KIND_SKEW; desc = &s_desc_skew; }
    else if( !strcmp( id, TW_TESTCLAP_SINE_ID ) ) { kind = TW_KIND_SINE; desc = &s_desc_sine; }
    else if( !strcmp( id, TW_TESTCLAP_ARP_ID ) )  { kind = TW_KIND_ARP;  desc = &s_desc_arp; }
+   else if( !strcmp( id, TW_TESTCLAP_SPLIT_ID ) ) { kind = TW_KIND_SPLIT; desc = &s_desc_split; }
    /* GUI behaves as GAIN in every respect that is not the gui extension - same
     * params, same ports, same DSP - so it reuses the kind rather than adding a
     * fifth branch to every switch in the file. hasGui is the only difference. */

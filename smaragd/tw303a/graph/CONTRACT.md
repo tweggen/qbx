@@ -135,6 +135,13 @@ Invariants:
     deliberately not a Q_ASSERT: those are compiled out of the build everyone
     runs. A wide component should still implement renderFrames() as its narrow
     degradation, for the legacy mono-scratch paths no fork can widen.
+    **At width 1 the call is `renderPageNarrow( page, ... )` since proposal 55
+    M1**, whose DEFAULT is exactly `renderFrames( page.channelPtr( 0 ), ...,
+    idx 0 )` -- the pre-M1 call, one frame down -- so no component that does
+    not override it renders a different byte. It exists for the one component
+    that must touch the PAGE at width 1: a plugin insert hanging its routed aux
+    buses on it as a side page (`twOutputPage::aux`), which a bare channel
+    pointer cannot reach.
 12. A PLUG PULL YIELDS CHANNEL min(latchIndex, page->channels - 1) of the page
     the producer actually froze (§4.4 rule 1), in twStreamingLatch::copyData —
     for the bound-page branch and the legacy-pull branch alike. The latch has

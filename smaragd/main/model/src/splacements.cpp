@@ -6,14 +6,29 @@
 
 namespace splacements {
 
-QString specOf( SProject *project, SObject *obj )
+namespace {
+
+// THE ONE ROOT-ORDERING WALK, shared by specOf() and rootHolding() (QBX-246).
+//
+// Sharing it is not tidiness. specOf() promises a spelling that resolves BACK
+// to the same object, and rootHolding() promises the root that spelling is
+// qualified with; two copies of this order could disagree, and the pair would
+// then describe different roots for one object -- the exact class of silent
+// mismatch QBX-242 swept.
+//
+// Returns the root holding `obj`, with `pathOut` its path inside that root and
+// `nameOut` the root's name (EMPTY for the master, as every root name is read).
+SObject *rootWalk( SProject *project, SObject *obj, QList<int> &pathOut,
+                   QString &nameOut )
 {
-    if( !project || !obj ) return QString();
+    pathOut.clear();
+    nameOut.clear();
+    if( !project || !obj ) return nullptr;
     // pathOf() answers {} both for "the root itself" and for "not found"; a
     // root is never what a caller here addresses, so {} means "not in it".
     if( SObject *master = rootContainer( project ) ) {
         const QList<int> p = strackpath::pathOf( master, obj );
-        if( !p.isEmpty() ) return strackpath::pathToString( p );
+        if( !p.isEmpty() ) { pathOut = p; return master; }
     }
     // Each name through rootNamed() itself, so a name an arrangement and an
     // asset share yields the root that name RESOLVES to -- the spelling
@@ -26,9 +41,27 @@ QString specOf( SProject *project, SObject *obj )
         SObject *root = rootNamed( project, name );
         if( !root ) continue;
         const QList<int> p = strackpath::pathOf( root, obj );
-        if( !p.isEmpty() ) return strackpath::qualifiedToString( name, p );
+        if( !p.isEmpty() ) { pathOut = p; nameOut = name; return root; }
     }
-    return QString();
+    return nullptr;
+}
+
+}  // namespace
+
+QString specOf( SProject *project, SObject *obj )
+{
+    QList<int> path;
+    QString name;
+    if( !rootWalk( project, obj, path, name ) ) return QString();
+    return name.isEmpty() ? strackpath::pathToString( path )
+                          : strackpath::qualifiedToString( name, path );
+}
+
+SObject *rootHolding( SProject *project, SObject *obj )
+{
+    QList<int> path;
+    QString name;
+    return rootWalk( project, obj, path, name );
 }
 
 bool refuseSystemLane( SObject *obj, const char *verb )

@@ -46,12 +46,19 @@ namespace {
 // duplicate rather than a shared refactor — the same call this file already
 // makes twice below for two different reasons (starting a bounce, asserting
 // staleness).
-STrack *feelFlowTrackAt( SProject *project, const QString &trackPath )
+STrack *feelFlowTrackAt( SProject *project, const QString &pathRoot_,
+                         const QString &trackPath )
 {
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( project );
-    SObject *lane = splacements::laneAt( root, stringToPath( trackPath ) );
-    return dynamic_cast<STrack *>( lane );
+    // The qualified idiom spluginuitestactions::trackAtPath uses, which this
+    // function's own comment above already says it duplicates (QBX-246). It
+    // parsed the path BARE and resolved it against the master -- wrong at both
+    // ends at once, so the two halves agreed and the defect was invisible:
+    // "Drums:0" split on commas into the master's track 0, which exists, so
+    // the seam answered confidently about the wrong track.
+    const QualifiedPath q_ = parseQualified( trackPath );
+    SObject *root = splacements::rootNamed(
+        project, q_.root.isEmpty() ? pathRoot_ : q_.root );
+    return dynamic_cast<STrack *>( splacements::laneAt( root, q_.idx ) );
 }
 
 // Recursive tree walk for wait-analysis's M1b extension: true if ANY track
@@ -215,8 +222,18 @@ SApplyResult SWaitAnalysisAction::apply(SProject *project)
             // queued revalidator job, so jobsQueued()==0 above does not mean
             // "no bounce in flight" — only that no ANALYSIS job is queued
             // yet (the bounce schedules one only on completion).
-            // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-            pending = anyTrackBouncing(splacements::rootContainer(project));
+            // EVERY ROOT (QBX-246). A bounce runs on the track, and a track
+            // in an arrangement bounces exactly like one in the master -- so
+            // draining the master alone let wait-analysis report "no jobs
+            // pending" while an arrangement's bounce was still in flight. The
+            // case then asserted on a half-written result, which fails as a
+            // wrong NUMBER rather than as a missing wait.
+            // check_root_resolution: master -- the master arm of the every-root walk immediately below
+            pending = anyTrackBouncing(project->masterRoot());
+            for (SObject *arr : project->arrangements()) {
+                if (pending) break;
+                pending = anyTrackBouncing(arr);
+            }
         }
 
         if (!pending) {
@@ -499,7 +516,7 @@ SApplyResult SFeelFlowAnalyzeAction::apply(SProject *project)
     }
 
     if (target_ == QStringLiteral("track")) {
-        STrack *track = feelFlowTrackAt(project, trackPath_);
+        STrack *track = feelFlowTrackAt(project, pathRoot_, trackPath_);
         if (!track) {
             qWarning() << "feel-flow-analyze: no track at path" << trackPath_;
             return {false, nullptr};
@@ -516,30 +533,33 @@ SApplyResult SFeelFlowAnalyzeAction::apply(SProject *project)
         return {false, nullptr};
     }
 
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *mixer = splacements::rootContainer(project);
+    // pathRoot_, as set-render-gate and assert-warp-anchor in this same file
+    // already do (QBX-246). Those two read `clip=` with parseInto() and resolve
+    // with rootNamed(); this one parsed bare and resolved the master, so no
+    // case could aim a feel-flow analysis at a clip inside an arrangement.
+    SObject *mixer = splacements::rootNamed( project, pathRoot_ );
     SLink *link = splacements::placementAt(mixer, clipPath_);
     if (!link) {
-        qWarning() << "feel-flow-analyze: no clip at path" << pathToString(clipPath_);
+        qWarning() << "feel-flow-analyze: no clip at path" << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
 
     SCut *cut = dynamic_cast<SCut*>(&link->getSObject());
     if (!cut) {
         qWarning() << "feel-flow-analyze: target is not an SCut at path"
-                   << pathToString(clipPath_);
+                   << qualifiedToString( pathRoot_, clipPath_ );
         return {false, nullptr};
     }
 
     SPlainWave *wave = dynamic_cast<SPlainWave*>(&cut->getContent());
     if (!wave) {
         qWarning() << "feel-flow-analyze: clip content at path"
-                   << pathToString(clipPath_) << "is not a plain wave";
+                   << qualifiedToString( pathRoot_, clipPath_ ) << "is not a plain wave";
         return {false, nullptr};
     }
 
     wave->enqueueGrooveAnalysis();
-    qDebug() << "feel-flow-analyze: clip" << pathToString(clipPath_) << "scheduled";
+    qDebug() << "feel-flow-analyze: clip" << qualifiedToString( pathRoot_, clipPath_ ) << "scheduled";
     // Non-undoable: scheduling a background analysis is not an edit to the
     // arrangement (mirrors sidecar-root / wait-analysis above).
     return {true, nullptr};
@@ -554,7 +574,7 @@ void SFeelFlowAnalyzeAction::writeXml(QDomElement &elem) const
     }
     // target="clip" is the implicit default (never written) so every
     // existing case and golden round-trips byte-unchanged.
-    elem.setAttribute("clip", pathToString(clipPath_));
+    elem.setAttribute("clip", qualifiedToString( pathRoot_, clipPath_ ));
 }
 
 bool SFeelFlowAnalyzeAction::readXml(const QDomElement &elem, int /*version*/)
@@ -564,7 +584,7 @@ bool SFeelFlowAnalyzeAction::readXml(const QDomElement &elem, int /*version*/)
         trackPath_ = elem.attribute("trackPath");
         return true;
     }
-    clipPath_ = stringToPath(elem.attribute("clip"));
+    clipPath_ = parseInto( pathRoot_, elem.attribute("clip") );
     return true;
 }
 
@@ -644,7 +664,7 @@ SApplyResult SAssertGrooveAspectAction::apply(SProject *project)
             qWarning() << "assert-groove-aspect: no project (trackPath given)";
             return {false, nullptr};
         }
-        STrack *track = feelFlowTrackAt(project, trackPath_);
+        STrack *track = feelFlowTrackAt(project, pathRoot_, trackPath_);
         if (!track) {
             qWarning() << "assert-groove-aspect: no track at path" << trackPath_;
             return {false, nullptr};
@@ -1052,7 +1072,7 @@ static const bool s_reg_assert_feel_flow_panel = (
 
 SApplyResult SSetFeelFlowMetricAction::apply( SProject *project )
 {
-    STrack *track = feelFlowTrackAt( project, trackPath_ );
+    STrack *track = feelFlowTrackAt( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "set-feel-flow-metric: no STrack at" << trackPath_;
         return { false, nullptr };
@@ -1090,7 +1110,7 @@ static const bool s_reg_set_feel_flow_metric = (
 
 SApplyResult SAssertFeelFlowPoseAction::apply( SProject *project )
 {
-    STrack *track = feelFlowTrackAt( project, trackPath_ );
+    STrack *track = feelFlowTrackAt( project, pathRoot_, trackPath_ );
     if( !track ) {
         qWarning() << "assert-feel-flow-pose: no STrack at" << trackPath_;
         return { false, nullptr };

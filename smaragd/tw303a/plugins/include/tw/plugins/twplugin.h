@@ -111,10 +111,11 @@ public:
     virtual twPluginCapabilities capabilities() const { return twPluginCapabilities{}; }
 
     // AUDIO OUTPUT buses. Bus 0 is the main bus and always agrees with
-    // ioLayout().audioOutputs; buses above it are aux outputs, which the
-    // backends have read and discarded since proposal 08 and which nothing
-    // consumes yet (proposal 37 §5.4 routes them to return tracks in P9). A
-    // plugin with no audio output at all reports 0 buses.
+    // ioLayout().audioOutputs; buses above it are aux outputs, numbered in the
+    // format's own order with the main bus taken out. Since proposal 55 M1 a
+    // ROUTED aux bus reaches the host: the slot processor hands process() a
+    // non-null outBuses[b] for it (see setRoutedOutBuses). A plugin with no
+    // audio output at all reports 0 buses.
     virtual std::size_t audioOutBusCount() const
     {
         return ioLayout().audioOutputs > 0 ? 1u : 0u;
@@ -129,6 +130,36 @@ public:
         return b;
     }
 
+    // AUDIO INPUT buses (proposal 55 §3.1; routed by M3). Bus 0 is the main
+    // input and agrees with ioLayout().audioInputs; buses above it are the
+    // format's non-main inputs (a sidechain) in its own order. Reported now so
+    // the scanner can record them; nothing feeds a non-main input yet. A
+    // plugin with no audio input at all reports 0 buses.
+    virtual std::size_t audioInBusCount() const
+    {
+        return ioLayout().audioInputs > 0 ? 1u : 0u;
+    }
+    virtual twPluginBusInfo audioInBus( std::size_t i ) const
+    {
+        twPluginBusInfo b;
+        if( i == 0 && ioLayout().audioInputs > 0 ) {
+            b.channels = ioLayout().audioInputs;
+            b.isMain   = true;
+        }
+        return b;
+    }
+
+    // WHICH AUX OUTPUT BUSES THE HOST WILL READ (proposal 55 M1): bit b set =
+    // bus b is routed (bit 0, the main bus, is ignored). Takes effect at the
+    // NEXT prepare(), which the slot processor calls right after a change --
+    // a format that must ACTIVATE a bus before it may be used (VST3's
+    // activateBus) does it there, never per block. In process() a routed bus
+    // gets a non-null outBuses[b] whose channels the plugin must fill; an
+    // unrouted one gets nullptr and the backend substitutes its own scratch,
+    // as every backend has always done for every non-main bus. The default
+    // does nothing: a backend that never writes an aux bus needs no mask.
+    virtual void setRoutedOutBuses( std::uint32_t busMask ) { (void)busMask; }
+
     // How long the plugin keeps producing after its input goes silent (a
     // reverb tail, a synth release). Frames, at the prepared rate. Used to size
     // the instrument pre-roll and the project end (proposal 37 D4); 0 means
@@ -138,7 +169,8 @@ public:
     // The EVENT-AWARE render call.
     //
     //   in        - de-interleaved inputs, ioLayout().audioInputs channels
-    //   outBuses  - outBuses[bus][channel], audioOutBusCount() buses
+    //   outBuses  - outBuses[bus][channel], audioOutBusCount() buses; an
+    //               entry above 0 may be nullptr (an unrouted aux bus)
     //   nframes   - <= the maxBlock passed to prepare()
     //   events    - host-owned, SORTED, times CHUNK-RELATIVE (0..nframes-1)
     //   eventsOut - host-owned sink; overflow is counted and dropped
