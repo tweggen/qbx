@@ -194,13 +194,16 @@ public:
     /// QBX-206: ONE HELD fader drag on that lane's head, `steps` ticks long.
     bool dragFader( const QString &trackPath, double db, int steps );
     /// QBX-207: aim the arranger's context menu at (lane, time, optional
-    /// child clip index; < 0 = none) and read what it offers.
+    /// child clip index; < 0 = none) and read what it offers. `takeRow` >= 0
+    /// aims the SUB-LANE showing that take instead of the track's own lane
+    /// (QBX-211), which is where "Play <take> alone" lives.
     QString describeArrangerMenu( const QString &trackPath, offset_t at,
-                                  int clipIndex );
+                                  int clipIndex, int takeRow = -1 );
     /// ...and perform one of its items by name. False when the menu does not
     /// offer it, or offers it GREYED.
     bool triggerArrangerMenu( const QString &trackPath, offset_t at,
-                              int clipIndex, const QString &item );
+                              int clipIndex, const QString &item,
+                              int takeRow = -1 );
     /// QBX-209: queue the answer "Insert sample"'s modal file chooser would
     /// have given, so the next trigger of that item runs the real slot.
     bool queueSampleFile( const QString &path );

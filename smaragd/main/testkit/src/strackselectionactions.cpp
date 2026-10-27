@@ -227,7 +227,8 @@ SApplyResult SArrangerMenuAction::apply( SProject * /*project*/ )
         qWarning() << "arranger-menu: no main window";
         return { false, nullptr };
     }
-    if( !win->triggerArrangerMenu( trackPath_, (offset_t) at_, clip_, item_ ) ) {
+    if( !win->triggerArrangerMenu( trackPath_, (offset_t) at_, clip_, item_,
+                                   takeRow_ ) ) {
         qWarning() << "arranger-menu: no lane at" << trackPath_
                    << "or the menu does not offer" << item_
                    << "(or offers it greyed)";
@@ -245,6 +246,7 @@ void SArrangerMenuAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "at", (qlonglong) at_ );
     elem.setAttribute( "clip", clip_ );
     elem.setAttribute( "item", item_ );
+    elem.setAttribute( "takeRow", takeRow_ );
 }
 
 bool SArrangerMenuAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -252,6 +254,7 @@ bool SArrangerMenuAction::readXml( const QDomElement &elem, int /*version*/ )
     trackPath_ = elem.attribute( "trackPath", "0" );
     at_        = elem.attribute( "at", "0" ).toLongLong();
     clip_      = elem.attribute( "clip", "-1" ).toInt();
+    takeRow_   = elem.attribute( "takeRow", "-1" ).toInt();
     item_      = elem.attribute( "item" );
     if( item_.isEmpty() ) {
         qWarning() << "arranger-menu: `item` is required";
@@ -299,7 +302,8 @@ SApplyResult SAssertArrangerMenuAction::apply( SProject * /*project*/ )
         return { false, nullptr };
     }
     const QString desc =
-        win->describeArrangerMenu( trackPath_, (offset_t) at_, clip_ );
+        win->describeArrangerMenu( trackPath_, (offset_t) at_, clip_,
+                                   takeRow_ );
     if( desc.isEmpty() ) {
         qWarning() << "assert-arranger-menu: no lane at" << trackPath_
                    << "(or no arranger)";
@@ -323,6 +327,7 @@ void SAssertArrangerMenuAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "at", (qlonglong) at_ );
     elem.setAttribute( "clip", clip_ );
+    elem.setAttribute( "takeRow", takeRow_ );
     elem.setAttribute( "contains", contains_ );
     elem.setAttribute( "absent", absent_ );
 }
@@ -333,6 +338,7 @@ bool SAssertArrangerMenuAction::readXml( const QDomElement &elem,
     trackPath_ = elem.attribute( "trackPath", "0" );
     at_        = elem.attribute( "at", "0" ).toLongLong();
     clip_      = elem.attribute( "clip", "-1" ).toInt();
+    takeRow_   = elem.attribute( "takeRow", "-1" ).toInt();
     contains_  = elem.attribute( "contains" );
     absent_    = elem.attribute( "absent" );
     return true;

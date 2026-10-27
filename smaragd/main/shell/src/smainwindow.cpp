@@ -3757,7 +3757,7 @@ bool SMainWindow::sendFaderKey( const QString &trackPath, const QString &key )
 // assert what one menu offers and then click another.
 static SStdMixerView *sAimArrangerMenu( SMainWindow *win, SStdMixerView *v,
                                         STrack *track, offset_t at,
-                                        int clipIndex )
+                                        int clipIndex, int takeRow )
 {
     (void) win;
     if( !v || !track ) return nullptr;
@@ -3771,27 +3771,34 @@ static SStdMixerView *sAimArrangerMenu( SMainWindow *win, SStdMixerView *v,
         if( clipIndex >= kids.size() ) return nullptr;
         clip = kids.at( clipIndex );
     }
-    v->tkAimMenu( track, at, clip );
+    // takeRow >= 0 aims the SUB-LANE showing that take rather than the
+    // track's own lane (QBX-211), which is the only state in which the
+    // builder offers "Play <take> alone" at all.
+    v->tkAimMenu( track, at, clip, takeRow );
     return v;
 }
 
 QString SMainWindow::describeArrangerMenu( const QString &trackPath,
-                                           offset_t at, int clipIndex )
+                                           offset_t at, int clipIndex,
+                                           int takeRow )
 {
     SStdMixerView *v = ensureArranger_();
     if( !v ) return QString();
     STrack *track = trackAtPath_( trackPath );
-    if( !sAimArrangerMenu( this, v, track, at, clipIndex ) ) return QString();
+    if( !sAimArrangerMenu( this, v, track, at, clipIndex, takeRow ) )
+        return QString();
     return v->describeMenu();
 }
 
 bool SMainWindow::triggerArrangerMenu( const QString &trackPath, offset_t at,
-                                       int clipIndex, const QString &item )
+                                       int clipIndex, const QString &item,
+                                       int takeRow )
 {
     SStdMixerView *v = ensureArranger_();
     if( !v ) return false;
     STrack *track = trackAtPath_( trackPath );
-    if( !sAimArrangerMenu( this, v, track, at, clipIndex ) ) return false;
+    if( !sAimArrangerMenu( this, v, track, at, clipIndex, takeRow ) )
+        return false;
     return v->tkTriggerMenu( item );
 }
 

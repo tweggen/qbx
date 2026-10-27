@@ -1832,22 +1832,38 @@ beneath it. That matters more than it looks: before the seam existed, a
 sabotage making the item submit a PLAIN `select-take` passed the entire suite —
 the feature wholly broken for every user with the suite green.
 
-**THE QAction ITSELF IS NOW REACHABLE (QBX-207), THOUGH THIS ITEM IS STILL NOT
-ASSERTED.** This paragraph used to read "STILL NOT GATED: the QAction itself —
-that its text carries the reason and that `setEnabled` is actually called with
-the answer. Nothing builds the arranger's lane popup off screen, the same gap
-that leaves `"Create &asset from range"` and QBX-195's "Clean up takes" item
-ungated." That gap is closed as a SEAM: `assert-arranger-menu` builds the real
-popup off screen and reports every item's key and enabled state, and
-`arranger-menu` performs one by name and refuses a greyed one. What is still
-missing is a CASE using it for *this* item — QBX-207 needed the seam for its
-own menu item and built it for all of them, so "Play take alone", "Create
-&asset from range" and "Clean up takes" became assertable without becoming
-asserted. Two things still narrow the gap in the meantime: the DECISION behind
-the enabled flag is gated (phase E's `expectRefused`), and the BEHAVIOUR the
-dimming communicates is gated (phase C asserts that on a full-extent take
-`whole="1"` and the plain click render byte-identically, so the item is dimmed
-over an operation known to be a no-op).
+**THE QAction ITSELF IS NOW ASSERTED (QBX-211).** This paragraph has said three
+different things, and the history is the point. It first read "STILL NOT GATED:
+the QAction itself — that its text carries the reason and that `setEnabled` is
+actually called with the answer. Nothing builds the arranger's lane popup off
+screen, the same gap that leaves `"Create &asset from range"` and QBX-195's
+"Clean up takes" item ungated." QBX-207 closed that as a SEAM and the paragraph
+became "reachable, though this item is still not asserted": the seam was built
+because QBX-207 needed it for its own item and works for all of them, so these
+three went from unreachable to assertable without becoming asserted.
+
+`arranger_menu_item_reasons.qxa` asserts them. For each: the item is OFFERED,
+its enabled flag matches the condition IN BOTH DIRECTIONS, and the reason is
+present in the label when greyed **and absent when it is not** — the second
+half being what stops a gate passing over an item that carries its suffix
+always. For this item it also triggers by key and watches the comp map clear,
+so the `objectName` is known to address the real gesture and not merely some
+action with the right name.
+
+**AND IT NEEDED THE SEAM TO AIM A ROW.** `tkAimMenu` set the clicked track,
+clip and offset but never `lastClickTrackIdx_`, which a real press sets from
+`rowAtViewY()` — so it held whatever the previous interaction left there, and
+this item is built only inside `rowAt( lastClickTrackIdx_ )` with
+`takeRow >= 0`. Measured: 17 items on the menu, this one not among them. The
+seam was not merely missing a convenience for one item; a stale row is a seam
+that lies, and `tkAimMenu` now sets the row whether or not a take row is asked
+for.
+
+Two things narrowed the gap even before the case, and both still hold: the
+DECISION behind the enabled flag is gated (phase E's `expectRefused`), and the
+BEHAVIOUR the dimming communicates is gated (phase C asserts that on a
+full-extent take `whole="1"` and the plain click render byte-identically, so
+the item is dimmed over an operation known to be a no-op).
 
 ## The arranger context menu, and its three seams (QBX-207)
 
@@ -1866,12 +1882,24 @@ nobody could use.
 
 **AN ITEM'S KEY IS ITS `objectName()` WHEN IT HAS ONE, AND ITS LABEL
 OTHERWISE.** Only items a gate needs to address stably carry an objectName
-(`new-midi-clip`, `insert-sample` since QBX-209 and `add-link` since
-QBX-217), because a label is
-user-visible text that moves and several in this menu carry a parenthetical
-reason that varies with the project — "Clean up takes (3 tracks)". Naming all
-twenty at once would be a wide change in a menu that otherwise needed none; a
-later ticket names the one it needs.
+(`new-midi-clip`, `insert-sample` since QBX-209, `add-link` since QBX-217, and
+`play-take-alone`, `clean-up-takes` and `create-asset-from-range` since
+QBX-211), because a label is user-visible text that moves and several in this
+menu carry a parenthetical reason that varies with the project — "Clean up
+takes (3 tracks)". Naming all twenty at once would be a wide change in a menu
+that otherwise needed none; a later ticket names the one it needs.
+
+**...WHICH IS WHY `describeMenu()` ALSO HAS A LABELS HALF (QBX-211).** Naming
+an item TAKES ITS LABEL OUT of the state half, because the objectName displaces
+it — and for these three the label is exactly where the REASON lives: "(no take
+columns)", "(select a range first)", "(covers the whole column)". A greyed item
+that says why is the behaviour, so naming the items would have made that
+behaviour unassertable, which is the opposite of what naming them is for. The
+string therefore ends `|labels|<objectName>:<label>|...`, for objectName items
+only — for every other item `sMenuKeyOf` already IS the label and a second copy
+would double the string and say nothing. The two halves use DIFFERENT
+separators, `=` and `:`, so no substring match can cross between them, and the
+half is APPENDED last so that no assertion written before it moves.
 
 **THE MENU OFFERS NO ITEM THAT DOES NOTHING (QBX-210)**, and that is now a
 gate rather than a hope. It offered one: `"Delete sample"` was enabled and

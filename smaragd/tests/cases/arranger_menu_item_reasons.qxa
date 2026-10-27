@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-211. THREE ARRANGER MENU ITEMS WHOSE GREYED STATE SAYS WHY, asserted:
+  "Play <take> alone", "Create asset from range" and "Clean up takes".
+
+  QBX-207 closed the SEAM and not the gap. It built tkAimMenu / describeMenu /
+  tkTriggerMenu because it needed to assert its own new item, and those work
+  for every item on the menu - so these three went from UNREACHABLE to
+  assertable but unasserted, which is where timeline/CONTRACT.md left them.
+  All three are items whose LABEL carries a reason and whose ENABLED state is
+  a real decision, and for "Play take alone" the CONTRACT records that a
+  sabotage making it submit a plain select-take passed the entire suite: the
+  feature wholly broken for every user with the suite green.
+
+  TWO PIECES OF WORK CAME BEFORE THE ASSERTIONS, and both are the reason this
+  is not a one-line case.
+
+  1. THE SEAM DID NOT AIM A ROW. tkAimMenu set lastClickTrack_, lastClickSLink_
+     and lastClickOffset_ but never lastClickTrackIdx_, which a real press sets
+     from rowAtViewY(). So it held whatever the last interaction left there,
+     which in a headless run is its constructed value - and "Play <take>
+     alone" is built only inside rowAt( lastClickTrackIdx_ ) with takeRow >= 0.
+     The item was therefore never offered to a gate at all: measured, 17 items
+     without it. tkAimMenu now takes a takeRow and sets the row either way; a
+     stale row is a seam that lies, not a gap for one item.
+
+  2. NAMING AN ITEM TAKES ITS LABEL AWAY. The ticket wants objectNames so the
+     assertions do not rest on user-visible text AND the reason in the label
+     asserted - and those pull against each other, because sMenuKeyOf uses the
+     objectName INSTEAD of the label once an item has one. describeMenu now
+     appends a LABELS HALF, `|labels|<objectName>:<label>`, for objectName
+     items only (for the rest the key already IS the label). The halves use
+     different separators, '=' and ':', so no substring match can cross
+     between them, and the half is APPENDED so no existing assertion moves.
+
+  TWO MEASURED TRAPS, both of which would make a reasonable first draft of
+  this case fail for reasons that look like the gate being wrong:
+
+  * A FRESH PROJECT ALREADY HAS A RANGE. loadRangeFromProject() invents one -
+    bars 5 to 9 - and sets rangeValid_ = true when the project carries none.
+    So "Create asset from range" is ENABLED on a new document and its
+    "(select a range first)" branch is reachable ONLY after an explicit clear.
+    Section (b) asserts that as the starting state rather than pretending
+    otherwise.
+
+  * A ZERO-LENGTH RULER CLICK IS NOT ALWAYS A CLEAR. It clears only when
+    beginRangeDrag takes the RangeCreate branch, and that branch is skipped
+    when the press lands within SMV_RANGE_GRAB_PIXEL (5) of an existing
+    range's edge - it grabs the edge instead. Measured: a click at frame 1000
+    does NOT clear, because the invented range's start edge is within five
+    pixels of it at the default zoom; a click at 300000 does. Hence 300000.
+
+  NOT PINNED, deliberately: the take's NAME. The label reads
+  `Play "(untitled)" alone` because the take object's name is "(untitled)",
+  which is a default this case has no business freezing. The assertions pin
+  the KEY, the enabled flag, and the presence or absence of the REASON - which
+  is the whole of what the ticket asks - and never the name between them.
+
+  120 BPM, 4/4, 48 kHz. test_sawtooth.wav is 192000 frames, so a bar is 96000.
+-->
+<SActionScript version="1" name="arranger_menu_item_reasons">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Take 0 covers the column; take 1 is its SECOND HALF only. That
+         difference is the whole of section (a): takeIsolateOffered withholds
+         the item exactly on a full-extent take, because there the plain click
+         already does what the item would. Same shape as take_isolate's. -->
+    <add-take clip="0,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <assert-take-column clip="0,0" shape="direct" takes="2" activeTake="0"
+                        extents="0-192000;96000-192000" duration="192000"/>
+    <set-lane-view toggleTakesRow="0"/>
+
+    <!-- =================================================================
+         (a) "PLAY <TAKE> ALONE"
+
+             Three states, and the first one is what the seam fix bought:
+             without a row aimed, the item is not on the menu AT ALL, and a
+             case could neither see it nor miss it.
+         ================================================================= -->
+    <!-- a1. The track's OWN lane (takeRow unset = -1): no take to name, so
+         no item. Absent, not greyed - and `arranger-menu` alone could not
+         tell those apart, which is why both halves are asserted. -->
+    <assert-arranger-menu trackPath="0" at="1000" clip="0"
+                          absent="play-take-alone"/>
+    <arranger-menu trackPath="0" at="1000" clip="0" item="play-take-alone"
+                   expectReject="true"/>
+
+    <!-- a2. Take row 0, which covers the whole column: GREYED, with the
+         reason in its own text. -->
+    <assert-arranger-menu trackPath="0" at="1000" clip="0" takeRow="0"
+                          contains="play-take-alone=0"/>
+    <assert-arranger-menu trackPath="0" at="1000" clip="0" takeRow="0"
+                          contains="alone  (covers the whole column)"/>
+    <!-- ...and a greyed item is one the user could not have clicked, so the
+         trigger is refused BEFORE the handler runs. -->
+    <arranger-menu trackPath="0" at="1000" clip="0" takeRow="0"
+                   item="play-take-alone" expectReject="true"/>
+
+    <!-- a3. Take row 1, which covers only half: OFFERED, and the reason is
+         NOT in the label. The absence is the half that makes a2 mean
+         something - a gate that only ever saw the suffix would pass on an
+         item that carried it always. -->
+    <assert-arranger-menu trackPath="0" at="1000" clip="0" takeRow="1"
+                          contains="play-take-alone=1"/>
+    <assert-arranger-menu trackPath="0" at="1000" clip="0" takeRow="1"
+                          absent="covers the whole column"/>
+
+    <!-- a4. ...AND THE KEY REACHES THE REAL GESTURE. A comp map first, so
+         the clear is observable: isolating a take CLEARS the map rather than
+         writing a one-segment one. Without this the objectName could address
+         anything at all and every assertion above would still pass. -->
+    <set-comp-map clip="0,0">
+      <seg at="0" take="0"/>
+      <seg at="96000" take="1" xfade="480"/>
+    </set-comp-map>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+    <arranger-menu trackPath="0" at="1000" clip="0" takeRow="1"
+                   item="play-take-alone"/>
+    <assert-take-column clip="0,0" comp="" activeTake="1"/>
+    <!-- One undo restores the map verbatim, the xfade included: the gesture
+         submits a select-take and that is what undo takes back. -->
+    <undo count="1"/>
+    <assert-take-column clip="0,0" comp="0:0;96000:1:480" activeTake="0"/>
+
+    <!-- =================================================================
+         (b) "CLEAN UP TAKES"
+
+             A DESTRUCTIVE item aimed at a SELECTION, which is why its label
+             carries two parentheticals: how many lanes it will sweep, and
+             why it cannot.
+         ================================================================= -->
+    <!-- b1. Track 1 alone holds no take column: greyed, with the reason. -->
+    <select-track trackPath="1"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="clean-up-takes=0"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="clean-up-takes:Clean up takes (no take columns)"/>
+    <arranger-menu trackPath="1" at="1000" item="clean-up-takes"
+                   expectReject="true"/>
+
+    <!-- b2. Track 0 holds one: offered, and the reason is gone. -->
+    <select-track trackPath="0"/>
+    <assert-arranger-menu trackPath="0" at="1000"
+                          contains="clean-up-takes=1"/>
+    <assert-arranger-menu trackPath="0" at="1000"
+                          absent="(no take columns)"/>
+
+    <!-- b3. TWO lanes selected, NEITHER with a column: both parentheticals
+         at once, which is the label at its worst and the reason this item
+         needed a stable key more than any other on the menu. -->
+    <select-track trackPath="1"/>
+    <select-track trackPath="2" modifiers="ctrl"/>
+    <assert-track-selection paths="1;2"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="clean-up-takes=0"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="clean-up-takes:Clean up takes (2 tracks) (no take columns)"/>
+
+    <!-- b4. ...AND THE ENABLED STATE FOLLOWS THE SELECTION, NOT THE LANE
+         UNDER THE POINTER. Aimed at track 1, which has no column, while
+         track 0 - which has one - is in the selection: the item is OFFERED,
+         because the sweep will reach track 0. That is exactly the risk the
+         "(N tracks)" suffix exists to announce, and it is a claim no
+         single-lane fixture can make. -->
+    <select-track trackPath="0"/>
+    <select-track trackPath="1" modifiers="ctrl"/>
+    <assert-track-selection paths="0;1"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="clean-up-takes=1"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="clean-up-takes:Clean up takes (2 tracks)"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          absent="(no take columns)"/>
+
+    <!-- =================================================================
+         (c) "CREATE ASSET FROM RANGE"
+
+             LAST, because clearing and re-making the range is document state
+             the sections above read.
+         ================================================================= -->
+    <!-- c1. A NEW PROJECT ALREADY HAS A RANGE, invented by
+         loadRangeFromProject() when the file carries none. So the item starts
+         ENABLED - asserted rather than assumed, because the obvious first
+         draft of this case expects the opposite and fails. -->
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="create-asset-from-range=1"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          absent="(select a range first)"/>
+
+    <!-- c2. Cleared: greyed, with the reason. 300000 and not 1000 - see the
+         header. The two spaces before the parenthesis are the production
+         label's own. -->
+    <drag-range from="300000" to="300000"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="create-asset-from-range=0"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="create-asset-from-range:Create &amp;asset from range  (select a range first)"/>
+    <arranger-menu trackPath="1" at="1000" item="create-asset-from-range"
+                   expectReject="true"/>
+
+    <!-- c3. A real range again: offered, reason gone. The round trip is what
+         says the enabled state TRACKS the condition rather than happening to
+         agree with it once. -->
+    <drag-range from="0" to="96000"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          contains="create-asset-from-range=1"/>
+    <assert-arranger-menu trackPath="1" at="1000"
+                          absent="(select a range first)"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
