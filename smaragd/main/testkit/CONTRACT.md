@@ -9,7 +9,11 @@ Public headers: app/testkit/*.h. Verb reference: docs/ACTIONS.md.
 
 Depends on (engine): tw/analysis, tw/devices, tw/playback, tw/sinks
 (+core/graph, and metering/pages/schedule/sidecar for the verbs that need
-them). App edges: actions, model, objects/mixer, objects/track, shell.
+them; plugins + sampler since proposal 56 Q0 for `sampler-test-install`, which
+reaches a NassauDigital instance through `twSamplerHost` by capability from a
+`twPlugin &` and installs only through `SPluginSlot::setInstanceInitializer` /
+`applyToInstances`). App edges: actions, model, objects/mixer, objects/track,
+shell.
 
 Invariants:
 1. A rejected action FAILS the test unless its element has

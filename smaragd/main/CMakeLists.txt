@@ -545,6 +545,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/smetertestactions.h
     testkit/include/app/testkit/smiditestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
+    testkit/include/app/testkit/ssamplertestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
@@ -609,6 +610,7 @@ set(APP_UI_FILES
     testkit/src/smidiintestactions.cpp
     testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
+    testkit/src/ssamplertestactions.cpp
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
@@ -1190,6 +1192,21 @@ set_tests_properties(preview_envelope_test PROPERTIES
 # not a code review â€” that set-project-channels and its undo make NO
 # STrack::setNBusses call. M1 is inaudible on purpose, and only instrumentation
 # can fail when that stops being true. Same shape as the three tests above.
+# Proposal 56 Q0.4 and Q0.q2: a NassauDigital slot on a REAL SProject/STrack
+# against a StubAppContext (project_channels_test's shape). Q0.4: the project
+# document grows by < 1 KiB when a 10 MiB sample is installed (the slot's state
+# is a reference). Q0.q2: 2 -> 1 project channels rebuilds the plugin, and the
+# render after it is exactly the GenFold of the render before (the slot's
+# instance initializer, invariant 4).
+add_executable(sampler_slot_test testkit/src/sampler_slot_test.cpp)
+target_link_libraries(sampler_slot_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME sampler_slot_test COMMAND sampler_slot_test)
+set_tests_properties(sampler_slot_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(project_channels_test testkit/src/project_channels_test.cpp)
 target_link_libraries(project_channels_test
     PRIVATE

@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q0_engine_seam">
+
+  <!-- PROPOSAL 56 Q0 (QBX-250): NASSAUDIGITAL THROUGH THE REAL PLUGIN PATH.
+
+       Q0.3  insert-plugin format="tw" uid="tw.native.nassaudigital" builds the
+             instrument from the registry (it was handed there by
+             registerNassauDigital, from SApplication, by call). A note at
+             frame 1000 renders SILENCE before it and the SAMPLE'S RMS after
+             it, and the render matches a committed golden byte for byte.
+       Q0.q4 assert-instrument-slot says DirectGen on the stereo project and
+             GenFold on the mono one (a 0 -> 2 instrument, plugins inv. 16).
+       Q0.q2 set-project-channels 1 RE-INSTANTIATES the plugin
+             (SPluginSlot::ensureChannels), and the new instance is BORN
+             CURRENT through the slot's instance initializer (invariant 4): the
+             mono render is the GenFold of the stereo one. The exact,
+             per-frame form of that claim is sampler_slot_test; here it is
+             the level, through the whole render path.
+
+       ======================================================= the fixture
+
+       In Q0 the instrument has no model yet (Q1), so the program and the one
+       sample come from the TEST verb sampler-test-install: a one-zone
+       one-shot program over every key, root 60, and ../test_stereo.wav as its
+       layer. test_stereo.wav is the right file because its two channels are
+       at DIFFERENT levels, so a fold is neither of them:
+
+           ch0 rms 0.49999    ch1 rms 0.24999    0.5 (ch0 + ch1) rms 0.37499
+
+       (over its first 48000 frames, measured with Python's wave module). A
+       one-shot at its root key and velocity 127 plays the layer at unity gain
+       (velToLevel = 1, a stereo layer's pan is a balance, unity at centre),
+       through the core's band-limiting interpolator, whose passband ripple is
+       far inside the +/-2 % bands below.
+
+       The note: 120 BPM, ppq 960, so a tick is 25 frames and tick 40 is frame
+       1000. One-shot plays to the sample's end whatever the note-off says.
+
+       ===================================================== the golden
+
+       ../goldens/sampler_q0_note.wav is THIS case's own render, committed
+       (the mc_golden_stereo precedent). It fixes the core's arithmetic: a
+       nassau-digital bump that changes it changes this golden, and the bump's
+       PR says why (proposal 56 §4.1, "a core bump"). The core is compiled with
+       -ffp-contract=off (tw303a/CMakeLists.txt), so the bytes do not depend
+       on whether the CPU fuses a multiply-add. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- No isInstrument attribute: a BUILT-IN, so the registry resolves it,
+         which is the whole of registerBuiltin's reach into the app. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.nassaudigital" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+
+    <!-- A0. With nothing installed the instrument is SILENT: the RMS after the
+         install is the install's, not a sound the instrument makes alone. -->
+    <render filename="sq0_empty.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq0_empty.wav" startFrame="0" frameCount="72000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+
+    <sampler-test-install trackPath="0" slotIndex="0" filePath="../test_stereo.wav"
+                          layer="1" rootKey="60" mode="oneshot"/>
+
+    <!-- ============================================================ Q0.3 -->
+    <render filename="sq0_note.wav" format="wav" quality="10" durationSec="1.5"/>
+
+    <!-- Silent BEFORE the note, on both channels... -->
+    <assert-audio-energy filename="sq0_note.wav" startFrame="0" frameCount="1000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <assert-audio-energy filename="sq0_note.wav" startFrame="0" frameCount="1000"
+                         channel="1" minRms="0.0" maxRms="0.00001"/>
+    <!-- ...and the SAMPLE'S RMS after it, per channel: the sample's own
+         0.49999 / 0.24999, +/-2 %. -->
+    <assert-audio-energy filename="sq0_note.wav" startFrame="1000" frameCount="48000"
+                         channel="0" minRms="0.49" maxRms="0.51"/>
+    <assert-audio-energy filename="sq0_note.wav" startFrame="1000" frameCount="48000"
+                         channel="1" minRms="0.245" maxRms="0.255"/>
+    <!-- The band must be able to fail: channel 1 is NOT at channel 0's level
+         (a sampler that played one channel twice would pass the first band
+         and fail here). -->
+    <assert-audio-energy filename="sq0_note.wav" startFrame="1000" frameCount="48000"
+                         channel="1" minRms="0.49" maxRms="0.51" expectReject="true"/>
+    <!-- The onset IS frame 1000: the first 64-frame window that has energy
+         starts there, not a chunk or a page later. -->
+    <assert-audio-energy filename="sq0_note.wav" startFrame="1000" frameCount="64"
+                         channel="0" minRms="0.05" maxRms="1.0"/>
+
+    <assert-file-identical actual="sq0_note.wav" expected="../goldens/sampler_q0_note.wav"/>
+
+    <!-- ===================================================== Q0.q4 / Q0.q2
+         2 -> 1 channels: the mapping is re-derived (GenFold) and the plugin
+         RE-INSTANTIATED. sampler-test-install is NOT repeated: the program and
+         the sample reach the new instance through the slot's initializer or
+         not at all. -->
+    <set-project-channels channels="1"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.nassaudigital" mode="GenFold"
+                            state="Active" hasFeed="1"/>
+
+    <render filename="sq0_fold.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq0_fold.wav" startFrame="0" frameCount="1000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <!-- 0.5 (0.49999 + 0.24999) = 0.37499, +/-2 %. -->
+    <assert-audio-energy filename="sq0_fold.wav" startFrame="1000" frameCount="48000"
+                         channel="0" minRms="0.3675" maxRms="0.3825"/>
+    <!-- ...not channel 0 alone (a fold that never happened)... -->
+    <assert-audio-energy filename="sq0_fold.wav" startFrame="1000" frameCount="48000"
+                         channel="0" minRms="0.49" maxRms="0.51" expectReject="true"/>
+    <!-- ...and the file really is one channel wide. -->
+    <assert-audio-energy filename="sq0_fold.wav" startFrame="0" frameCount="48000"
+                         channel="1" minRms="0.0" maxRms="1.0" expectReject="true"/>
+
+    <!-- Back to stereo: a second rebuild, and the render is the golden again. -->
+    <set-project-channels channels="2"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.nassaudigital" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+    <render filename="sq0_back.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="sq0_back.wav" expected="../goldens/sampler_q0_note.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

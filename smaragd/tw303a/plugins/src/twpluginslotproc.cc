@@ -88,6 +88,26 @@ void twPluginSlotProcessor::bumpParamEpoch()
     bumpParamEpoch_nolock();
 }
 
+std::size_t twPluginSlotProcessor::applyToInstances(
+    const std::function<void( twPlugin & )> &fn )
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    std::size_t n = 0;
+    if( fn ) {
+        for( const std::unique_ptr<twPlugin> &p : instances_ ) {
+            if( !p ) continue;
+            fn( *p );
+            ++n;
+        }
+    }
+    // Under the SAME lock as the install: a render that starts after this
+    // returns sees both the new state and a moved content epoch, so it can
+    // neither serve a page frozen before the install nor freeze one against
+    // half of it.
+    bumpParamEpoch_nolock();
+    return n;
+}
+
 // --- automation (proposal 37 P5, design D5) ---------------------------------
 
 void twPluginSlotProcessor::setParamCurves(

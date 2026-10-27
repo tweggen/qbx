@@ -63,6 +63,22 @@ Invariants:
    createPassThroughPlugin() / createClapPlugin() directly) — NOT static-init
    self-registration, so static-library linking is safe here. Keep it that
    way, or move the engine to whole-archive linking first.
+   PROPOSAL 56 B2 (QBX-250) EXTENDS IT TO BUILT-INS FROM ABOVE: a linked-in
+   instrument that lives in a module DEPENDING on tw_plugins (tw/sampler's
+   NassauDigital, `tw.native.nassaudigital`) cannot be named here without a
+   cycle, so that module hands the registry its descriptor and a factory by an
+   EXPLICIT CALL — `twPluginRegistry::registerBuiltin(desc, factory)`, reached
+   through `audio::registerNassauDigital(registry)` from the composition root
+   (`SApplication::initPluginRegistry`, before the first scan) and from every
+   test that wants the instrument. Never from a static initializer. The pair
+   is kept in a list of its own: `appendBuiltins_nolock()` appends its
+   descriptors after the in-house two on every seed and every rescan, a
+   registration into an ALREADY-seeded list replaces or appends its row at
+   once, re-registering the same (format, uid) REPLACES rather than
+   duplicates, and `instantiate()` consults the factories before the format
+   branches — copying the factory out under the registry's mutex and calling it
+   outside it (a factory is plugin code). Never scanned, never cached; the
+   probe executable needs nothing. Gated by `sampler_test` part A.
 2. process() is realtime: no allocation, no locks, no Qt. Everything a render
    needs is sized in prepare(): twPluginInsert's scratch and pointer arrays,
    twClapPlugin's per-port buffers and its event vector.
@@ -239,6 +255,28 @@ Invariants:
    SPluginSlot::audioInvalidated() -> STrack::onPluginSlotAudioInvalidated() ->
    invalidateRenderPath() on the TRACK (main/pluginui/CONTRACT.md invariant 6,
    gated by qxa.plugin_bypass_and_param).
+15a. THE LOCKED MUTATION (proposal 56 B3, QBX-250).
+   `twPluginSlotProcessor::applyToInstances(fn)` calls `fn` on EVERY live
+   instance (dual-mono has N) while holding `mutex_` — the mutex `render()`
+   holds for its whole call — and then calls `bumpParamEpoch_nolock()`, all
+   under that one lock. So whatever `fn` installs lands BETWEEN two `process()`
+   calls, never inside one, on the frozen path and on the live pump alike; a
+   plugin may read what was installed from `process()` with no lock of its own;
+   and a render that starts after the call sees both the new state and a moved
+   content epoch, so it can neither serve a page frozen before the install nor
+   freeze one against half of it. It is the ONLY legal way to mutate a plugin's
+   non-parameter state from outside — `plugin()`/`plugins()` hand out bare
+   pointers that are NOT under the lock — and its first user is NassauDigital's
+   `twSamplerHost` (tw/sampler/CONTRACT.md). `fn` runs on the calling thread
+   under the processor's mutex: it must not call back into the processor and
+   should only INSTALL what was built beforehand. A Missing slot's placeholder
+   is an instance too; `fn` decides by capability. The caller still owns the
+   path above the slot (`SPluginSlot::applyToInstances()` does both halves,
+   main/objects/track/CONTRACT.md). Gated by `sampler_test` part D (the
+   insert's content epoch moves; the install is read by `process()`) and part F
+   (300 renders of one page while another thread swaps the sample through it:
+   every page is exactly the A golden or exactly the B golden, measured 126 A /
+   174 B / 0 torn on the dev box).
 16. The channel-mismatch mapping is derived ONCE, from the plugin's OWN
    reported layout, and never guessed per page. setChannelCount() instantiates
    one plugin first and reads ioLayout() from it, because a descriptor from a

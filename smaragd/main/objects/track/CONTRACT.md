@@ -579,6 +579,47 @@ to act "before this slot's plugin is gone" must connect to `slotDestroying()`,
 never to `QObject::destroyed()` — the base class fires last, not first, and a
 plugin's own resources are members, which are gone well before that.
 
+## Non-parameter state of a live instance (proposal 56 Q0, QBX-250)
+
+A plugin whose state is not a parameter list — NassauDigital's program and
+samples, handed over through tw/sampler's `twSamplerHost` — had two ways to be
+lost: a push through the bare `getProcessor()->plugin()` pointer races the
+render (the processor's mutex is private), and every REBUILD
+(`setChannelCount()`, `reloadPlugin()`, a rescan's `setFactory()`)
+re-instantiates every instance from the factory and drops what was pushed into
+the old ones. Two GENERIC seams close both; neither names the sampler, and
+`objects/track` still knows nothing of `tw/sampler` (proposal 56 invariant 12,
+enforced by `check_layering.py`: `tw/sampler` is not in this slice's
+`APP_ENG`).
+
+1. **THE INSTANCE INITIALIZER: A FRESH INSTANCE IS BORN CURRENT** (proposal 56
+   invariant 4). `SPluginSlot::setInstanceInitializer(fn)` stores `fn` in a
+   holder SHARED with every factory `makeFactory()` hands out, and the factory
+   passes each instance it makes through `fn` BEFORE the processor sees it
+   (inside the rebuild, under the processor's mutex). Shared, not copied, so an
+   initializer set after the processor exists still reaches its next rebuild.
+   It does NOT touch the instances that already exist — that is item 2. An
+   empty function clears it. Gated by `sampler_slot_test` (2 -> 1 project
+   channels: the render after the rebuild is EXACTLY `0.5f * (L + R)` of the
+   render before) and `qxa.sampler_q0_engine_seam` (the same through the whole
+   render path, and back to 2 channels byte-identical to the golden).
+2. **EVERY MUTATION OF A LIVE INSTANCE IS `applyToInstances`** (proposal 56
+   invariant 3). `SPluginSlot::applyToInstances(fn)` is
+   `twPluginSlotProcessor::applyToInstances()` (under the processor's mutex,
+   with a param-epoch bump; tw/plugins inv. 15a) followed by the half the
+   processor cannot do: `invalidateAbove()` and `paramsChanged()`, which is
+   `notifyPluginEdited()` minus the second epoch bump. It materializes nothing:
+   a slot with no processor has no instances, returns 0, and gets its state
+   from the initializer when it is built. Use the two together — initializer
+   first, then `applyToInstances` with the same function — or a later rebuild
+   forgets what the current instances were given.
+3. **NEITHER WRITES THE PROJECT.** What an initializer installs is not
+   serialized by the slot; the slot's wire schema is still descriptor + bypass
+   + the plugin's own state chunk (inv. 8). For NassauDigital the chunk is an
+   8-byte header and the program will live in the model (Q1, an `SObject` child
+   of the slot, proposal 56 B4), so a 10 MiB sample adds 0 bytes to the saved
+   project (`sampler_slot_test`, Q0.4).
+
 ## The PUPPET POSE (proposal 40 M3e AC 4)
 
 `app/objects/track/sfeelflowpose.h` — `sFeelFlowPoseAt( const SFeelFlowUiData&,

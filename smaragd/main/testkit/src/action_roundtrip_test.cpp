@@ -57,6 +57,10 @@ const Fixture kFixtures[] = {
     { "select-take",
       "<select-take clip='0,1' take='2' broadcast='0' whole='1'/>" },
     // --- verbs whose readXml validates required attributes -------------------
+    // Proposal 56 Q0: refuses a missing filePath or a non-positive layer.
+    { "sampler-test-install",
+      "<sampler-test-install trackPath='0' slotIndex='0' filePath='../test_stereo.wav'"
+      " layer='1' rootKey='60' mode='oneshot' generation='1'/>" },
     { "assert-audio-energy",
       "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"
       " startFrame='48000' frameCount='96000' channel='1'/>" },
@@ -1075,6 +1079,12 @@ const LaneRow kLaneRows[] = {
     // is editable (M3) -- the same answer remove-plugin and set-plugin-bypass
     // already give, which is what this verb's items submit.
     { "plugin-row-command",    Accept, "the master chain is editable (M3)" },
+    // Proposal 56 Q0. Not refused FOR THE LANE: it addresses a slot, and a
+    // system lane can never hold the instrument it needs -- insert-plugin
+    // refuses an instrument there (master_refuses_instrument) -- so on a
+    // system lane it finds no NassauDigital instance and rejects on that.
+    { "sampler-test-install",  Accept,
+      "a test verb aimed at a NassauDigital slot, which a system lane cannot hold" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
     { "remove-automation-lane", Accept, "the inverse of the above" },
     { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },
