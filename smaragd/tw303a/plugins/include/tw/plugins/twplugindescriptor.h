@@ -42,6 +42,13 @@ struct twPluginDescriptor {
     // are aux outs (proposal 37 §5.4, built in P9).
     std::uint16_t              nOutBuses = 0;
     std::vector<std::uint16_t> outBusChannels;
+
+    // Audio INPUT buses (proposal 55 §3.1, scanner version 3). nInBuses is >= 1
+    // for anything with an audio input; bus 0 is the main input and its channel
+    // count equals io.audioInputs. The rest are the format's non-main inputs --
+    // a sidechain -- which proposal 55 M3 feeds.
+    std::uint16_t              nInBuses = 0;
+    std::vector<std::uint16_t> inBusChannels;
 };
 
 // What the scanner learned about ONE module file (proposal 08 M2).
@@ -94,7 +101,10 @@ public:
     // eventPortsIn/Out, nOutBuses and outBusChannels. A v1 record cannot supply
     // them, so every record — including the remembered failures — is
     // invalidated once and re-probed.
-    static constexpr int kScannerVersion = 2;
+    // 2 -> 3 (proposal 55 M1): the descriptor gained nInBuses and
+    // inBusChannels, and audioOutBus()/audioInBus() became BUS-indexed (bus 0
+    // the main bus wherever the format declared it) rather than port-indexed.
+    static constexpr int kScannerVersion = 3;
 
     twPluginRegistry() = default;
     ~twPluginRegistry();

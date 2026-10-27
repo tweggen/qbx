@@ -66,6 +66,16 @@ only carries across a contiguous page chain.
 - A page always carries a full page of the component's material; consumers
   that represent a bounded window (a clip!) must clamp what they mix out of
   it (see CLIP_MODEL.md — the clip-end-bleed bug).
+- **A SIDE PAGE** (proposal 55 D2, M1). A plugin insert whose slot routes aux
+  output buses hangs a second page on its own (`twOutputPage::aux`), holding
+  exactly the routed aux channels, laid out by `auxSlices` (bus, offset,
+  channels) that travel with the samples. It is rendered by the same
+  `process()` calls as the main page, written before the main page is
+  published and never after, and lives and dies with it: one cache entry, one
+  stamp. The main page's width is unchanged, so no other consumer sees it;
+  only `twPluginAuxTap` reads it. Every other page has `aux == nullptr` and is
+  byte-for-byte what it was. A component's page statistics count the side
+  page's bytes with its main page (`accountedBytesWithAux`).
 
 ## Sequential consumers
 

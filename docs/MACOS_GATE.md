@@ -161,7 +161,7 @@ made the gate vacuous; sabotage-checked by making `saveGeometryToSettings()`
 write unconditionally, which the case still catches.
 
 Redirecting the whole INI for `--test-case` runs would be the bigger fix and was
-deliberately not taken: `configDir()` also holds `plugincache.v2.json`, so every
+deliberately not taken: `configDir()` also holds `plugincache.v3.json`, so every
 case would then cold-probe every plugin installed on the machine.
 
 ## Resizing an unmapped window does not resize its children

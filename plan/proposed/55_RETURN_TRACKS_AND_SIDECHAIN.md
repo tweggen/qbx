@@ -720,6 +720,53 @@ D2, D4 (aux rows), §3.1 outputs half; `tw.test.clap.split`, `TestSplit`.
   module exactly once (the 37 P2 gate's shape) and the probe JSON carries
   `nInBuses`/`inBusChannels`.
 
+**M1 as built (2026-10-27, QBX-248).** Every AC holds as written; what the
+build found that this document did not say:
+
+- **The bus array's length is a promise, and nobody kept it.** `twPlugin`'s
+  event-aware `process()` always documented `outBuses` as `audioOutBusCount()`
+  entries, but every caller in the tree passed ONE (both backends' legacy
+  overloads, the processor's automation path, the generator path), harmless
+  only while nothing read past entry 0. §3.1's "a backend substitutes its own
+  scratch for a null entry" is therefore not enough on its own: a backend now
+  reads `outBuses[b]` only for a bus in the mask it was given
+  (`twPlugin::setRoutedOutBuses`, new), and once any bus is routed every
+  event-aware call carries a full-length array (the processor's
+  `busArrayForChunk_nolock`, a member array in each legacy overload).
+  plugins CONTRACT inv. 61.
+- **The mask applied to the plugin is the set the slot renders, not the set
+  asked for.** A DualMono, Transparent, Unsupported or Missing slot keeps its
+  mask (it comes back with the plugin, D9) but tells the plugin nothing, so no
+  backend is promised an array the slot will not hand it. inv. 60.
+- **The width-1 page needed a hook.** At a project width of 1,
+  `freezePage_nolock` called `renderFrames()` with a bare channel pointer, which
+  cannot carry a side page. `twComponent::renderPageNarrow( page, ... )` now
+  stands there, defaulting to exactly that `renderFrames()` call; only the
+  insert and the tap override it. graph CONTRACT inv. 11.
+- **CLAP and VST3 `audioOutBus(i)` were PORT-indexed**, which agreed with
+  twPlugin's "bus 0 is the main bus" only while the main port was port 0. They
+  are bus-indexed now (and the new `audioInBus(i)` likewise), part of why the
+  scanner went to version 3. D5's input ABI is otherwise M3's: only the bus
+  REPORTING (`audioInBusCount()`/`audioInBus(i)`) landed here, because AC1.6's
+  `nInBuses` needs it.
+- **AC1.5 needed a plugin-side witness for "not activated".** An unrouted bus
+  gets the backend's scratch, so its audio can never show whether it was
+  switched on. `TestSplit` reports its aux activation as one frame of tail
+  (`getTailSamples()`, which `twPlugin::tailFrames()` reads live); the routed
+  half is shown by the aux audio itself, which TestSplit writes only when
+  activated.
+- **The tap's pages are stamped against the tap's own epoch** (inv. 15's
+  rule), so a mask change stales the insert and not the tap. Harmless in M1
+  (nothing re-points a tap); M2's pass must re-wire the tap when it re-points
+  it, which re-stamps.
+- **Measured (T11):** a stereo routed aux costs exactly one more 2-channel
+  page per cached page of the insert: 1,048,576 B for main + side against
+  524,288 B unrouted, now counted in the insert's page statistics
+  (`twOutputPage::accountedBytesWithAux`) and so in `describePageMemory`.
+- **T10, measured as a race:** a tap rendered 60 times while another thread
+  flipped the routed bus between 1 and 2 (~25,000 flips per run, three runs):
+  every page was the exact aux or silence (e.g. 32 / 28 / 0 other).
+
 ### M2 — Return tracks: model, verbs, persistence (X2.1)
 
 D1, D3, D6 (second half), D8, D9; §3.2 return half; the aux edge in D7.

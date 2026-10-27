@@ -59,6 +59,12 @@ QJsonObject descriptorToJson( const twPluginDescriptor &d )
     for( std::uint16_t c : d.outBusChannels )
         buses.append( (int) c );
     o["outBusChannels"] = buses;
+    // Proposal 55 (scanner version 3).
+    o["nInBuses"]      = (int) d.nInBuses;
+    QJsonArray inBuses;
+    for( std::uint16_t c : d.inBusChannels )
+        inBuses.append( (int) c );
+    o["inBusChannels"] = inBuses;
     return o;
 }
 
@@ -90,6 +96,15 @@ bool descriptorFromJson( const QJsonObject &o, twPluginDescriptor &d )
         d.outBusChannels.push_back( (std::uint16_t) bv.toInt( 0 ) );
     if( d.outBusChannels.empty() && d.nOutBuses > 0 )
         d.outBusChannels.assign( d.nOutBuses, d.io.audioOutputs );
+    // Proposal 55: the same degrade for the input half -- one main input bus
+    // if it has inputs at all.
+    d.nInBuses      = (std::uint16_t) o.value( "nInBuses" )
+                          .toInt( d.io.audioInputs > 0 ? 1 : 0 );
+    d.inBusChannels.clear();
+    for( const QJsonValue &bv : o.value( "inBusChannels" ).toArray() )
+        d.inBusChannels.push_back( (std::uint16_t) bv.toInt( 0 ) );
+    if( d.inBusChannels.empty() && d.nInBuses > 0 )
+        d.inBusChannels.assign( d.nInBuses, d.io.audioInputs );
     return true;
 }
 
