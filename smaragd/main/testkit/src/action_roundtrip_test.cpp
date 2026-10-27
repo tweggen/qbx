@@ -584,7 +584,7 @@ const Fixture kFixtures[] = {
       "<delete-fragment-clip clip='Riff:0'/>" },
     { "assert-lane-view",
       "<assert-lane-view trackPath='0,1' collapsed='1' secondWidth='45.5'"
-      " scrollX='123456'/>" },
+      " scrollX='123456' hScroll='123456'/>" },
     // Proposal 46 M3: the three that joined `collapsed` on STrack. Written
     // only when checked, and `automation` is written whenever it was GIVEN --
     // the empty string is a legitimate expectation ("no automation lane"),

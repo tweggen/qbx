@@ -1,0 +1,26 @@
+<SProject fileName='' rootId='109354824472256' formatVersion='3' bpmTempo='120' sampleRate='48000' channels='2' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true,"timelineScrollX":123456,"timelineZoomSecondWidth":45.5}'>
+<SStdMixer masterLaneId='109354824618384' id='109354824472256' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='109354828290624' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='109354826996608' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack pluginChainId='109354828258800' systemRole='master' id='109354824618384' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' hidden='true' sName='Master'>
+<SLink objectId='109354824617024' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='109354828258800' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='109354828281424' systemRole='conductor' id='109354824617024' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Conductor'>
+</STrack>
+<SPluginChain id='109354828281424' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='109354828292448' id='109354828290624' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyNarwhal'>
+</STrack>
+<SPluginChain id='109354828292448' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='109354826998096' id='109354826996608' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyWaffle'>
+</STrack>
+<SPluginChain id='109354826998096' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+</SProject>
