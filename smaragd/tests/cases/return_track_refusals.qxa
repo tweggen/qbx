@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M2, AC2.6: EVERY REFUSAL OF THE RETURN VERBS (§3.2), EACH WITH A
+  LOG ASSERTION THAT ONLY THAT REFUSAL CAN SATISFY.
+
+  Lanes, indices fixed for the whole case:
+    0  Kit      a clip, tw.test.clap.split in slot 0 (stereo aux bus 1)
+    1  Mono     tw.test.clap.monosplit in slot 0: a 1->1 plugin on a stereo
+                track runs DualMono, one instance per channel (D9)
+    2  Ret      empty; becomes Kit's return through set-return-source
+    3  Busy     a clip
+    4  Folder   split in slot 0, one child lane 4,0
+    5  X, 6 Y   empty, split in slot 0 each: Y becomes X's return, and X as
+                Y's return would close an aux cycle
+    $send0      a send lane; $master carries a split too
+
+  Every message is distinct text, so a broken refusal cannot borrow another
+  one's line (the assert-log rule).
+-->
+<SActionScript version="1" name="return_track_refusals">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Kit"/>
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0" format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Mono"/>
+    <insert-plugin trackPath="1" slotIndex="0" format="clap" uid="tw.test.clap.monosplit"
+                   name="Smaragd Test Mono Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="1" nOut="1"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Ret"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Busy"/>
+    <add-sample trackPath="3" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Folder"/>
+    <insert-plugin trackPath="4" slotIndex="0" format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="5" name="Inner"/>
+    <reparent-track source="5" destParent="4"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="5" name="X"/>
+    <insert-plugin trackPath="5" slotIndex="0" format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="6" name="Y"/>
+    <insert-plugin trackPath="6" slotIndex="0" format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <add-send-lane sendName="Verb"/>
+    <insert-plugin trackPath="$master" slotIndex="0" format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-track-count count="7"/>
+
+    <!-- ===================== THE BUS AND THE SLOT ======================= -->
+    <add-return-track trackPath="0" slot="0" bus="0" expectReject="true"/>
+    <assert-log contains="bus 0 is the MAIN bus, the track's own output"/>
+
+    <add-return-track trackPath="0" slot="0" bus="2" expectReject="true"/>
+    <assert-log contains="the plugin in slot 0 has no output bus 2 (it reports 2)"/>
+
+    <add-return-track trackPath="0" slot="5" bus="1" expectReject="true"/>
+    <assert-log contains="there is no plugin in slot 5"/>
+
+    <!-- D9: DualMono has one candidate per channel. -->
+    <add-return-track trackPath="1" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="slot 0 runs DualMono (one plugin instance per channel)"/>
+
+    <!-- The master's output already contains every return. -->
+    <add-return-track trackPath="$master" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="the MASTER lane cannot feed a return track"/>
+
+    <!-- ===================== ONE RETURN PER BUS (D9) ==================== -->
+    <set-return-source trackPath="2" sourcePath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="2" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
+    <add-return-track trackPath="0" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="a second return of the same bus -- Ret already returns bus 1 of slot 0 on Kit"/>
+    <assert-track-count count="7"/>
+
+    <!-- ===================== THE TARGET TRACK (D1) ====================== -->
+    <set-return-source trackPath="1" sourcePath="1" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="Mono cannot be its own return track (a self edge)"/>
+
+    <set-return-source trackPath="3" sourcePath="0" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="Busy carries clips, and a return track carries none"/>
+
+    <set-return-source trackPath="4" sourcePath="0" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="Folder has child tracks, and a return track takes none"/>
+
+    <set-return-source trackPath="$send0" sourcePath="0" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="Verb is a system lane; a return track is a user track"/>
+
+    <clear-return-source trackPath="3" expectReject="true"/>
+    <assert-log contains="Busy is not a return track"/>
+
+    <!-- ===================== CYCLES (D7) ================================ -->
+    <!-- Containment only: a return inside its own source. -->
+    <set-return-source trackPath="4,0" sourcePath="4" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="CYCLE -- Inner already reaches Folder"/>
+
+    <!-- Aux only: Y reads X, so X reading Y closes X -> Y -> X. -->
+    <set-return-source trackPath="6" sourcePath="5" slot="0" bus="1"/>
+    <set-return-source trackPath="5" sourcePath="6" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="CYCLE -- X already reaches Y"/>
+
+    <!-- ===================== NO CLIPS, NO CHILDREN ON A RETURN ========== -->
+    <add-sample trackPath="2" filePath="../test_sawtooth.wav" timePos="0" expectReject="true"/>
+    <assert-log contains="'Ret' is a RETURN track: its input is a plugin aux bus and it carries no clips"/>
+
+    <reparent-track source="3" destParent="2" expectReject="true"/>
+    <assert-log contains="Ret is a RETURN track and takes no child tracks"/>
+
+    <!-- Nothing above changed a route or a track. -->
+    <assert-track-count count="7"/>
+    <assert-return-track trackPath="2" source="0" slot="0" bus="1" routed="1" mask="2"/>
+    <assert-return-track trackPath="5" isReturn="0"/>
+    <assert-return-track trackPath="6" isReturn="1" source="5" routed="1"/>
+  </actions>
+</SActionScript>

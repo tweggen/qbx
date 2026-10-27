@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M2, AC2.2: AN INSTRUMENT'S AUX OUTPUT ON A RETURN TRACK, WITH THE
+  INSTRUMENT'S OWN TRACK MUTED.
+
+  tw.test.clap.sine is the instrument shape the sampler has: a stereo main bus
+  and a MONO aux bus (its bus 1) carrying s * 0.5 where main channel 0 carries
+  s = velocity/127 * sin. So a note at velocity 100 puts a sine of amplitude
+  0.5 * 100/127 on the aux, whose RMS is 0.5 * 100/127 / sqrt(2) = 0.27841.
+
+  The return is two channels wide and the bus one: proposal 55 D4's
+  MonoSpread row, "the one channel on every channel", so both channels of the
+  return carry the identical sample - asserted as "these two channels are NOT
+  different" (assert-channels-differ, expectReject).
+
+  The SOURCE TRACK IS MUTED (D6, second half). A user track's mute is
+  structural: its summing parent nulls its plug, downstream of the insert the
+  return's tap reads, so muting the instrument's main output leaves its aux
+  alone. The file is therefore the return and nothing else.
+
+  The window [24000, 72000) is 1 s inside the 2 s note, away from both edges.
+-->
+<SActionScript version="1" name="return_track_instrument">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Synth"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <!-- 4 s window (7680 ticks at 120 BPM, PPQ 960), one note over [0, 2 s). -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Note"/>
+    <add-note clip="0,0" tick="0" dur="3840" key="60" velocity="100" channel="0"/>
+
+    <add-return-track trackPath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1"
+                         routed="1" mapping="mapping=spread" mask="2"/>
+    <assert-track-name trackPath="1" name="Synth Aux 1"/>
+
+    <!-- D6: the source's mute does not reach its return. -->
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <render filename="rt_inst.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- 0.5 x 100/127 / sqrt(2) = 0.27841, +-1 %. -->
+    <assert-audio-energy filename="rt_inst.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.27562" maxRms="0.28119"/>
+    <assert-audio-energy filename="rt_inst.wav" startFrame="24000" frameCount="48000"
+                         channel="1" minRms="0.27562" maxRms="0.28119"/>
+    <!-- MonoSpread: the two channels are the same sample, not merely the same
+         level. Refused as "different" on content (rms(A - B)). -->
+    <assert-channels-differ filename="rt_inst.wav" channelA="0" channelB="1"
+                            minRmsDelta="0" minDiffRms="0.000001"
+                            startFrame="0" frameCount="144000"
+                            expectReject="true"/>
+    <!-- After the note: silence, so the energy above is the note's. -->
+    <assert-audio-energy filename="rt_inst.wav" startFrame="108000" frameCount="24000"
+                         channel="0" minRms="0.0" maxRms="0.0001"/>
+  </actions>
+</SActionScript>

@@ -458,6 +458,58 @@ what feeds it.
     whole-chain and range root hooks (C/D/E and A/B), and the two system-lane
     owner hooks (D and E, one each).
 
+## RETURN TRACKS (proposal 55 M2, D1/D3/D7/D8/D9)
+
+30. **A RETURN IS WIRED BY THE PASS, NEVER BESIDE IT.** `rewireReturns()` is
+    called from `reconnectTracksToMixer()` after `rewireSendBuses()` and from
+    nowhere else (47 D4). It walks EVERY track of the tree (a return may sit
+    in any folder), and for each return asks `STrack::wireAsReturnTrack()` --
+    this module may not name `twPluginAuxTap`, so the track builds and owns
+    its tap. Every pass re-points the tap's input (re-stamping it: M1's note
+    that a tap's pages are stamped against its own epoch). A track whose aux
+    source was cleared is handed back to its own `twTrackMix`
+    (`unwireReturnTrack()`), while the source insert is still alive.
+31. **A ROUTE THAT MOVED IS FOLLOWED BY `invalidateRenderPath()` ON THE
+    RETURN.** Re-pointing re-stamps the return up to its own rewire and NOT
+    the master lane chain and mixer rewire downstream. Measured: a return whose
+    source track was deleted rendered byte-identical to the routed render
+    until this was added (inv. 24's lesson, for the aux edge).
+32. **IT FAILS CLOSED, AND SAYS SO ONCE PER STATE.** No route -- a source that
+    is gone, not in this tree, the master, a dropped cycle edge, a second
+    return of the same `(source, slot, bus)` (the first in tree order wins,
+    D9/Q4), a slot that is gone, unloaded or DualMono -- leaves the tap as the
+    return's chain input with nothing wired into it: silent, never the
+    return's own clip mix. `[RETURN] '<name>' is SILENT: <why>` on entering
+    the state, `[RETURN] '<name>' is routed again` on leaving it; a solo
+    toggle repeats neither.
+33. **THE ROUTED MASK IS DERIVED HERE.** After wiring, every track's slots are
+    handed the OR of the buses the ROUTED returns name
+    (`STrack::applyRoutedAuxMasks`), and a slot no return names is cleared; a
+    changed mask re-prepares the plugin (plugins inv. 60), so the source's
+    render path is invalidated. Tracks a return names are flagged
+    (`setAuxReferenced`), so a slot inserted, removed or reordered on them asks
+    the root to re-run the pass (`SObject::routingInputsChanged`): remove-plugin
+    + undo re-routes at once (T5), not at the next solo toggle.
+34. **AUX EDGES ARE IN THE ONE ROUTING GRAPH, after the send edges** (inv. 28),
+    so a cycle mixing kinds drops the AUX edge, announced as `[ROUTE] cycle:`.
+    `invalidateRoutingDependents()` follows an aux edge as a CONTAINMENT walk
+    from this root to the return, which also bumps every folder above it, and
+    passes everything that walk bumped on (a send from a return is followed).
+    Its T8 guard is "no send lane AND no return at the last pass".
+35. **NOT WHILE LOADING.** The return half skips while `SProject::isLoading()`:
+    tracks are inserted before the deferred resolvers give a return its source
+    or a source its chain, and a pass then announced loaded returns silent
+    that were not. A post-load pass registered here routes every loaded return
+    once (`routeReturnsAfterLoad`).
+36. **Q1 (a), ANNOUNCED ONCE PER ARM.** A live-owned source's slot renders only
+    for the pump, so its returns are silent for the arm (47 D9's decision, for
+    aux buses); the pass logs it once per arm and leaves the return wired.
+
+Gated by `return_track_split_cmp` (X2.1, `cmp`), `return_track_instrument`,
+`return_track_routing`, `return_track_persistence`, `return_track_refusals`
+and `return_track_live_source`; the sabotage each one was watched failing
+under is listed in the QBX-251 PR.
+
 ## The ONE lane walk and the ONE broadcast rule (proposal 48 M0)
 
 `slaneorder::flattenTrackLanes()` and

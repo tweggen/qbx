@@ -4,6 +4,9 @@
 
 #include <qobject.h>
 #include <qlist.h>
+#include <QHash>
+#include <QPointer>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include "app/model/sobject.h"
@@ -27,6 +30,10 @@ class twPluginChain;
 class twMixer;
 class SLink;
 class SProjectLoader;
+namespace audio {
+class twPluginAuxTap;
+class twPluginInsert;
+}  // namespace audio
 
 class SStartTimeList
     : public QList<SLink*>
@@ -133,7 +140,106 @@ public:
     // track must not directly hold sample or event material, though it may
     // hold child lanes. Enforced at ONE narrow seam,
     // splacements::placementLaneAt().
-    bool acceptsClips() const override { return systemRole_ == SSystemRole::None; }
+    // ...and neither does a RETURN TRACK (proposal 55 D1): its input is one
+    // aux bus of a plugin slot, and its twTrackMix is disconnected (D3), so a
+    // clip on it would be summed into nothing.
+    bool acceptsClips() const override
+    { return systemRole_ == SSystemRole::None && !isReturnTrack(); }
+
+    // --- RETURN TRACKS (proposal 55 D1, D3, D8, D9; built in M2) ----------
+    //
+    // A return track is an ORDINARY user track carrying one attribute, its
+    // AUX SOURCE: (source track, slot, bus). "Is a return track" is derived
+    // from that attribute being set (D1, in the spirit of proposal 37 D3's
+    // "no track kind"). Solo, sends, folder membership, the strip, the meter,
+    // automation and removal are a user track's, unchanged.
+    //
+    // THE SOURCE IS NAMED BY IDENTITY (D8): the track by object (a QPointer,
+    // so a deleted track can never be inherited by a later object at the same
+    // address, T6), the slot by its stable SPluginSlot::slotId() -- never an
+    // index, which reorder-plugin moves -- and the bus by the plugin's own bus
+    // index (>= 1; bus 0 is the source's own output).
+    //
+    // The model half only: setting it WIRES NOTHING. SStdMixer's one pass
+    // (rewireReturns, inside reconnectTracksToMixer) calls wireAsReturnTrack()
+    // -- 47 D4 / 45 T3, wiring beside the pass is clobbered by the next solo.
+    bool    isReturnTrack() const { return auxBus_ > 0; }
+    bool    isReturnLane() const override { return isReturnTrack(); }
+    STrack *auxSourceTrack() const { return auxTrack_.data(); }
+    quint64 auxSourceSlotId() const { return auxSlotId_; }
+    int     auxSourceBus() const { return auxBus_; }
+    /// Set (bus >= 1) or clear (bus <= 0) the aux source, then ask the root to
+    /// re-run its routing pass (skipped while the project is loading -- the
+    /// mixer's post-load pass routes every return once, when every chain has
+    /// been adopted). No refusal here: the verbs refuse (D7, D9), and the pass
+    /// fails closed on whatever a file carries.
+    void    setAuxSource( STrack *source, quint64 slotId, int bus );
+    void    clearAuxSource() { setAuxSource( nullptr, 0, 0 ); }
+
+    // THE SLOT SIDE, in app types, for objects/mixer, which may not name a
+    // tw/plugins type (the reason sendTapComponent() returns the base type).
+    int     pluginSlotCount() const;
+    /// The slot's stable id, minting one when `ensure` (a return is about to
+    /// name it). 0 when there is no such slot.
+    quint64 pluginSlotId( int slotIndex, bool ensure );
+    /// The index of the slot with this id, or -1.
+    int     pluginSlotIndexOf( quint64 slotId ) const;
+    /// May aux bus `bus` of slot `slotIndex` be routed to a return (D9)?
+    /// False with the reason in `why` -- a missing slot, the main bus, a bus
+    /// the plugin does not have, a DualMono slot. `busChannels` gets the bus's
+    /// width when true.
+    bool    auxBusRoutable( int slotIndex, int bus, QString *why,
+                            int *busChannels = nullptr ) const;
+    /// The display name of slot `slotIndex` (for messages).
+    QString pluginSlotName( int slotIndex ) const;
+    /// The routed aux mask slot `slotIndex` was handed by the pass (0 = none).
+    std::uint32_t pluginSlotRoutedMask( int slotIndex ) const;
+
+    // THE WIRING, called by SStdMixer's pass and from nowhere else (D3):
+    //
+    //   twPluginAuxTap(bus) -> cpDspChain_ -> cpGainStage_ -> cpRewire_
+    //
+    // with this track's twTrackMix DISCONNECTED, not left connected and empty
+    // (45 T5 / 47 T2: an inert connected component carried the identical
+    // signal for two milestones). `source` null means "do not route" -- the
+    // pass found the source dangling, cyclic, a duplicate, or not in this
+    // arrangement -- and the return FAILS CLOSED: the tap stays the chain's
+    // input with nothing wired into it, so the return is silent rather than
+    // falling back to its (empty) clip mix. `reason` is what the pass
+    // announces. Returns whether the return is routed: every pass re-points
+    // the tap's input, which re-stamps it -- M1's note that a tap's pages are
+    // stamped against its own epoch.
+    /// `changed` (optional) is set when the route moved -- a different source
+    /// insert, routed or not, or a new tap: the caller must then invalidate
+    /// this track's render path, because re-stamping the components up to
+    /// its rewire leaves every page DOWNSTREAM of it (the master chain and
+    /// rewire) frozen with the old route (measured: a return whose source was
+    /// deleted rendered byte-identical to the routed one).
+    bool    wireAsReturnTrack( STrack *source, const QString &reason,
+                               bool *changed = nullptr );
+    /// Undo the above while the source insert is still alive (47's
+    /// unwireSendLane segfault): the chain reads this track's own twTrackMix
+    /// again and the tap is dropped. For a track whose aux source was cleared.
+    void    unwireReturnTrack();
+    bool    hasReturnTap() const { return (bool) cpAuxTap_; }
+    /// LIVE wiring, not the model (47's assert-master-inputs lesson): true
+    /// when the tap is this chain's input AND its input plug reads the source
+    /// insert. A wired and a wiped return are both silent on a quiet fixture.
+    bool    returnRouted() const;
+    /// "bus=1|busChannels=2|width=2|mapping=copy" from the tap, or "".
+    QString describeReturnTap() const;
+    /// Renders the tap answered with silence (twPluginAuxTap::silentRenders).
+    std::uint64_t returnTapSilentRenders() const;
+
+    // The pass hands every track the routed masks of its slots, keyed by
+    // slot id (an empty hash clears them all). Returns true when a slot's mask
+    // changed -- the caller then stales this track's path, since a re-prepare
+    // restarts the plugin (plugins inv. 60).
+    bool    applyRoutedAuxMasks( const QHash<quint64, std::uint32_t> &masks );
+    /// Set by the pass on every track some return names: a slot inserted,
+    /// removed or reordered here then asks the root to re-run the pass (T5).
+    void    setAuxReferenced( bool r ) { auxReferenced_ = r; }
+    bool    auxReferenced() const { return auxReferenced_; }
 
     // --- events (proposal 37 3.2 / 3.2.1) ---------------------------------
     //
@@ -896,6 +1002,20 @@ private:
     int                             midiOutOffsetMs_ = 0;
     // See setSystemRole(): immutable after construction.
     SSystemRole                     systemRole_ = SSystemRole::None;
+    // The aux source (proposal 55 D8), see isReturnTrack(). auxBus_ > 0 IS
+    // "is a return"; a source that did not resolve on load keeps the bus and
+    // a null track, so the return stays a return and fails closed (D8).
+    QPointer<STrack>                auxTrack_;
+    quint64                         auxSlotId_ = 0;
+    int                             auxBus_    = 0;
+    bool                            auxReferenced_ = false;
+    // The return's input (D3), owned here because objects/mixer may not name
+    // tw/plugins. auxInsert_ keeps the SOURCE insert alive while the tap holds
+    // a plug into its latch: a slot removed between two passes must not leave
+    // the tap reading a destroyed producer.
+    std::shared_ptr<audio::twPluginAuxTap> cpAuxTap_;
+    std::shared_ptr<audio::twPluginInsert> auxInsert_;
+    QString                         returnState_;   // last announced state
     // Fold state (fix/track-list-polish m). See isCollapsed()/setCollapsed().
     bool                            collapsed_ = false;
     // The other three pieces of per-track VIEW state (proposal 46 M3). See

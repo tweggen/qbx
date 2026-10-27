@@ -552,6 +552,10 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # list -- without one an armed track never becomes a live SOURCE
               # and the case would pass over a condition that never happened.
               send_live_lane_does_not_feed
+              # proposal 55 Q1 (a) / T9: an armed source's returns go silent
+              # for the arm, announced once. Same reason again: without a
+              # real input the source never becomes live-owned.
+              return_track_live_source
               # proposal 48 M3 / AC3.6 / D11b: a MONITORED track's strip meter
               # reads the pre-FX input rather than going dark. Same reason as
               # the rest of this list -- without a real input backend the track

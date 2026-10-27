@@ -363,6 +363,20 @@ public slots:
      */
     sroute::Graph routingGraph() const;
 
+    /**
+     * A RETURN TRACK was added, re-pointed or cleared, or something its route
+     * depends on changed shape (proposal 55 M2): re-run the one wiring pass
+     * and invalidate, the shape of sendRoutingChanged(). The return verbs
+     * reach it through STrack::setAuxSource() -> routingInputsChanged().
+     */
+    void routingChanged();
+    void routingInputsChanged() override { routingChanged(); }
+
+    /// Proposal 55 M2: called once per load by the post-load pass, after every
+    /// chain has been adopted, so a loaded return is routed exactly once with
+    /// everything in place. Does nothing for a tree with no return (T8).
+    void routeReturnsAfterLoad();
+
     /// Proposal 55 D7: hand an edit's invalidation to the routing dependents
     /// of every lane the containment walk bumped. See SObject's declaration.
     void invalidateRoutingDependents(
@@ -436,6 +450,23 @@ private:
     void rewireSendBuses();
 
     /**
+     * THE RETURN HALF of the pass (proposal 55 D3), called from
+     * reconnectTracksToMixer() beside rewireSendBuses() and from nowhere
+     * else. Wires every return track in the tree to its source slot's aux bus
+     * through the track's own tap (STrack::wireAsReturnTrack -- this module
+     * may not name tw/plugins), fails closed on every return it cannot route
+     * (dangling source, a source outside this tree, a dropped cycle edge, a
+     * duplicate of an earlier return of the same bus, the master as source),
+     * and hands every slot the routed mask the returns that name it add up to
+     * (D7: the routed mask is state). Idempotent under repetition (inv. 6).
+     */
+    void rewireReturns();
+
+    /// Every STrack in this root's tree, depth-first in child order (folders
+    /// before their children), then the send lanes, then the master lane.
+    QList<STrack *> allTracks_() const;
+
+    /**
      * Proposal 55 D7: the routing edges in the pass's FIXED ORDER --
      * containment first (child lane -> folder, depth-first in child order),
      * then send edges lane by lane in index order, each lane's sources in
@@ -491,6 +522,17 @@ private:
     // reconnectTracksToMixer() is the one pass that may touch it (D4/T1), and
     // a bus the lane owned would be a second place to wire it from.
     QList<std::shared_ptr<twMixer> > sendBuses_;
+    // Proposal 55 M2: did the last pass find a return track? The T8 guard of
+    // rewireReturns() and invalidateRoutingDependents(): a project without
+    // one walks no return, builds no tap and touches no slot mask -- except
+    // on the ONE pass after the last return went away, which clears them.
+    bool auxRoutedLastPass_ = false;
+    // Set only inside routeReturnsAfterLoad(): the one pass allowed to route
+    // returns while the project is still loading.
+    bool routingAfterLoad_ = false;
+    // Returns already told that their source is armed (Q1 (a): announced once
+    // per arm, never per pass).
+    QList<QPointer<STrack> > liveAnnounced_;
     SLink  *masterLaneRef_ = nullptr;
 
     QPointer<STrack> selectedTrack_;

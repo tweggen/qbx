@@ -11,7 +11,7 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * EIGHT entry points:
+ * NINE entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
@@ -21,6 +21,7 @@
  *   tw.test.clap.restart      gui + request_restart on every reset
  *   tw.test.clap.reopen       gui that answers 0x0 after its first attach (QBX-219)
  *   tw.test.clap.split        stereo in / stereo main + stereo AUX out   (55 M1)
+ *   tw.test.clap.monosplit    split with every port MONO                 (55 M2)
  *
  * --- tw.test.clap.split (proposal 55 §5, M1) -----------------------------------
  *
@@ -34,6 +35,11 @@
  * track playing the same material, and a case can silence the main path with
  * MainLevel 0 and leave nothing but the aux. The aux port is NOT main, so it
  * is the plugin's bus 1.
+ *
+ * tw.test.clap.monosplit (proposal 55 M2) is the same plugin with every port
+ * MONO: 1 in / 1 main out + 1 aux out. On a stereo track a 1->1 plugin runs
+ * DualMono (one instance per channel), which is what the return verbs must
+ * REFUSE (55 D9) -- the fixture exists so that refusal has a case.
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -156,6 +162,7 @@
 #define TW_TESTCLAP_RESTART_ID "tw.test.clap.restart"
 #define TW_TESTCLAP_REOPEN_ID  "tw.test.clap.reopen"
 #define TW_TESTCLAP_SPLIT_ID   "tw.test.clap.split"
+#define TW_TESTCLAP_MONOSPLIT_ID "tw.test.clap.monosplit"
 
 /* Which behaviour this instance has. tw.test.clap.gui and
  * tw.test.clap.restart share GAIN's, and are told apart by hasGui /
@@ -216,6 +223,19 @@ static const clap_plugin_descriptor_t s_desc_split = {
    .support_url  = "",
    .version      = "1.0.0",
    .description  = "Test fixture: stereo main out at MainLevel plus a stereo aux COPY of the input",
+   .features     = s_features,
+};
+
+static const clap_plugin_descriptor_t s_desc_monosplit = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_MONOSPLIT_ID,
+   .name         = "Smaragd Test Mono Split",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: the split with every port mono (a DualMono slot on a stereo track)",
    .features     = s_features,
 };
 
@@ -390,6 +410,9 @@ typedef struct {
    int16_t  arpOffChan;
    int32_t  arpOffId;
    int32_t  arpNextId;
+
+   /* tw.test.clap.monosplit: every SPLIT port is mono (proposal 55 M2) */
+   int      monoPorts;
 
    /* gui (proposal 33 M6) */
    int      hasGui;
@@ -655,8 +678,8 @@ static bool tc_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
       /* The AUX out: not main, so the plugin's bus 1. A copy of the input. */
       info->id            = 2;
       info->flags         = 0;
-      info->channel_count = 2;
-      info->port_type     = CLAP_PORT_STEREO;
+      info->channel_count = self->monoPorts ? 1 : 2;
+      info->port_type     = self->monoPorts ? CLAP_PORT_MONO : CLAP_PORT_STEREO;
       strncpy( info->name, "Aux Out", CLAP_NAME_SIZE - 1 );
       return true;
    }
@@ -664,8 +687,8 @@ static bool tc_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
       return false;
    info->id            = is_input ? 0 : 1;
    info->flags         = CLAP_AUDIO_PORT_IS_MAIN;
-   info->channel_count = 2;
-   info->port_type     = CLAP_PORT_STEREO;
+   info->channel_count = self->monoPorts ? 1 : 2;
+   info->port_type     = self->monoPorts ? CLAP_PORT_MONO : CLAP_PORT_STEREO;
    strncpy( info->name, is_input ? "Main In" : "Main Out", CLAP_NAME_SIZE - 1 );
    return true;
 }
@@ -1566,7 +1589,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 8;
+   return 9;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1581,6 +1604,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 5 ) return &s_desc_restart;
    if( index == 6 ) return &s_desc_reopen;
    if( index == 7 ) return &s_desc_split;
+   if( index == 8 ) return &s_desc_monosplit;
    return NULL;
 }
 
@@ -1599,6 +1623,8 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    else if( !strcmp( id, TW_TESTCLAP_SINE_ID ) ) { kind = TW_KIND_SINE; desc = &s_desc_sine; }
    else if( !strcmp( id, TW_TESTCLAP_ARP_ID ) )  { kind = TW_KIND_ARP;  desc = &s_desc_arp; }
    else if( !strcmp( id, TW_TESTCLAP_SPLIT_ID ) ) { kind = TW_KIND_SPLIT; desc = &s_desc_split; }
+   else if( !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID ) )
+                                                 { kind = TW_KIND_SPLIT; desc = &s_desc_monosplit; }
    /* GUI behaves as GAIN in every respect that is not the gui extension - same
     * params, same ports, same DSP - so it reuses the kind rather than adding a
     * fifth branch to every switch in the file. hasGui is the only difference. */
@@ -1629,6 +1655,7 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID ) || self->restartsOnReset ||
                       self->zeroOnReattach;
    self->guiScale   = 1.0;
+   self->monoPorts  = !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID );
 
    self->base.desc            = desc;
    self->base.plugin_data     = self;

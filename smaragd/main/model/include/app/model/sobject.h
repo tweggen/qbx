@@ -1207,6 +1207,25 @@ public:
     }
 
     /**
+     * PROPOSAL 55 M2: something a ROUTING EDGE depends on changed shape -- an
+     * aux source's slot was inserted, removed or reordered, or a return
+     * track's width changed -- and the routing pass has to run again. Called
+     * on the ROOT that holds the lane (splacements::rootHolding); the default
+     * does nothing, the mixer re-runs its one wiring pass. It exists because a
+     * lane cannot name the mixer (objects/track sits below objects/mixer), the
+     * same reason invalidateRoutingDependents() is a virtual here.
+     */
+    virtual void routingInputsChanged() {}
+
+    /**
+     * Is this lane a RETURN TRACK -- a user track whose input is one aux
+     * output bus of a plugin slot (proposal 55 D1)? On SObject for the reason
+     * systemRole() is: the placement refusal in app/model has to word its
+     * message for it and may not name STrack.
+     */
+    virtual bool isReturnLane() const { return false; }
+
+    /**
      * Entry point after an edit affecting [start, end) of THIS object's
      * timeline: stale exactly the affected page ranges on every path from
      * the project root down to this object. Same ordering contract as

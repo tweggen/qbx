@@ -201,6 +201,40 @@ public:
     // gets its state from the initializer when it is built. UI thread.
     std::size_t applyToInstances( const std::function<void( audio::twPlugin & )> &fn );
 
+    // --- aux routing (proposal 55 D8/D9, M2) ---------------------------------
+    //
+    // THE SLOT ID: a stable number a return track's <auxSource slot=> names.
+    // A slot INDEX would move under reorder-plugin, and the slot OBJECT does
+    // not survive remove-plugin + undo (the inverse inserts a NEW slot), so a
+    // return names the slot by this number and remove-plugin's inverse carries
+    // it back (T5). 0 = never referenced; it is minted by ensureSlotId() when a
+    // return first names the slot and written only when non-zero, so a project
+    // that never routed an aux bus re-serializes byte-identically (T8).
+    //
+    // Minted RANDOM (63 bits), not max+1: a counter would hand a new slot the
+    // number of a removed one that a return -- alive on the undo stack --
+    // still names, and the return would silently re-attach to it (T6).
+    quint64 slotId() const { return slotId_; }
+    void    setSlotId( quint64 id ) { slotId_ = id; }
+    quint64 ensureSlotId();
+
+    // THE ROUTED MASK (55 D7 "the routed mask is state"): bit b = aux bus b
+    // reaches a return track. DERIVED, never stored: SStdMixer's pass computes
+    // it from the returns that name this slot and hands it down through
+    // STrack::applyRoutedAuxMasks(). Kept here so a processor built LATER (a
+    // slot still waiting for its width) is born with it. Returns whether the
+    // mask changed.
+    bool          setRoutedOutBuses( std::uint32_t mask );
+    std::uint32_t routedOutBuses() const { return routedMask_; }
+
+    // The plugin's audio OUTPUT buses as the LIVE instance reports them (bus 0
+    // the main bus), falling back to the effective descriptor when the slot is
+    // not Active. The live answer is preferred because an in-repo fixture
+    // inserted by path was never scanned, so its descriptor knows no buses.
+    // 0 = unknown. UI thread.
+    int auxOutBusCount() const;
+    int auxOutBusChannels( int bus ) const;
+
     // --- the instrument slot (proposal 37 P3b) ------------------------------
     //
     // A slot is an instrument because its DESCRIPTOR says so, which is what
@@ -313,6 +347,8 @@ private:
     bool bypass_ = false;
     bool editorOpen_ = false;
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
+    quint64       slotId_     = 0;   // see slotId()
+    std::uint32_t routedMask_ = 0;   // see setRoutedOutBuses()
     // The instance initializer, shared with every factory makeFactory() hands
     // out, so a later setInstanceInitializer() reaches the next rebuild.
     std::shared_ptr<InstanceInitializer> initHolder_ =

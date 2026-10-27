@@ -2,6 +2,7 @@
 #define SINSERTPLUGINACTION_H
 
 #include "app/actions/saction.h"
+#include <QtGlobal>
 #include <vector>
 
 namespace audio {
@@ -27,7 +28,8 @@ public:
         const QString &trackPath,
         int slotIndex,
         const audio::twPluginDescriptor &descriptor,
-        const QString &stateBase64 = QString()
+        const QString &stateBase64 = QString(),
+        quint64 slotId = 0
     );
 
     QString name() const override { return QStringLiteral("insert-plugin"); }
@@ -59,6 +61,11 @@ private:
     // Base64 of the opaque plugin state chunk; empty when the slot should come
     // up with plugin defaults. Written as the optional `state` attribute.
     QString state_;
+    // The slot's stable id (proposal 55 D8). Non-zero only on the inverse of a
+    // remove-plugin whose slot a return track named: the undo must bring the
+    // slot back under the SAME id, or every return of it silently unroutes
+    // (T5). Written only when non-zero.
+    quint64 slotId_ = 0;
 };
 
 #endif // SINSERTPLUGINACTION_H

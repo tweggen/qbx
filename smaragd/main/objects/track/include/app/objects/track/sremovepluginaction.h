@@ -2,6 +2,7 @@
 #define SREMOVEPLUGINACTION_H
 
 #include "app/actions/saction.h"
+#include <QtGlobal>
 
 // Action: remove a plugin from a track's effect chain.
 // Path: "/mixer/track[trackIdx]/plugins[slotIdx]"
@@ -34,6 +35,9 @@ private:
     // plugin with DEFAULT parameters, so undoing a removal silently discarded
     // the user's patch — the model came back, the sound did not.
     QString state_;
+    // The removed slot's stable id (proposal 55 D8/T5), carried to the inverse
+    // so an undo re-creates the slot under the id a return track names.
+    quint64 slotId_ = 0;
 };
 
 #endif // SREMOVEPLUGINACTION_H

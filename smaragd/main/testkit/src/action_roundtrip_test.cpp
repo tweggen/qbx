@@ -774,6 +774,17 @@ const Fixture kFixtures[] = {
     // set-send writes level/pre/enabled only when they were GIVEN (the
     // set-lane-view shape), so its fixture gives all three or two of them
     // would never be round-tripped.
+    // --- the return-track verbs (proposal 55 M2). `name` and `at` are written
+    // only when given, so the fixture gives both.
+    { "add-return-track",
+      "<add-return-track trackPath='0' slot='1' bus='2' name='Kick' at='3'/>" },
+    { "set-return-source",
+      "<set-return-source trackPath='2' sourcePath='0' slot='1' bus='2'/>" },
+    { "clear-return-source",
+      "<clear-return-source trackPath='2'/>" },
+    { "assert-return-track",
+      "<assert-return-track trackPath='1' isReturn='1' source='0' slot='0' bus='1'"
+      " routed='1' mapping='mapping=copy' mask='2'/>" },
     { "add-send",
       "<add-send track='1' dest='Reverb' level='-6' pre='false'"
       " enabled='true'/>" },
@@ -1162,6 +1173,24 @@ const LaneRow kLaneRows[] = {
     { "remove-send", Conditional, "47/D6: as add-send" },
     { "set-send",    Conditional, "47/D6: as add-send" },
     { "assert-sends", Accept, "read-only" },
+
+    // ================= PROPOSAL 55 M2: THE RETURN-TRACK VERBS ===============
+    //
+    // A return track is a USER track (D1), so a system lane is never the
+    // RETURN; the SOURCE may be a send lane (its insert's aux bus is a
+    // legitimate source, cycle-walked over the union graph, D7) and never the
+    // master, whose output already contains every return. Gate:
+    // return_track_refusals.
+    { "add-return-track",    Conditional,
+      "55/D1+D7: a SEND lane may be the source (cycle-walked); the MASTER is "
+      "refused by role; the track it creates is a user track" },
+    { "set-return-source",   Conditional,
+      "55/D1: the RETURN may not be a system lane (refused); the source as "
+      "add-return-track" },
+    { "clear-return-source", NotApplicable,
+      "a system lane is never a return (set-return-source refuses one), so it "
+      "has no source to clear and refuses on that" },
+    { "assert-return-track", Accept, "read-only" },
     // Addresses a send lane by NAME (`lane=`), so isLaneAddressed() does not
     // flag it and nothing would fail without a row -- the same technicality
     // add-send-lane escapes on. Present because the table records the DECISION

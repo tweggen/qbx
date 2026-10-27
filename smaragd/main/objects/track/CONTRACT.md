@@ -847,6 +847,43 @@ one. Named so the absence is a decision rather than an oversight.
 an input plug into its producer's latch, and the alternative is a segfault on
 undo.
 
+## A RETURN TRACK (proposal 55 M2)
+
+**A return is an ordinary user track with an AUX SOURCE** `(source track,
+slot id, bus)` -- `isReturnTrack()` is "the bus is set" (D1). The track holds
+the source by `QPointer` (a deleted track is never inherited by a later object
+at the same address, T6) and the slot by `SPluginSlot::slotId()`, a stable
+random 63-bit number minted when a return first names the slot and written as
+`slotId=` from then on (never 0 on the wire, so a project that never routed
+re-serializes byte-identically). The file carries `<auxSource track= slot=
+bus=/>` inline, only on a return; the track id resolves by `deferResolve`, the
+slot id needs no lookup. A source that did not resolve keeps the bus and a null
+track: the return stays a return, silent, and re-saves as `track='0'`.
+
+1. **`acceptsClips()` is false on a return**, so every placement refuses it at
+   `splacements::placementLaneAt()`, with its own message (`is a RETURN
+   track`, via `SObject::isReturnLane()`).
+2. **`wireAsReturnTrack( source, reason )` is the mixer pass's, and only its**:
+   `tap -> cpDspChain_ -> cpGainStage_ -> cpRewire_`, the `twTrackMix`
+   disconnected (45 T5 / 47 T2), the return's OWN rewire kept as its root
+   (47 D1). The tap is ALWAYS the chain's input; `source` null means "do not
+   route" and the tap's input is nulled -- silent, never the clip mix. The tap
+   is rebuilt when the width, bus or bus width differs (D4 decides once).
+   `auxInsert_` keeps the source insert alive while the tap plugs into it, so
+   a slot removed between two passes leaves no plug into a dead latch.
+3. **The tap is in `bumpRenderChainEpoch[Range]()`**: it has its own page
+   cache in front of the chain, stamped against its own epoch.
+4. **`setAuxSource()` asks the root to re-run the pass**
+   (`SObject::routingInputsChanged()`, skipped while loading), and so do a
+   slot insert, remove or reorder on a track some return names
+   (`auxReferenced()`), and a width change on a return.
+5. **The slot questions are answered here in app types**
+   (`auxBusRoutable`, `pluginSlotId`, `pluginSlotIndexOf`,
+   `pluginSlotRoutedMask`) because `objects/mixer` may not name a tw/plugins
+   type. `auxBusRoutable` reads the bus count and width from the LIVE plugin
+   (`SPluginSlot::auxOutBusCount/Channels`): an in-repo fixture inserted by
+   path was never scanned, so its descriptor knows no buses.
+
 ## A FIFTH piece of per-track view state (proposal 48 M2)
 
 `mixerStripNarrow` joins `collapsed`, `laneHeightScale`, `takesExpanded` and
