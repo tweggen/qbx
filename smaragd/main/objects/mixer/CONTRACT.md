@@ -400,12 +400,63 @@ what feeds it.
     The refusal is right for a weaker and truer reason: the audio a broken
     cycle produces is whatever that break happens to yield.
 
+    **Since proposal 55 M0 the walk is SHARED** (inv. 28): the pass wires the
+    subgraph `sroute::acceptInOrder` accepts from `routingCandidates_( true )`,
+    and `add-send`/`set-send` ask `routingGraph().wouldCloseCycle()`. The two
+    send-only copies (`ssendtapactions.cpp`'s `reaches`, this file's
+    `sendReaches`) are gone. The candidate order is the one the old loop used,
+    so the break and its warnings are unchanged (`send_cycle_broken` passes
+    as before; watched failing with the candidates fed in REVERSE).
+
 27. **A SEND BUS'S INPUT LEVELS MAY BE NON-UNITY; THE MASTER SUM'S MAY NOT.**
     The send level IS the bus's own per-input level (`twMixer::setInputLevel`),
     so a send needs no new DSP anywhere. `twlive::checkMasterShape` inspects
     the MASTER mixer and never a send bus, so a send at −6 dB does not disturb
     live monitoring — unlike a non-unity MASTER input, which drops it into the
     Closure path for every armed track (45 D4a rule 2).
+
+## The ROUTING GRAPH (proposal 55 M0, D7)
+
+28. **ONE graph decides what a routing cycle is, for the verbs and the pass.**
+    `sroute::Graph` (`app/model/sroutinggraph.h`) over four edge kinds, each
+    pointing from the lane whose output is READ to the lane that reads it:
+    containment (child lane -> folder), send (source -> send lane), and aux and
+    key, which M2 and M4 add. `routingCandidates_( enabledOnly )` produces the
+    edges in a FIXED order: containment depth-first in child order, then sends
+    lane by lane in index order with each lane's sources in source order (the
+    top-level tracks, then the send lanes; a tap on a NESTED lane is stored and
+    never wired, exactly as 47 M1 built it). `routingGraph()` is the model's
+    graph, every edge added unchecked so a verb sees a cycle a file already
+    carries; the pass's graph is the ACCEPTED subgraph. Containment can close
+    no send cycle (a send edge only enters a send lane, and a send lane is in
+    no folder) and is in the graph for D7's containment-only shapes -- a key
+    from its own folder, a return inside its own source. Gated by
+    `routinggraph_test` over synthetic graphs with all four kinds.
+
+29. **INVALIDATION FOLLOWS THE ROUTING GRAPH.** The containment walk
+    (`SObject::invalidateRenderChainsContaining*`) reports the chains it bumped
+    and the root calls `invalidateRoutingDependents()` with them; this mixer
+    hands the SAME ranges (whole chains on the whole-chain walk) to every
+    routing dependent of a bumped lane, transitively, over the ACCEPTED graph
+    -- a dropped cycle edge is not followed, and a dependent reached twice is
+    handed only ranges it has not had. For a SEND LANE that is two things,
+    both load-bearing: its bus (`invalidatePagesInRange` /
+    `bumpContentEpoch`) and its own chain (`bumpRenderChainEpoch[Range]`).
+    The master sum it feeds was already bumped by the containment walk whose
+    root this mixer is. An edit ON a send lane is found by no containment walk
+    (45 D11), so `SObject` hands the lane itself to its owner's hook as well.
+
+    **MEASURED BEFORE M0: an edit to a send's SOURCE was inaudible on the send
+    lane.** `send_source_edit_heard.qxa` read the second render byte-identical
+    to the first over the region the edit had emptied. inv. 24's
+    "invalidate, never bump" is about ROUTING edits, which re-wire every plug
+    and re-stamp through the wiring; a source edit re-wires nothing, and
+    `invalidateRenderPath()` on a send lane cannot reach its bus, which is
+    ours. Each part was sabotaged alone and each failed the case: the hook
+    (all five sections), the bus bump (whole: C/D/E; range: A/B/E), the lane
+    bump (whole: C/D; range: A/B/E), the transitive step (B, C), the
+    whole-chain and range root hooks (C/D/E and A/B), and the two system-lane
+    owner hooks (D and E, one each).
 
 ## The ONE lane walk and the ONE broadcast rule (proposal 48 M0)
 

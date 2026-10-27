@@ -170,6 +170,10 @@ So there is today exactly one place a slot's output can live: the insert's
   ROUTING edit audible (`sstdmixer.cpp:706-725`); none of them edits a source
   after the first render. Not claimed either way here; M0 measures it.
 
+  **Measured in M0 (2026-10-27, QBX-248): the hole is real and total.** See
+  §8 M0's record: an edit to a send's source left the send lane
+  byte-identical to the pre-edit render.
+
 ### 1.5 Mute, solo and live ownership
 
 - A user track's mute is STRUCTURAL: its summing parent nulls its plug; its own
@@ -647,6 +651,50 @@ M2 and M4 add edge kinds to a tested walk.
   inside its source) — and the deterministic drop order.
 - **AC0.4** Goldens byte-identical; `./ci/gates.sh` green against the platform
   gate docs.
+
+**M0 as built (2026-10-27, QBX-248).**
+
+- **AC0.1, measured on `main` `a3671ad9` before any change: THE HOLE IS REAL.**
+  `send_source_edit_heard.qxa` (a pre-fader send at 0 dB, the source's fader
+  at −1000 dB so the dry path is exactly 0.0; render; `move-clip` the source's
+  clip from 0 s to 2 s; re-render): the second render's `[0 s, 2 s)` was
+  **byte-identical** to the first, RMS 0.23096 where silence was due. The send
+  bus and the send lane's chain, gain stage and rewire kept every page frozen
+  before the edit. Routing edits were audible only because
+  `reconnectTracksToMixer()` re-wires every plug, which re-stamps (this is why
+  47 M2 could ablate the bus and lane bumps from `sendRoutingChanged()`); an
+  edit on the SOURCE re-wires nothing. No existing mechanism covered sends, so
+  M0 built the follow-the-graph walk of D7: after the containment walk under a
+  root has found an edit, the root (`SStdMixer::invalidateRoutingDependents`)
+  hands the same ranges to the routing dependents of every chain the walk
+  bumped, transitively, over the ACCEPTED graph the pass wired. The system-lane
+  branch (an edit ON a send lane, which no containment walk finds, 45 D11)
+  hands the lane's own dependents the same, so send → send is covered from
+  both ends. Five sections of the case cover the range walk, the transitive
+  walk, the whole-chain walk, and both system-lane branches; every one failed
+  on the baseline.
+- **A trap found while measuring:** a −144 dB fader is not a silent dry path
+  for a byte comparison. It flips 16-bit LSBs, which alone satisfied the
+  case's `assert-file-identical expectReject` over a render that was otherwise
+  stale. −1000 dB (1e-50, exactly 0.0 in a float) is.
+- **"Only `invalidateRenderPath(Range)` is load-bearing" (D7) does not carry
+  over to dependents.** A send lane is in no root's `childLinks()`, so
+  `invalidateRenderPath()` on it can only reach its own chain (whole, not
+  ranged) and its owner — never its bus, which is the mixer's. The walk
+  therefore bumps the dependent's bus and chain over the range directly; each
+  of the two was ablated alone and each is load-bearing (see the mixer
+  CONTRACT's inv. 29 for the measured sabotages).
+- **AC0.2:** the shared walk is `sroute::Graph` (`app/model/sroutinggraph.h`),
+  the lowest slice both the verbs and the pass can see. `add-send`/`set-send`
+  ask `SStdMixer::routingGraph().wouldCloseCycle()` (the model's edges, every
+  tap, cyclic or not); `rewireSendBuses()` wires the subgraph
+  `sroute::acceptInOrder` accepts from the same candidate list, in the same
+  order as before. Containment edges are in both and can change nothing for
+  sends (a send edge only enters a send lane, and a send lane is in no
+  folder). Every send case passes unchanged.
+- **AC0.3:** `routinggraph_test` (unit), every shape in D7 including the two
+  containment-only ones, the not-cycles (sibling key, diamond), and the drop
+  order forwards and reversed.
 
 ### M1 — Aux buses reach the host (engine only)
 

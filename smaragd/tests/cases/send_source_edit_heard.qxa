@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M0, AC0.1: AN EDIT ON A SEND'S SOURCE REACHES THE SEND LANE.
+
+  The question proposal 55 section 1.4 left open and M0 had to MEASURE before
+  building on it. Staleness is per component, and the app's invalidation walk
+  bumps only the chains that CONTAIN the edited object, up to the root. A send
+  lane is not a childLinks() member of anything: it is fed by a tap on the
+  source's chain (pre) or gain stage (post). So a clip moved on the source
+  re-renders the source, the master sum and the master lane, while the send
+  bus, the send lane's chain, gain stage and rewire keep the pages frozen
+  before the edit.
+
+  MEASURED ON main a3671ad9, BEFORE M0: THE HOLE IS REAL AND TOTAL. Section A's
+  second render was BYTE-IDENTICAL to the first over [0 s, 2 s), RMS 0.23096
+  where silence was due: the send lane replayed the pre-edit clip. Routing
+  edits were audible only because reconnectTracksToMixer re-wires every plug,
+  which re-stamps; an edit on the source re-wires nothing. M0 closes it with
+  the follow-the-graph walk (proposal 55 D7, SStdMixer::
+  invalidateRoutingDependents).
+
+  THE FIXTURE MAKES THE SEND THE ONLY THING AUDIBLE. Every send is PRE-fader
+  at 0 dB and every fader feeding one is at -1000 dB (1e-50, exactly 0.0 in a
+  float), so the dry paths are silent and the file is the last send lane in
+  the chain. -144 dB is NOT enough, and that was measured too: it flips 16-bit
+  LSBs, which alone satisfied the byte comparison below over a render that was
+  otherwise stale. A stale send lane shows as the PRE-edit audio in a region
+  the edit has emptied, which no other mechanism can put there.
+
+  test_autosaw.wav is 4 s of a constant-amplitude sawtooth whose RMS is A
+  (0.2240 to 0.2379, the band send_bus_audible uses), so every window below
+  is a closed form.
+
+  THREE SECTIONS, because there are three ways in:
+    A  a clip move on the source: the RANGE walk (invalidateRenderPathRange),
+       one routing edge;
+    B  the same, TWO routing edges deep (source -> Reverb -> Echo), which only
+       the transitive half of the walk reaches;
+    C  a plugin insert and a parameter edit on the source: the WHOLE-chain walk
+       (invalidateRenderPath), which is a separate entry point.
+-->
+<SActionScript version="1" name="send_source_edit_heard">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-sample trackPath="0" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-send-lane sendName="Reverb"/>
+    <add-send track="0" dest="Reverb" level="0" pre="true" enabled="true"/>
+    <set-track-volume trackPath="0" volume="-1000"/>
+
+    <!-- ===================== A: ONE EDGE, THE RANGE WALK ================ -->
+    <!-- First render: clip at [0 s, 4 s). -->
+    <render filename="send_src_pre.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="send_src_pre.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+    <!-- The dry path is silent, so the file IS the send lane. -->
+    <assert-audio-energy filename="send_src_pre.wav" startFrame="204000"
+                         frameCount="48000" channel="0"
+                         minRms="0.0" maxRms="0.0005"/>
+
+    <!-- THE EDIT, on the SOURCE, after the first render: [2 s, 6 s). -->
+    <move-clip clip="0,0" destTrack="0" startTime="96000"/>
+    <render filename="send_src_post.wav" format="wav" quality="10" durationSec="6.0"/>
+
+    <!-- [0 s, 2 s): the edit emptied it. A stale send lane replays the
+         pre-edit sawtooth here at A (measured: 0.23096). -->
+    <assert-audio-energy filename="send_src_post.wav" startFrame="0"
+                         frameCount="96000" channel="0"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="send_src_post.wav" startFrame="0"
+                         frameCount="96000" channel="1"
+                         minRms="0.0" maxRms="0.0005"/>
+    <!-- [4.5 s, 5.5 s): the moved clip's tail, silence before the edit. -->
+    <assert-audio-energy filename="send_src_post.wav" startFrame="216000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+    <!-- The byte-level statement of the same claim, with no tolerance. -->
+    <assert-file-identical actual="send_src_post.wav" expected="send_src_pre.wav"
+                           startFrame="0" frameCount="96000"
+                           expectReject="true"/>
+
+    <!-- ================ B: TWO EDGES, THE TRANSITIVE WALK =============== -->
+    <!-- Reverb feeds Echo, pre-fader; Reverb's own fader goes to -1000 dB, so
+         the file is now Echo alone, reading Reverb's chain, reading track 0's.
+         Both are ROUTING edits, which re-wire, so this render is current. -->
+    <add-send-lane sendName="Echo"/>
+    <add-send track="$send:Reverb" dest="Echo" level="0" pre="true" enabled="true"/>
+    <set-track-volume trackPath="$send0" volume="-1000"/>
+    <render filename="send_chain_pre.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="send_chain_pre.wav" startFrame="216000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+    <assert-audio-energy filename="send_chain_pre.wav" startFrame="0"
+                         frameCount="96000" channel="0"
+                         minRms="0.0" maxRms="0.0005"/>
+
+    <!-- Back to [0 s, 4 s). Echo is two routing edges from the edit. -->
+    <move-clip clip="0,0" destTrack="0" startTime="0"/>
+    <render filename="send_chain_post.wav" format="wav" quality="10" durationSec="6.0"/>
+    <!-- [4.5 s, 5.5 s) is empty now; a stale Echo still plays the clip. -->
+    <assert-audio-energy filename="send_chain_post.wav" startFrame="216000"
+                         frameCount="48000" channel="0"
+                         minRms="0.0" maxRms="0.0005"/>
+    <assert-audio-energy filename="send_chain_post.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.2240" maxRms="0.2379"/>
+    <assert-file-identical actual="send_chain_post.wav" expected="send_chain_pre.wav"
+                           startFrame="216000" frameCount="48000"
+                           expectReject="true"/>
+
+    <!-- ================ C: THE WHOLE-CHAIN WALK ========================= -->
+    <!-- An insert and a parameter edit on the SOURCE go through
+         invalidateRenderPath(), not the range walk. 0.5 x A on Echo. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.5"/>
+    <render filename="send_whole_post.wav" format="wav" quality="10" durationSec="6.0"/>
+    <!-- 0.5 x A: the band send_bus_audible uses for a -6.02 dB send. A stale
+         chain of send lanes still reads A. -->
+    <assert-audio-energy filename="send_whole_post.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.1120" maxRms="0.1190"/>
+    <assert-file-identical actual="send_whole_post.wav" expected="send_chain_post.wav"
+                           startFrame="0" frameCount="96000"
+                           expectReject="true"/>
+
+    <!-- ========= D: THE EDIT IS ON A SEND LANE, WHOLE-CHAIN WALK ========= -->
+    <!-- A send lane is in nobody's childLinks(), so the containment walk
+         cannot find it and invalidateRenderPath() falls to its owner, the
+         mixer (proposal 45 D11). Reverb's OWN routing dependents (Echo)
+         are reached only through that branch. Gain 0.5 on Reverb's insert:
+         Echo = 0.5 x 0.5 x A = 0.25 A (0.0577). -->
+    <insert-plugin trackPath="$send0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$send0" slotIndex="0" paramId="0" value="0.5"/>
+    <render filename="send_lane_whole.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="send_lane_whole.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.0560" maxRms="0.0595"/>
+
+    <!-- ========= E: THE EDIT IS ON A SEND LANE, RANGE WALK =============== -->
+    <!-- A parameter automation lane invalidates through the RANGE walk
+         (STrack::onPluginSlotAudioInvalidatedRange), whose system-lane branch
+         is a separate line from D's. A step to 1.0 from frame 0 puts Reverb's
+         gain back to unity: Echo = 0.5 A again. -->
+    <add-automation-lane owner="$send0" slotIndex="0" target="param:0" mode="read"
+                         name="Gain"/>
+    <add-automation-point owner="$send0" slotIndex="0" target="param:0"
+                          time="0" value="1.0" curve="step"/>
+    <render filename="send_lane_range.wav" format="wav" quality="10" durationSec="6.0"/>
+    <assert-audio-energy filename="send_lane_range.wav" startFrame="24000"
+                         frameCount="48000" channel="0"
+                         minRms="0.1120" maxRms="0.1190"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
