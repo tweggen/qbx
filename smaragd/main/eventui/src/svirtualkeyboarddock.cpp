@@ -64,6 +64,7 @@ QList<int> targetEventClip()
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return QList<int>();
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return QList<int>();
 
@@ -225,6 +226,7 @@ bool SVirtualKeyboardDock::pressNote( int midiKey, double velocity,
 
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return false;
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return false;
 

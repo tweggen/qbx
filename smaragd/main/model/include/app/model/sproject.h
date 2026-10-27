@@ -96,7 +96,7 @@ public:
     // output to (QBX-144) and where the recorder writes its takes.
     QString projectDir() const;
 
-    SObject *getRootComponent() const;
+    SObject *masterRoot() const;
     void setRootComponent( SObject * );
 
     SLink *linkToFile( QString & );

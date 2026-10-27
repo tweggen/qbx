@@ -227,6 +227,7 @@ void SMidiOutPump::start()
     // The lazy path in schedulerFor() stays, because a port can appear
     // mid-run (a track gains one, or is un-muted).
     if( SProject *project = app.getCurrentProject() ) {
+        // check_root_resolution: master -- the MIDI out pump pumps the master
         SObject *root = splacements::rootContainer( project );
         std::vector<STrack *> tracks;
         collectTracks( root, ssolo::anySoloInTree( root ), tracks );
@@ -441,6 +442,7 @@ void SMidiOutPump::tick()
         nsToFrames( (qint64) kMaxBacklogMs * 1000000LL, rate );
 
     // --- the tracks -------------------------------------------------------
+    // check_root_resolution: master -- the MIDI out pump pumps the master
     SObject *root = splacements::rootContainer( project );
     const bool anySolo = ssolo::anySoloInTree( root );
     std::vector<STrack *> tracks;

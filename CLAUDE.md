@@ -64,7 +64,7 @@ or headless tests hang until they time out.
 
 `./ci/gates.sh` runs all of it in one command, and CI runs that same script, so
 the checklist below and what gets enforced cannot drift apart.
-`./ci/gates.sh --static` is just the five checkers (seconds, needs only
+`./ci/gates.sh --static` is just the seven checkers (seconds, needs only
 python3). The commands below are what the script does, kept here because
 knowing them matters when one of them fails.
 
@@ -75,6 +75,8 @@ python3 tools/check_logging.py
 python3 tools/check_includes.py
 python3 tools/check_tempo_authority.py
 python3 tools/check_product_name.py
+python3 tools/check_pathroot.py
+python3 tools/check_root_resolution.py
 ctest --test-dir smaragd/build -j4 --output-on-failure   # scale -j to the machine
 ```
 
@@ -87,6 +89,17 @@ moving one is a data migration, silently. Its **job 1** forbids new
 `QGuiApplication::applicationDisplayName()` in the app or
 `SMARAGD_PRODUCT_NAME` in the engine. A literal that is deliberate carries a
 `// check_product_name: allow — <why>` marker, as in the two older checkers.
+
+`check_pathroot` and `check_root_resolution` are the two halves of one
+question — **which root does this mean?** The first catches a root-qualified
+path parsed with `stringToPath()`, which splits on commas and so silently
+yields a MASTER-rooted path; the second catches code that resolves the master
+outright. Both carry marker idioms (`check_root_resolution: master — <why>`,
+and `suspect <TICKET>` for a known defect that is counted and printed, not
+silenced). The rule and the history are in `smaragd/main/model/CONTRACT.md`.
+`check_pathroot` existed from 2026-08-20 and was not in this list until
+QBX-242, so it never ran and the class it guards returned seven times: **a
+checker in `tools/` is not a gate until `ci/gates.sh` names it.**
 
 To pin a flake, run `smaragd/tests/repeat_test.sh <bin> <case.qxa> [N] [workers]`
 from `smaragd/tests/cases/`. For record and live cases, loop `ctest -R` instead.

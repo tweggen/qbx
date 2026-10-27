@@ -225,7 +225,7 @@ int main( int argc, char **argv )
         // an empty SStdMixer, owned by the project.
         std::unique_ptr<SProject> project( new SProject );
         project->setRootComponent( new SStdMixer( project.get() ) );
-        SObject *rootObj = project->getRootComponent();
+        SObject *rootObj = project->masterRoot();
         std::shared_ptr<twComponent> root =
             rootObj ? rootObj->getRootComponent() : nullptr;
         check( root != nullptr, "the project's root mixer has a component" );

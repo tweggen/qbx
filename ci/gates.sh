@@ -36,11 +36,23 @@ say() { printf '\n=== %s ===\n' "$*"; }
 # fourteen display literals that were still there; the stage-3 sweep emptied
 # them, so the flag is gone and a new "Smaragd" in a string literal now fails
 # the gate like any other checker violation.
+#
+# THE LIST IS THE GATE, AND IT WAS SHORT BY ONE FOR TWO MONTHS (QBX-242).
+# tools/check_pathroot.py was committed on 2026-08-20 by fbeb4b86, whose message
+# reads "...and add a gate so the class cannot return" -- and it was never added
+# here, so it never ran, locally or in CI. The class returned seven times while
+# that commit stood in the history looking like it had been closed: run on the
+# day QBX-242 wired it in, the checker failed with eight violations in seven
+# files, every one of them introduced ON OR AFTER the commit that was supposed
+# to have gated them, the most recent twelve days old.
+#
+# A checker in tools/ is not a gate until this loop names it. When you add one,
+# add it here IN THE SAME COMMIT and run ci/gates.sh to see it in the output.
 run_static() {
     say "Static checkers"
     local t
     for t in check_layering check_logging check_includes check_tempo_authority \
-             check_product_name; do
+             check_product_name check_pathroot check_root_resolution; do
         printf '  %-24s' "$t"
         if python3 "tools/$t.py" >"/tmp/$t.log" 2>&1; then
             echo "PASS"

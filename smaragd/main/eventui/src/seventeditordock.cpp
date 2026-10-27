@@ -314,6 +314,7 @@ QList<int> SEventEditorDock::resolveSelectedEventClip() const
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return QList<int>();
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return QList<int>();
 

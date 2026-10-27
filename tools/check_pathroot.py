@@ -49,6 +49,40 @@ EXEMPT = {
     "shell/src/smainwindow.cpp":
         "GAP: eventEditor_->bindClip takes a bare path; an event clip in an "
         "arrangement is not reachable from the event editor yet",
+
+    # ---- ADDED BY QBX-242, when this checker was finally wired into
+    # ---- ci/gates.sh and ran for the first time since 2026-08-20.
+    #
+    # The four below PEEL THE QUALIFIER THEMSELVES and then split what is left,
+    # so every token they hand to stringToPath() is bare by construction. That
+    # is the same reason sobjectpath.h is exempt, one layer up.
+    "model/src/splacements.cpp":
+        "laneBySpec() peels the root qualifier into rootInOut and parses only "
+        "the already-stripped remainder -- the same split sobjectpath.h does",
+    "objects/mixer/src/spackclipsaction.cpp":
+        "readXml peels '<root>:' into pathRoot_ before splitting on ';', so the "
+        "tokens are bare by construction",
+    "objects/mixer/src/spackselectionaction.cpp":
+        "readXml peels '<root>:' into pathRoot_ before splitting on ';', so the "
+        "tokens are bare by construction",
+    "objects/cut/src/scleanuptakesaction.cpp":
+        "the clips= list is relative to the root already resolved from "
+        "pathRoot via splacements::rootNamed(), so the entries are bare",
+
+    # The three below are REAL DEFECTS with a filed owner, carried as gaps in
+    # the idiom the smainwindow entry above established. They are not safe and
+    # they are not approved: each parses a path master-rooted AND resolves it
+    # against the master, so the two halves agree and the defect is invisible.
+    # Delete the entry when the ticket lands; do not widen it.
+    "objects/track/src/slearnfeelflowaction.cpp":
+        "GAP (QBX-245): learn-feel-flow has no pathRoot at all -- it parses "
+        "trackPath bare and resolves it against the master",
+    "objects/track/src/ssetfeelflowmodeaction.cpp":
+        "GAP (QBX-245): set-feel-flow-mode has no pathRoot at all -- it parses "
+        "trackPath bare and resolves it against the master",
+    "testkit/src/ssidecartestactions.cpp":
+        "GAP (QBX-246): the sidecar/feel-flow seams resolve rootContainer() "
+        "and parse clip= bare, so no case can aim them into an arrangement",
 }
 
 PAT = re.compile(r"\bstringToPath\s*\(")

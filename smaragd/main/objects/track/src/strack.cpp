@@ -430,6 +430,7 @@ std::shared_ptr<twEventMerge> STrack::eventFeed()
     // reaches eventClips_ and is never double-triggered.
     sources.push_back( eventClips_ );
 
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( getProjectSafe() );
     const bool anySolo = ssolo::anySoloInTree( root );
     for( SLink *lk : childLinks() ) {
@@ -1175,6 +1176,7 @@ void STrack::trackChildWasAdded( SLink &child )
                 QObject::connect( childTrack, SIGNAL( subtreeSoloChanged() ),
                                   this, SLOT( childTrackSoloChanged() ),
                                   Qt::UniqueConnection );
+                // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
                 SObject *root = splacements::rootContainer( getProjectSafe() );
                 if( !ssolo::isLaneAudible( root, childTrack ) ) {
                     if( cpTrackMix_ ) {
@@ -1902,6 +1904,7 @@ void STrack::childTrackSoloChanged()
 // already right, so this is idempotent and costs nothing when nothing changed.
 void STrack::applyChildTrackAudibility()
 {
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( getProjectSafe() );
     const bool anySolo = ssolo::anySoloInTree( root );
 
@@ -2063,6 +2066,7 @@ bool STrack::collectChildSumEnvelope( const SEnvelopeWindow &win,
     STrack &self = const_cast<STrack &>( *this );
     if( !self.hasChildTracks() ) return false;
 
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( self.getProjectSafe() );
 
     std::vector<int32_t> sumMin( (size_t) width, 0 );

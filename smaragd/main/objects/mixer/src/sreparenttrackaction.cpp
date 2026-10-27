@@ -26,7 +26,7 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
 
     // THE ARRANGEMENT QUALIFIER IS HONOURED. `parseInto` peels a "Name:"
     // qualifier off the path into pathRoot_, and this resolved against
-    // project->getRootComponent() -- THE DEFAULT ROOT -- unconditionally, so
+    // project->masterRoot() -- THE DEFAULT ROOT -- unconditionally, so
     // `source="Drums:0"` silently moved the DEFAULT arrangement's track 0.
     // That is the "resolved against the wrong root SUCCEEDS" class
     // sobjectpath.h's own comment warns about: no error, no log line, the

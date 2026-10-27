@@ -801,6 +801,7 @@ void SStdMixerView::insertSampleFile_( STrack *track, const QString &filePath )
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *root = splacements::rootContainer( project );
     if( !root ) return;
 
@@ -867,6 +868,7 @@ void SStdMixerView::ctAddLink()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *root = splacements::rootContainer( project );
     if( !root ) return;
 
@@ -907,6 +909,7 @@ void SStdMixerView::ctRemoveSample()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *root = splacements::rootContainer( project );
     if( !root ) return;
 
@@ -991,6 +994,7 @@ void SStdMixerView::ctNewMidiClip()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *root = splacements::rootContainer( project );
     if( !root ) return;
 
@@ -1047,6 +1051,7 @@ void SStdMixerView::ctSplitSample()
     // margin on each side matches SSplitClipAction::apply's own guard against
     // a zero/negligible-length remainder, so a clip that passes here is one
     // the action will actually accept.
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = splacements::rootContainer( project );
     SCompositeAction *composite = new SCompositeAction;
     int nTargets = 0;
@@ -1125,6 +1130,7 @@ bool SStdMixerView::takeIsolateOffered( const QList<int> &clipPath,
 {
     if( clipPath.isEmpty() || takeRow < 0 ) return false;
     SProject *project = SApplication::app().getCurrentProject();
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = project ? splacements::rootContainer( project ) : nullptr;
     SLink *link = mixer ? splacements::placementAt( mixer, clipPath ) : nullptr;
     STakeStack *stack = link ? stakes::columnOfLink( link ) : nullptr;
@@ -1163,6 +1169,7 @@ int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return 0;
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = splacements::rootContainer( project );
     if( !mixer ) return 0;
 
@@ -1432,6 +1439,7 @@ void SStdMixerView::nudgeClipPitch( double cents )
 
     // Each clip gets its own ABSOLUTE target, so a nudge over a mixed
     // selection preserves the intervals between the clips.
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *mixer = splacements::rootContainer( project );
     SCompositeAction *composite = new SCompositeAction;
     double lastCents = 0.0;
@@ -3075,7 +3083,8 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
     int colorIndex = row.track->colorIndex();
     if( colorIndex < 0 ) {
         SProject *proj = SAppContext::get().getCurrentProject();
-        SObject *croot = proj ? proj->getRootComponent() : nullptr;
+        // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
+        SObject *croot = proj ? proj->masterRoot() : nullptr;
         colorIndex = croot
             ? sclipcolors::autoIndexForLane( *croot, *row.track ) : 0;
     }
@@ -6864,6 +6873,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
     }
 
     // Resolve the track's path from the root mixer.
+    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
     SObject *root = splacements::rootContainer(project);
     if (!root || !root->isPathContainer()) {
         return;

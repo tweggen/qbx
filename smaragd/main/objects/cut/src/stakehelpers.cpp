@@ -130,7 +130,8 @@ int normalizeColumns( SProject &project )
             QStringLiteral( "off" ), Qt::CaseInsensitive ) == 0 )
         return 0;
 
-    SObject *root = project.getRootComponent();
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
+    SObject *root = project.masterRoot();
     if( !root ) return 0;
 
     QVector<SLink *> placements;

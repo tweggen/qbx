@@ -151,6 +151,7 @@ void SFeelFlowTrackBounce::start()
     // an edit) never leaks files; a track that MOVES gets a fresh path,
     // which is a harmless orphan (the same class the media cache's Cleanup…
     // dialog already exists for) rather than a wrong answer.
+    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *mixerRoot = splacements::rootContainer( project );
     const QList<int> trackPath = strackpath::pathOf( mixerRoot, track_ );
     QString pathStr = trackPath.isEmpty() ? QStringLiteral( "root" )

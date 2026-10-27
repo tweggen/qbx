@@ -93,7 +93,8 @@ SLiveMonitor::~SLiveMonitor()
 SStdMixer *SLiveMonitor::rootMixer() const
 {
     SProject *p = app_ ? app_->getCurrentProject() : nullptr;
-    return p ? dynamic_cast<SStdMixer *>( p->getRootComponent() ) : nullptr;
+    // check_root_resolution: master -- the live monitor taps the master mixer's rewire
+    return p ? dynamic_cast<SStdMixer *>( p->masterRoot() ) : nullptr;
 }
 
 std::uint64_t SLiveMonitor::rootEpoch() const

@@ -64,7 +64,8 @@ SApplyResult SRenderAction::apply(SProject *project)
 
     // Get synth output component
     std::shared_ptr<twComponent> synthOutput;
-    SObject *root = project->getRootComponent();
+    // check_root_resolution: master -- a render renders the master mix; an arrangement is not a render target
+    SObject *root = project->masterRoot();
     if (root) {
         synthOutput = root->getRootComponent();
     }

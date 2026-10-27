@@ -212,7 +212,7 @@ bool SProject::hasProp( const QString &key ) const
     return properties_.contains( key );
 }
 
-SObject *SProject::getRootComponent() const
+SObject *SProject::masterRoot() const
 {
     if( soRoot_ ) {
         return &(soRoot_->getSObject());
@@ -307,7 +307,7 @@ length_t SProject::getDurationFrames() const
     // getChildrenExtent() reports the LAST END, not end-minus-first-start, so
     // this is the arrangement end measured from position 0 — exactly what a
     // whole-project render needs.
-    SObject *root = getRootComponent();
+    SObject *root = masterRoot();
     if( !root ) return 0;
     length_t frames = root->getDuration();
     // An EMPTY container reports 1, not 0: both SStdMixer::getDuration() and

@@ -17,7 +17,8 @@ static SObject *rootFor( SProject *project, const QString &arrangement,
         qWarning() << who << ": no project";
         return nullptr;
     }
-    if( arrangement.isEmpty() ) return project->getRootComponent();
+    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+    if( arrangement.isEmpty() ) return project->masterRoot();
     SObject *root = project->arrangement( arrangement );
     if( !root ) {
         qWarning() << who << ": no arrangement named" << arrangement;

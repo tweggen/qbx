@@ -25,6 +25,7 @@ namespace {
 QList<int> trackPathOf( STrack *track )
 {
     SProject *proj = SApplication::app().getCurrentProject();
+    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
     SObject *root = splacements::rootContainer( proj );
     return root ? strackpath::pathOf( root, track ) : QList<int>();
 }

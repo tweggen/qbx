@@ -119,6 +119,7 @@ bool finishPlacement( const Pending &p, const QString &localPath )
     // SMVActualView::dropEvent already reads it.
     const bool reachable =
         !p.track.isNull() &&
+        // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
         !strackpath::pathOf( splacements::rootContainer( current ),
                              p.track.data() ).isEmpty();
     if( !reachable ) {

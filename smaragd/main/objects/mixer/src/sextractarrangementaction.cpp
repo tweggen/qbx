@@ -99,7 +99,8 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
 
-    SObject *master = project->getRootComponent();
+    // check_root_resolution: master -- extract takes tracks OUT of the master; the arrangement does not exist yet
+    SObject *master = project->masterRoot();
     SStdMixer *masterMixer = dynamic_cast<SStdMixer *>( master );
     if( !masterMixer ) return { false, nullptr };
 

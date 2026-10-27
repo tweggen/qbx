@@ -29,7 +29,7 @@ namespace splacements {
 // The project's root container, or null when there is no usable root.
 inline SObject *rootContainer( SProject *project )
 {
-    return project ? project->getRootComponent() : nullptr;
+    return project ? project->masterRoot() : nullptr;
 }
 
 // Resolve `path` from `root` to a lane (a container clips/placements may be
@@ -156,7 +156,7 @@ inline SObject *containerAt( SObject *root, const QList<int> &path )
 inline SObject *rootNamed( SProject *project, const QString &rootName )
 {
     if( !project ) return nullptr;
-    if( rootName.isEmpty() ) return project->getRootComponent();
+    if( rootName.isEmpty() ) return project->masterRoot();
     if( SObject *arr = project->arrangement( rootName ) ) return arr;
     if( SObject *asset = project->asset( rootName ) ) {
         if( SClipWindow *w = SClipWindow::of( asset ) ) {
