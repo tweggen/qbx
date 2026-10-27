@@ -12,6 +12,28 @@ three sessions once already: assert-clip-window read the master's clip while the
 edit under test correctly changed the arrangement's, and the conclusion drawn
 was "the gesture does not land".
 
+CORRECTION, 2026-10-27 (QBX-246), measured rather than reasoned: THE PARAGRAPH
+ABOVE IS NO LONGER TRUE, and it is kept because the reason it stopped being
+true is the useful part. Proposal 45 D9 hardened stringToPath so that an
+unparsable component becomes SPATH_INVALID rather than 0, and resolveByPath
+returns nullptr on SPATH_INVALID (sobjectpath.h, "an unparsable one
+(SPATH_INVALID) resolves to nothing"). So:
+
+    stringToPath( "Drums:0,0" )  ->  ( SPATH_INVALID, 0 )  ->  resolves to NOTHING
+
+A bare parse of a qualified path therefore FAILS CLOSED today. Watched: with
+the shell's seams reverted to rootContainer() plus a bare stringToPath(),
+`assert-track-detail-sections trackPath="Drums:1"` did not read the master's
+lane -- it answered nothing and the verb refused.
+
+THE RULE IS UNCHANGED AND THIS CHECKER STILL EARNS ITS PLACE; only the severity
+moved. A bare parse of a qualifiable path is a DEAD gesture, not a gesture that
+edits the wrong tree. The wrong-tree half of the class is real but belongs to
+its sibling, tools/check_root_resolution.py: there a BARE path such as "0" is
+resolved against the MASTER while the object lives in an arrangement, and index
+{0} exists in every root, so that one does succeed on the wrong object. Do not
+repeat the pre-D9 story for this checker, as QBX-242 did.
+
 The rule: any path that can carry a qualifier is parsed with
 strackpath::parseQualified() or strackpath::parseInto(). stringToPath() is for
 a path that is known-bare by construction.
@@ -46,9 +68,14 @@ EXEMPT = {
     # ARRANGEMENT cannot be opened in it. Listed here rather than silently
     # passing, because an exemption with a reason is the honest way to carry a
     # gap that is not being fixed in this change. See the PR body.
+    # TWO gaps, nine sites, and the count is stated so a tenth cannot arrive
+    # unnoticed behind a reason that only covers the first nine (QBX-246 found
+    # this entry describing 8 of what were already 9). The describe/grab/click
+    # seams that used to be in here are gone: they resolve laneBySpec() now.
     "shell/src/smainwindow.cpp":
-        "GAP: eventEditor_->bindClip takes a bare path; an event clip in an "
-        "arrangement is not reachable from the event editor yet",
+        "GAP x8 (QBX-244): eventEditor_->bindClip takes a bare path, so an "
+        "event clip in an arrangement is not reachable from the event editor "
+        "yet. GAP x1 (QBX-243): isolateTakeGesture parses clipRef bare",
 
     # ---- ADDED BY QBX-242, when this checker was finally wired into
     # ---- ci/gates.sh and ran for the first time since 2026-08-20.
@@ -80,9 +107,13 @@ EXEMPT = {
     "objects/track/src/ssetfeelflowmodeaction.cpp":
         "GAP (QBX-245): set-feel-flow-mode has no pathRoot at all -- it parses "
         "trackPath bare and resolves it against the master",
-    "testkit/src/ssidecartestactions.cpp":
-        "GAP (QBX-246): the sidecar/feel-flow seams resolve rootContainer() "
-        "and parse clip= bare, so no case can aim them into an arrangement",
+
+    # ssidecartestactions.cpp's entry was DELETED by QBX-246, which is what an
+    # exemption carrying a ticket is for: feelFlowTrackAt() and
+    # feel-flow-analyze now parse with parseQualified()/parseInto() and resolve
+    # with rootNamed(), so the file has no bare parse left to exempt. Deleting
+    # the entry is the last step of the fix, not an afterthought -- an
+    # exemption left behind re-opens the hole silently for the next change.
 }
 
 PAT = re.compile(r"\bstringToPath\s*\(")

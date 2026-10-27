@@ -8,12 +8,52 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
+#include "app/model/splacements.h"
 #include <QCoreApplication>
 #include <QDomDocument>
 #include <QFile>
 #include <QDir>
 #include <QUndoStack>
 #include <QTextStream>
+
+namespace {
+
+// A root's name as a reader should see it: the master's name is the EMPTY
+// string everywhere in the path scheme, which is unreadable in a failure.
+QString rootLabel(const QString &name)
+{
+    return name.isEmpty() ? QStringLiteral("<master>") : name;
+}
+
+// EVERY ROOT'S TRACK COUNT, keyed by root name (empty = the master).
+//
+// Assets are deliberately absent: a fragment is a path container but never a
+// lane (proposal 41 D3), so it has no tracks to count and dynamic_cast filters
+// it out in any case. Arrangements are what carry lanes besides the master.
+QMap<QString, int> trackCountsByRoot(SProject *project)
+{
+    QMap<QString, int> out;
+    if (!project) return out;
+    QList<QString> names;
+    names << QString();                      // the master, spelled as it always is
+    names += project->arrangementNames();    // already sorted
+    for (const QString &name : names) {
+        SObject *root = splacements::rootNamed(project, name);
+        if (SStdMixer *mixer = dynamic_cast<SStdMixer *>(root))
+            out.insert(name, mixer->getNTracks());
+    }
+    return out;
+}
+
+QString describeCounts(const QMap<QString, int> &m)
+{
+    QStringList parts;
+    for (auto it = m.constBegin(); it != m.constEnd(); ++it)
+        parts << QStringLiteral("%1=%2").arg(rootLabel(it.key())).arg(it.value());
+    return parts.join(QLatin1Char(','));
+}
+
+}  // namespace
 
 SActionRunner::Result SActionRunner::run(SActionScript &script, SApplication &app,
                                          bool teardownProject)
@@ -232,12 +272,24 @@ bool SActionRunner::assertTrackCount_(const SActionScript::Assertion &a, SProjec
         return false;
     }
 
-    // Get the root mixer and count tracks.
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = project->masterRoot();
+    // WHICH ROOT (QBX-246). An absent `root=` is the master, exactly as every
+    // action verb reads an absent pathRoot, and `root="Drums"` counts that
+    // arrangement's tracks.
+    //
+    // This is the trailing <assertions> block EVERY case ends with, and it
+    // could only ever see the master -- so a case that built an arrangement
+    // and broke it still reported the master's unchanged count as correct.
+    // A gate that cannot see the arrangement cannot fail for the arrangement,
+    // which is why QBX-230..234 each had to be found by a human clicking.
+    const QString rootName = a.args.value("root");
+    SObject *root = splacements::rootNamed(project, rootName);
     SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
     if (!mixer) {
-        failures.append("assert-track-count: root is not a mixer");
+        // NAMING THE ROOT MATTERS HERE: rootNamed() fails CLOSED on a name it
+        // does not know rather than falling back to the master, so this is also
+        // the message a mistyped arrangement produces.
+        failures.append(QString("assert-track-count: no mixer root named '%1'")
+            .arg(rootName.isEmpty() ? QStringLiteral("<master>") : rootName));
         return false;
     }
 
@@ -301,16 +353,15 @@ bool SActionRunner::verifyUndo_(SProject *project, SApplication &app, QStringLis
         return false;
     }
 
-    // Capture the final state: track count at the end.
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = project->masterRoot();
-    SStdMixer *mixer = dynamic_cast<SStdMixer*>(root);
-    if (!mixer) {
-        failures.append("verify-undo: root is not a mixer");
+    // THE FINAL STATE OF EVERY ROOT, not of the master alone (QBX-246). This
+    // read the master's count only, so a case that built tracks inside an
+    // arrangement and undid them badly still passed: the master's count had
+    // not moved, and nothing else was looked at.
+    const QMap<QString, int> finalCounts = trackCountsByRoot(project);
+    if (finalCounts.isEmpty()) {
+        failures.append("verify-undo: no root is a mixer");
         return false;
     }
-
-    int finalTrackCount = mixer->getNTracks();
 
     // Undo all actions: repeatedly call undo() until the undo stack is empty.
     // Each undo() removes one action from the undo stack and redoes its inverse.
@@ -327,12 +378,22 @@ bool SActionRunner::verifyUndo_(SProject *project, SApplication &app, QStringLis
         undoCount++;
     }
 
-    // Verify we're back to initial state (0 tracks).
-    int initialTrackCount = mixer->getNTracks();
-    if (initialTrackCount != 0) {
-        failures.append(QString("verify-undo: after undo, track count is %1, expected 0")
-            .arg(initialTrackCount));
-        return false;
+    // Back to the initial state: EVERY root that still exists is empty.
+    //
+    // It walks what is there now rather than the names captured above, because
+    // a root the case CREATED is legitimately gone by this point -- undoing an
+    // arrangement's creation unregisters it. The zero is the pre-existing
+    // assumption that a case starts from an empty project; QBX-246 widened
+    // which roots it is asked of, not what it asserts.
+    const QMap<QString, int> afterUndo = trackCountsByRoot(project);
+    for (auto it = afterUndo.constBegin(); it != afterUndo.constEnd(); ++it) {
+        if (it.value() != 0) {
+            failures.append(QString("verify-undo: after undo, root %1 has %2 track(s), "
+                                    "expected 0 (every root: %3)")
+                .arg(rootLabel(it.key())).arg(it.value())
+                .arg(describeCounts(afterUndo)));
+            return false;
+        }
     }
 
     // Redo all actions: repeatedly call redo() to get back to the final state.
@@ -343,11 +404,14 @@ bool SActionRunner::verifyUndo_(SProject *project, SApplication &app, QStringLis
         redoCount++;
     }
 
-    // Verify we're back to final state.
-    int redoTrackCount = mixer->getNTracks();
-    if (redoTrackCount != finalTrackCount) {
-        failures.append(QString("verify-undo: after redo, track count is %1, expected %2")
-            .arg(redoTrackCount).arg(finalTrackCount));
+    // Back to the final state, root for root. Comparing the whole MAP rather
+    // than looping the final names also catches a root that failed to come
+    // BACK at all -- a missing key, which a per-root count check reads as
+    // nothing to compare.
+    const QMap<QString, int> afterRedo = trackCountsByRoot(project);
+    if (afterRedo != finalCounts) {
+        failures.append(QString("verify-undo: after redo the roots read %1, expected %2")
+            .arg(describeCounts(afterRedo)).arg(describeCounts(finalCounts)));
         return false;
     }
 

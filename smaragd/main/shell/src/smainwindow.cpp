@@ -199,7 +199,10 @@ void SMainWindow::attachTrackDetail()
     // have no active root until an editor is installed.
     if( !root )
         if( SProject *proj = SApplication::app().getCurrentProject() )
-            // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+            // The dock FOLLOWS the active tab (the connect above); this is
+            // only the pre-install moment, when the master is the root the
+            // tabs are about to name. attachMixerPane() states the ordering.
+            // check_root_resolution: master -- the pre-install fallback, before any tab names a root
             root = proj->masterRoot();
     followTrackDetailRoot_( root );
 }
@@ -373,8 +376,12 @@ static QImage sGrabLogical( QWidget *w )
 QColor sClipBodyOf( STrack *track )
 {
     SProject *proj = SAppContext::get().getCurrentProject();
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = proj ? proj->masterRoot() : nullptr;
+    // THE ROOT THAT HOLDS THIS TRACK (QBX-246). The colour index is the lane's
+    // position WITHIN ITS ROOT, so a track in an arrangement has to be indexed
+    // against that arrangement: against the master it is not found at all, and
+    // indexForLane's miss is index 0 -- so every arrangement track was painted
+    // the first lane's colour, and two neighbours became indistinguishable.
+    SObject *root = splacements::rootHolding( proj, track );
     const int idx = ( root && track )
         ? sclipcolors::indexForLane( *root, *track ) : 0;
     return sclipcolors::body( idx, false, track && track->isMuted() );
@@ -389,8 +396,10 @@ QColor sClipBodyOf( STrack *track )
 QColor sClipCutMarkOf( STrack *track )
 {
     SProject *proj = SAppContext::get().getCurrentProject();
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = proj ? proj->masterRoot() : nullptr;
+    // sClipBodyOf()'s root, for the reason stated there -- and it must be
+    // resolved the SAME way, because the mark is drawn on the body and the
+    // classifier looks for the pair.
+    SObject *root = splacements::rootHolding( proj, track );
     const int idx = ( root && track )
         ? sclipcolors::indexForLane( *root, *track ) : 0;
     return sclipcolors::cutMark( idx, false, track && track->isMuted() );
@@ -433,11 +442,10 @@ SMixerPane *SMainWindow::buildScratchMixerPane( const QString &arrangement ) con
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return nullptr;
-    // An EMPTY name is the master, exactly as `SAction::pathRoot()` reads it.
-    SObject *root = arrangement.isEmpty()
-                        // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-                        ? splacements::rootContainer( proj )
-                        : splacements::rootNamed( proj, arrangement );
+    // An EMPTY name is the master, exactly as `SAction::pathRoot()` reads it --
+    // which is precisely what rootNamed() answers, so the branch was its own
+    // first line written out (QBX-246).
+    SObject *root = splacements::rootNamed( proj, arrangement );
     if( !root ) return nullptr;
 
     SMixerPane *&slot = testPanes_[ arrangement ];
@@ -606,7 +614,7 @@ void SMainWindow::attachMixerPane()
     // is the same arrangement the tabs would name.
     if( !root )
         if( SProject *proj = SApplication::app().getCurrentProject() )
-            // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
+            // check_root_resolution: master -- the fallback the paragraph above measures: before an editor is installed the tabs name no root
             root = splacements::rootContainer( proj );
     mixerPane_->setRoot( root );
 }
@@ -4308,6 +4316,34 @@ QString SMainWindow::describeMixerLayout( int paneWidth, int paneHeight,
         .arg( arr[3] ).arg( faderPct );
 }
 
+namespace {
+
+// THE TEST SEAMS' TRACK RESOLVER (QBX-246), and the one place the rule lives.
+//
+// A seam's `trackPath` MAY NAME ITS OWN ROOT: "0,1" is a master track and
+// "Drums:0" is that track inside the arrangement Drums, exactly as every
+// action verb's trackPath has read it since proposal 09 D21.
+//
+// These seams used `rootContainer()` plus a bare `stringToPath()`, which was
+// the defect TWICE OVER: the root was assumed, and the qualifier was parsed
+// away by a split on commas. Because index {0} exists in every root, the seam
+// did not then fail -- it resolved a real track in the master and answered
+// confidently about the wrong one. That is why a .qxa could not see inside an
+// arrangement, and so why QBX-230..234 each had to be found by clicking.
+//
+// laneBySpec() peels the qualifier, resolves the root BY NAME, and fails
+// CLOSED on a name it does not know, so a mistyped arrangement is refused
+// instead of being answered about the master. `SMainWindow::viewPlayheadFor`
+// is the same contract spelled with an explicit rootName argument.
+STrack *seamTrack( SProject *proj, const QString &trackPath )
+{
+    QString rootName;   // empty: the path's own qualifier decides, else master
+    return dynamic_cast<STrack *>(
+        splacements::laneBySpec( proj, trackPath, rootName ) );
+}
+
+}  // namespace
+
 QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
                                                 int w, int h )
 {
@@ -4315,10 +4351,7 @@ QString SMainWindow::describeTrackDetailLayout( const QString &trackPath,
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
 
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
-    STrack *track = dynamic_cast<STrack *>( lane );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return QString();
 
     // Parentless and never shown, exactly as describeTrackHead builds its head:
@@ -4347,10 +4380,7 @@ QString SMainWindow::describeTrackDetailSections( const QString &trackPath )
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    STrack *track = dynamic_cast<STrack *>(
-        splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return QString();
     STrackDetailPanel panel( nullptr );
     panel.setTrack( track );
@@ -4363,10 +4393,7 @@ bool SMainWindow::clickTrackDetailSection( const QString &trackPath,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    STrack *track = dynamic_cast<STrack *>(
-        splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return false;
     STrackDetailPanel panel( nullptr );
     panel.setTrack( track );
@@ -4381,10 +4408,7 @@ QString SMainWindow::describeUiFonts( const QString &trackPath )
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    STrack *track = dynamic_cast<STrack *>(
-        splacements::laneAt( root, strackpath::stringToPath( trackPath ) ) );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return QString();
 
     const QFont small = suifonts::smallFont();
@@ -4574,10 +4598,7 @@ QString SMainWindow::describeFeelFlow( const QString &trackPath )
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return QString();
 
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
-    STrack *track = dynamic_cast<STrack *>( lane );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return QString();
 
     // A section built for the assertion and thrown away -- parentless and
@@ -4595,10 +4616,7 @@ bool SMainWindow::grabFeelFlow( const QString &path, const QString &trackPath,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
-    STrack *track = dynamic_cast<STrack *>( lane );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return false;
 
     SFeelFlowPanel panel( track, nullptr );
@@ -4641,8 +4659,16 @@ void SMainWindow::updateFeelFlowPuppet_( offset_t pos )
         return;
 
     SProject *proj = SApplication::app().getCurrentProject();
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject  *root = proj ? proj->masterRoot() : nullptr;
+    // THE PUPPET FOLLOWS THE ACTIVE TAB'S ROOT (QBX-246), as the track-detail
+    // dock and the mixer pane do. What it shows is the ACTIVE LANE, and which
+    // lane is active is a property of the root being edited -- so reading the
+    // MASTER's active lane while an arrangement tab was in front showed the
+    // pose of a track the user was not working on. A wrong answer, not a
+    // missing one, which is why nothing looked broken.
+    SObject *root = viewTabs_ ? viewTabs_->activeRoot() : nullptr;
+    if( !root )
+        // check_root_resolution: master -- the same pre-install fallback attachMixerPane() measures, shared by every dock that follows a tab
+        root = proj ? proj->masterRoot() : nullptr;
 
     // The ACTIVE lane when it is a track (the lane the user is working on --
     // the same activeLane() STrackRendererInline::laneFillColor reads), else
@@ -4676,10 +4702,7 @@ bool SMainWindow::grabFeelFlowPuppet( const QString &path,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
-    STrack *track = dynamic_cast<STrack *>( lane );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return false;
 
     // The pose from the SAME function the docked instance paints and the
@@ -4704,10 +4727,7 @@ bool SMainWindow::clickFeelFlowPanel( const QString &trackPath,
 {
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return false;
-    // check_root_resolution: suspect QBX-246 -- a seam that resolves the master cannot assert anything about an arrangement
-    SObject *root = splacements::rootContainer( proj );
-    SObject *lane = splacements::laneAt( root, strackpath::stringToPath( trackPath ) );
-    STrack *track = dynamic_cast<STrack *>( lane );
+    STrack *track = seamTrack( proj, trackPath );
     if( !track ) return false;
 
     const char *slot;

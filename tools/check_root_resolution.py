@@ -65,11 +65,24 @@ what the rename bought.
 
     python3 tools/check_root_resolution.py
 
-Companion checks: tools/check_pathroot.py polices the same class from the
-path-PARSING side (a root-qualified string parsed as a bare one silently
-becomes master-rooted). Both are in ci/gates.sh; a checker that gates.sh does
-not run is not a gate, which is how check_pathroot sat unenforced from
-2026-08-20 while the class it was written to stop returned seven times.
+Companion check: tools/check_pathroot.py polices the same class from the
+path-PARSING side, and THE TWO HALVES FAIL DIFFERENTLY -- QBX-242 wrote that
+they failed the same way, and QBX-246 measured otherwise:
+
+  * a QUALIFIED path parsed bare ("Drums:0" through stringToPath) FAILS CLOSED
+    since proposal 45 D9, which gives SPATH_INVALID rather than 0 and makes
+    resolveByPath return null. A dead gesture.
+  * a BARE path resolved against the MASTER -- what THIS checker polices -- does
+    not fail. Index {0} exists in every root, so it resolves a real object in
+    the wrong tree and SUCCEEDS. That is the silent half, and it is this one.
+
+The practical consequence when writing a gate: an unknown-root arm such as
+trackPath="Nope:0" with expectReject="true" passes on the broken build too,
+because the D9 parse refuses it as well. Gate the half you mean.
+
+Both are in ci/gates.sh; a checker that gates.sh does not run is not a gate,
+which is how check_pathroot sat unenforced from 2026-08-20 while the class it
+was written to stop returned seven times.
 """
 
 import pathlib
