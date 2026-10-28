@@ -5,17 +5,21 @@ qbx's own `tw` format (proposal 56; nassau-digital `docs/DESIGN.md` §9). This
 module owns the `twPlugin` subclass (`twSamplerInstrument`, format `tw`, uid
 `tw.native.nassaudigital`), the extension interface the app reaches it through
 (`twSamplerHost`), the two immutable snapshots it is handed
-(`twSamplerProgram`, `twSamplerSample`), and its registration with the plugin
+(`twSamplerProgram`, `twSamplerSample`), the EDITABLE program the app's model
+wraps (`twSamplerProgramModel`, since Q1), and its registration with the plugin
 registry. The voice engine itself is the NassauDigital CORE
 (tweggen/nassau-digital `Source/Core`, `nd::Instrument`); this module is the
 translation between qbx's plugin ABI and the core's API and nothing else.
 
-Built in milestone Q0 (QBX-250). The program MODEL (`objects/sampler`, with
-undo, links and signals), the verbs, generations, live asset links, stretch,
-live play, recording, the editor and the aux outputs are Q1–Q8.
+Built in milestone Q0 (QBX-250); Q1 (QBX-253) added `twSamplerProgramModel`
+and `twSamplerHostStats::installedSerial`. The program MODEL object
+(`objects/sampler`'s `SSamplerProgram`, with undo, persistence and signals) and
+its verbs are Q1's, in the app; generations, live asset links, stretch, live
+play, recording, the editor and the aux outputs are Q2–Q8.
 
-Public headers: twsamplerhost.h, twsamplertypes.h, twsamplerregistry.h. All
-Qt-free (THREADING.md rule 1), and none names a core type.
+Public headers: twsamplerhost.h, twsamplertypes.h, twsamplerregistry.h,
+twsamplerprogrammodel.h. All Qt-free (THREADING.md rule 1), and none names a
+core type.
 
 Depends on: tw/core, tw/graph, tw/events, tw/plugins (and tw/pages through
 graph, for one constant: `twOutputPage::FRAME_CAPACITY`). `check_layering.py`
@@ -106,6 +110,35 @@ fetch route, which the log says.
     `-march=native` or `-mcpu=native` (`tw303a/CMakeLists.txt`, logged as
     `tw_sampler: R7 flag check passed`).
 
+## The editable program (Q1)
+
+`twSamplerProgramModel` is a pimpl over one `nd::Program` and a THIN
+FORWARDER to the core's edits (`nd_edit.h`) and grammar (`nd_program_xml.h`):
+the parameter tables, the ALL scope, the per-target clamp of a relative edit
+and its refusal on an enum or a bool, "every edit returns the absolute values
+it replaced", ids from `nextId` never reused, and unknown attributes kept in
+document order are all the core's, re-stated nowhere here (proposal 56
+invariant 8). What it adds, because a host needs it and the core's API does not
+spell it out:
+
+- **add from attribute TEXT**, REFUSING an attribute the table does not know
+  and an `id` (assigned, never taken) — the core's `addZone()` takes a built
+  `Zone`, and a script's typo must be refused rather than kept as an "unknown
+  attribute";
+- **a removed zone / layer as the core's own XML** plus where it was, and its
+  reinsertion VALIDATED: every id free AND already handed out (`< nextId`).
+  The core's `reinsertZone()` checks only the zone id and the index;
+- **`equalsIgnoringNextId()`**: an undone add-zone leaves `nextId` where the
+  add put it, so that is the equality "undone exactly" means for it;
+- **`snapshot()`**: a COPY as an immutable `twSamplerProgram`, with a serial
+  from the same counter `fromXml()` uses.
+
+`twSamplerHostStats::installedSerial` is the serial of the program the
+instance most recently got through `setProgram()`, written there as a relaxed
+atomic. `programSerial` says what `process()` READ; `installedSerial` says what
+the instance HOLDS, which is what the app asserts its edits on without a
+render (`assert-sampler-program installed="1"`).
+
 ## The ABI translation
 
 | qbx (`twEvent`, ABI domain) | core (`nd::Event`) |
@@ -137,6 +170,9 @@ pre-roll, capped at 4 s by the processor.
   generation (E), installs racing renders (F), and the blob (G).
 - `sampler_slot_test` (main/testkit): Q0.4 and Q0.q2 on a real slot.
 - `qxa.sampler_q0_engine_seam`: Q0.3, Q0.q2 and Q0.q4 through the app.
+- `qxa.sampler_q1_verbs`, `qxa.sampler_q1_persist`,
+  `qxa.sampler_q1_newer_program`: `twSamplerProgramModel` through the Q1 verbs
+  and the project file (see `main/objects/sampler/CONTRACT.md`).
 
 ## Known limits (recorded, not hidden)
 

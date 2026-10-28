@@ -61,6 +61,35 @@ const Fixture kFixtures[] = {
     { "sampler-test-install",
       "<sampler-test-install trackPath='0' slotIndex='0' filePath='../test_stereo.wav'"
       " layer='1' rootKey='60' mode='oneshot' generation='1'/>" },
+    // Proposal 56 Q1: the NassauDigital program verbs. The ones that carry
+    // CHILDREN (add-zone's <layer>s, restore-sampler-values' <prior>s, the
+    // reinsert verbs' CDATA) are where a lossy writer would hide: the
+    // write->read->write string comparison below covers the children, the
+    // attribute check covers the rest.
+    { "add-zone",
+      "<add-zone trackPath='0' slotIndex='0' keyLo='36' keyHi='47' mode='oneshot'>"
+      "<layer src='test:a' velHi='90'/><layer src='test:b' velLo='91'/></add-zone>" },
+    { "remove-zone",   "<remove-zone trackPath='0' slotIndex='1' zone='17'/>" },
+    { "reinsert-zone",
+      "<reinsert-zone trackPath='0' slotIndex='0' zone='17' at='2'>"
+      "<![CDATA[<zone id=\"17\" keyLo=\"36\" zeta=\"z\" alpha=\"a\"/>]]></reinsert-zone>" },
+    { "add-layer",     "<add-layer trackPath='0' slotIndex='0' zone='17' src='test:b' tune='2'/>" },
+    { "remove-layer",  "<remove-layer trackPath='0' slotIndex='0' layer='18'/>" },
+    { "reinsert-layer",
+      "<reinsert-layer trackPath='0' slotIndex='0' layer='18' zone='17' at='1'>"
+      "<![CDATA[<layer id=\"18\" src=\"x\"/>]]></reinsert-layer>" },
+    { "set-zone",      "<set-zone trackPath='0' slotIndex='0' zone='all' tune='+2' pan='=-0.5'/>" },
+    { "set-layer",     "<set-layer trackPath='0' slotIndex='0' layers='18;19' src='file:a.wav'/>" },
+    { "set-sampler-program",
+      "<set-sampler-program trackPath='0' slotIndex='0' name='Kit' polyphony='64'/>" },
+    { "restore-sampler-values",
+      "<restore-sampler-values trackPath='0' slotIndex='0' scope='zone'>"
+      "<prior id='17' attr='tune' value='-93'/><prior id='18' attr='tune' value='2'/>"
+      "</restore-sampler-values>" },
+    { "select-zones",  "<select-zones trackPath='0' slotIndex='0' zones='3;7;12' mode='toggle'/>" },
+    { "assert-sampler-program",
+      "<assert-sampler-program trackPath='0' slotIndex='0' zones='2' nextId='6'"
+      " equalsCaptured='a' ignoreNextId='1' installed='1'/>" },
     { "assert-audio-energy",
       "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"
       " startFrame='48000' frameCount='96000' channel='1'/>" },
@@ -1096,6 +1125,22 @@ const LaneRow kLaneRows[] = {
     // system lane it finds no NassauDigital instance and rejects on that.
     { "sampler-test-install",  Accept,
       "a test verb aimed at a NassauDigital slot, which a system lane cannot hold" },
+    // Proposal 56 Q1, the same reasoning as sampler-test-install: each
+    // addresses a NassauDigital slot's PROGRAM, and a system lane cannot hold
+    // the instrument (master_refuses_instrument), so the shell's resolver
+    // finds no NassauDigital instance there and the verb rejects on that.
+    { "add-zone",               Accept, "edits a NassauDigital program, which a system lane cannot hold" },
+    { "remove-zone",            Accept, "as add-zone" },
+    { "reinsert-zone",          Accept, "as add-zone (remove-zone's inverse)" },
+    { "add-layer",              Accept, "as add-zone" },
+    { "remove-layer",           Accept, "as add-zone" },
+    { "reinsert-layer",         Accept, "as add-zone (remove-layer's inverse)" },
+    { "set-zone",               Accept, "as add-zone" },
+    { "set-layer",              Accept, "as add-zone" },
+    { "set-sampler-program",    Accept, "as add-zone" },
+    { "restore-sampler-values", Accept, "as add-zone (the set verbs' inverse)" },
+    { "select-zones",           Accept, "as add-zone; selection only" },
+    { "assert-sampler-program", Accept, "read-only" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
     { "remove-automation-lane", Accept, "the inverse of the above" },
     { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },

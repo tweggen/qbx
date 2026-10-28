@@ -55,6 +55,10 @@ public:
     const Impl &impl() const { return *impl_; }
 
 private:
+    // twSamplerProgramModel::snapshot() (Q1) makes snapshots from the editable
+    // program without a round trip through XML.
+    friend class twSamplerProgramModel;
+
     twSamplerProgram();
     std::unique_ptr<Impl> impl_;
     std::uint64_t         serial_ = 0;

@@ -14,6 +14,11 @@ namespace {
 std::atomic<std::uint64_t> g_programSerial{ 0 };
 }
 
+std::uint64_t nextSamplerProgramSerial()
+{
+    return g_programSerial.fetch_add( 1, std::memory_order_relaxed ) + 1;
+}
+
 // --------------------------------------------------------------- program ---
 
 twSamplerProgram::twSamplerProgram() : impl_( new Impl ) {}
@@ -29,7 +34,7 @@ std::shared_ptr<const twSamplerProgram> twSamplerProgram::fromXml( const std::st
     }
     std::shared_ptr<twSamplerProgram> p( new twSamplerProgram );
     p->impl_->program = std::make_shared<const nd::Program>( std::move( r.program ) );
-    p->serial_        = g_programSerial.fetch_add( 1, std::memory_order_relaxed ) + 1;
+    p->serial_        = nextSamplerProgramSerial();
     return p;
 }
 

@@ -1,0 +1,9 @@
+<NassauDigitalProgram version="2" name="Newer" polyphony="32" busDrive="0" outputLevel="0" masterTune="0" nextId="3" zeta="z" alpha="a">
+  <zone id="1" keyLo="36" keyHi="47" velLo="0" velHi="127" rootKey="40" keyTrack="1" mode="oneshot" tempoMethod="stretch" drive="0" driveCurve="soft" driveMix="1" filter="lp24" cutoff="20000" resonance="0" filterKeyTrack="0" filterEnvAmount="0" attack="0" hold="0" decay="0" sustain="1" release="0.05" filterAttack="0" filterDecay="0" filterSustain="1" filterRelease="0.05" lfoRate="2" lfoToPitch="0" lfoToCutoff="0" lfoToPan="0" velToLevel="1" velToCutoff="0" velToStart="0" modWheelToLfoDepth="0" modWheelToCutoff="0" pan="0" level="0" tune="0" choke="0" output="main" pad="-1" yCurve="exp" bWeight="0.5">
+    <layer id="2" src="test:a" start="0" end="-1" loopStart="-1" loopEnd="-1" beats="0" velLo="0" velHi="127" velFade="0" rrGroup="0" tune="0" level="0" pan="0" reverse="0" stage="post" grain="7"/>
+    <modMatrix slots="4">
+      <route src="lfo2" dst="pan"/>
+    </modMatrix>
+  </zone>
+  <macros count="2"/>
+</NassauDigitalProgram>

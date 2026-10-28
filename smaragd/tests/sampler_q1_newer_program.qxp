@@ -1,0 +1,39 @@
+<SProject fileName='' rootId='99701146552960' formatVersion='3' bpmTempo='120' sampleRate='48000' channels='2' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true,"timelineScrollX":0,"timelineZoomSecondWidth":30}'>
+<SStdMixer masterLaneId='99701146714736' id='99701146552960' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='99701150373664' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack pluginChainId='99701150343104' systemRole='master' id='99701146714736' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' hidden='true' sName='Master'>
+<SLink objectId='99701146712576' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='99701150343104' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='99701150364656' systemRole='conductor' id='99701146712576' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Conductor'>
+</STrack>
+<SPluginChain id='99701150364656' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='99701150375424' id='99701150373664' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='GrumpyNarwhal'>
+</STrack>
+<SPluginChain id='99701150375424' nRefs='1' hasDuration='0' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+<SLink objectId='99701149098368' hasStartTime='1' startTime='0'>
+</SLink>
+</SPluginChain>
+<SPluginSlot id='99701149098368' nRefs='1' hasDuration='0' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='NassauDigital' bypassed='false' format='tw' uid='tw.native.nassaudigital' name='NassauDigital' vendor='Nassau' path='' nIn='0' nOut='2' isInstrument='true'>
+<state encoding='base64'>VFdORAEAAAA=</state>
+<SLink objectId='99701150331552' hasStartTime='1' startTime='0'>
+</SLink>
+</SPluginSlot>
+<SSamplerProgram id='99701150331552' nRefs='1' hasDuration='0' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='NassauDigital program'>
+<program><![CDATA[<NassauDigitalProgram version="2" name="Newer" polyphony="32" busDrive="0" outputLevel="0" masterTune="0" nextId="3" zeta="z" alpha="a">
+  <zone id="1" keyLo="36" keyHi="47" velLo="0" velHi="127" rootKey="40" keyTrack="1" mode="oneshot" tempoMethod="stretch" drive="0" driveCurve="soft" driveMix="1" filter="lp24" cutoff="20000" resonance="0" filterKeyTrack="0" filterEnvAmount="0" attack="0" hold="0" decay="0" sustain="1" release="0.05" filterAttack="0" filterDecay="0" filterSustain="1" filterRelease="0.05" lfoRate="2" lfoToPitch="0" lfoToCutoff="0" lfoToPan="0" velToLevel="1" velToCutoff="0" velToStart="0" modWheelToLfoDepth="0" modWheelToCutoff="0" pan="0" level="0" tune="0" choke="0" output="main" pad="-1" yCurve="exp" bWeight="0.5">
+    <layer id="2" src="test:a" start="0" end="-1" loopStart="-1" loopEnd="-1" beats="0" velLo="0" velHi="127" velFade="0" rrGroup="0" tune="0" level="0" pan="0" reverse="0" stage="post" grain="7"/>
+    <modMatrix slots="4">
+      <route src="lfo2" dst="pan"/>
+    </modMatrix>
+  </zone>
+  <macros count="2"/>
+</NassauDigitalProgram>
+]]></program>
+</SSamplerProgram>
+</SProject>

@@ -34,6 +34,12 @@ struct twSamplerHostStats {
     std::uint32_t routedMask      = 0;  // the routed-outputs mask it ran with
     std::uint32_t samplesInstalled = 0; // layers holding a sample, as it saw them
     int           activeVoices    = 0;  // voices sounding after its last call
+    // The serial of the program most recently INSTALLED by setProgram() (0 =
+    // none), whether or not process() has run since (proposal 56 Q1). It is
+    // what the model's "every edit reaches every instance, and a rebuilt one is
+    // born current" is asserted on without a render: programSerial above says
+    // what process() READ, this says what the instance HOLDS.
+    std::uint64_t installedSerial = 0;
 };
 
 class twSamplerHost {

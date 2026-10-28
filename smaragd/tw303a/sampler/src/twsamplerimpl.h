@@ -11,6 +11,7 @@
 #include "nd_program.h"
 #include "nd_sample.h"
 
+#include <cstdint>
 #include <memory>
 
 namespace audio {
@@ -18,6 +19,10 @@ namespace audio {
 struct twSamplerProgram::Impl {
     std::shared_ptr<const nd::Program> program;
 };
+
+// The next twSamplerProgram::serial(), shared by every way a snapshot is made
+// (fromXml, twSamplerProgramModel::snapshot): unique within the process.
+std::uint64_t nextSamplerProgramSerial();
 
 struct twSamplerSample::Impl {
     std::shared_ptr<const nd::Sample> sample;

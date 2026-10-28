@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q1_newer_program">
+
+  <!-- PROPOSAL 56 Q1.2, SECOND HALF (QBX-253): A PROGRAM ELEMENT WRITTEN BY A
+       NEWER VERSION KEEPS ITS UNKNOWN ATTRIBUTES (and elements).
+
+       ../sampler_q1_newer_program.qxp is a project whose NassauDigital program
+       says version="2" and carries what this build's core does not know:
+
+         program  zeta="z" alpha="a"            + a <macros count="2"/> child
+         zone 1   yCurve="exp" bWeight="0.5"    + a <modMatrix> child with a
+                                                  <route> grandchild
+         layer 2  stage="post" grain="7"
+
+       Each pair is written in REVERSE alphabetical order on purpose. The core
+       keeps unknown attributes in DOCUMENT order and its structural equality
+       compares them in order; QDom, which reads the project file, writes
+       attributes SORTED BY NAME. A program nested as child elements and handed
+       back through QDom would therefore come back reordered (and unequal);
+       stored as character data, the core reads exactly what it wrote. The
+       xmlContains checks below are what see that: "zeta" BEFORE "alpha".
+
+       ../sampler_q1_newer_program.xml is the same program on its own; the
+       loaded program must be STRUCTURALLY equal to it, after the load, after an
+       edit, and after the edited program is saved and loaded again (C1.2:
+       "also through an edit").
+
+       ../sampler_q1_unreadable_program.qxp carries the same program with
+       polyphony="12", which this core refuses. The program is KEPT VERBATIM
+       (written back on save, character for character), the instrument plays
+       nothing, and every edit is refused, announced: losing a newer build's
+       program on the next save would be worse than not playing it. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sampler_q1_newer_program.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1" readable="1"
+                            equalsFile="../sampler_q1_newer_program.xml" installed="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='nextId="3" zeta="z" alpha="a"&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='pad="-1" yCurve="exp" bWeight="0.5"&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='reverse="0" stage="post" grain="7"/&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='&lt;route src="lfo2" dst="pan"/&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='&lt;macros count="2"/&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="program" attr="version" value="2"/>
+
+    <!-- An edit keeps them. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="+1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="1"
+                            xmlContains='pad="-1" yCurve="exp" bWeight="0.5"&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="edited"/>
+
+    <!-- ...and so do a save and a reload of the edited program. -->
+    <save-project path="../../build/sampler_q1_newer_resave.qxp"/>
+    <load-project path="../../build/sampler_q1_newer_resave.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="edited" installed="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='nextId="3" zeta="z" alpha="a"&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='reverse="0" stage="post" grain="7"/&gt;'/>
+    <!-- One undo of the edit, from before the save, is not available after a
+         load; the edit itself is undone here instead, on the reloaded object. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="=0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsFile="../sampler_q1_newer_program.xml"/>
+
+    <!-- ===================================== a program this core refuses -->
+    <load-project path="../sampler_q1_unreadable_program.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1" readable="0" zones="0"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="+1" expectReject="true"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="1" expectReject="true"/>
+    <save-project path="../../build/sampler_q1_unreadable_resave.qxp"/>
+    <assert-file-contains path="../../build/sampler_q1_unreadable_resave.qxp"
+                          text='&lt;NassauDigitalProgram version="2" name="Newer" polyphony="12" busDrive="0" outputLevel="0" masterTune="0" nextId="3" zeta="z" alpha="a"&gt;'/>
+    <assert-file-contains path="../../build/sampler_q1_unreadable_resave.qxp"
+                          text='reverse="0" stage="post" grain="7"/&gt;'/>
+
+    <!-- ========================================= a program the file lost -->
+    <!-- ../sampler_q1_lost_program.qxp is the newer project with the
+         <SSamplerProgram> element deleted, so the slot's <SLink> to it
+         dangles (an older build that does not know the element drops it the
+         same way). The SLOT must still load – it is a CONTAINER kind since
+         Q1, so a lost child costs its own link, never the user's plugin and
+         its state – and it simply has no program. -->
+    <load-project path="../sampler_q1_lost_program.qxp"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.nassaudigital" state="Active"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+</SActionScript>
