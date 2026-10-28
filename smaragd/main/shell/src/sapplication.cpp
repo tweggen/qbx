@@ -71,6 +71,25 @@ SProject *SApplication::getCurrentProject() const
 }
 
 /**
+ * The per-user solo scope (QBX-256), pushed onto the current project.
+ *
+ * `app/model` may not read SSettings and `ssolorules.h` is asked from twelve
+ * places in five modules, so the project carries the answer and this is the
+ * one place that decides it. An unrecognised string reads as the default
+ * rather than as the other mode: a hand-edited INI must not silently change
+ * what the user hears.
+ */
+void SApplication::pushSoloScope()
+{
+    if( !currentProject_ ) return;
+    const QString v = SSettings::instance()
+        .value( SOpt::SoloScope, SOpt::def( SOpt::SoloScope ) ).toString();
+    currentProject_->setSoloScope(
+        v == QLatin1String( "arrangement" ) ? SProject::SoloScope::Arrangement
+                                            : SProject::SoloScope::Global );
+}
+
+/**
  * Change modality for a new project.
  * Here we currently:
  * - Rewire the main output speaker for a new project.
@@ -100,6 +119,10 @@ void SApplication::setCurrentProject( SProject *cp )
     // registry at the document boundary. QBX-230.
     if( currentProject_ != cp ) clearAllSelections();
     currentProject_ = cp;
+    // The per-user solo scope is runtime state ON the project (QBX-256), so
+    // every project that becomes current gets it -- including the one a load
+    // hands us, which is why this sits here and not only at startup.
+    pushSoloScope();
     // Push the project's sample rate / candidate set into the engine. For a
     // loaded project this runs again after the loader has populated these from
     // XML (see SMainWindow::fileOpen), so the engine ends up on the saved rate.
@@ -990,6 +1013,17 @@ SApplication::SApplication( int &argc, char **argv )
     t3Speaker_->setPlaybackContext( this );   // app services; we outlive the speaker
     t3Speaker_->init();
     actionHistory_ = new SActionHistory( this );
+
+    // THE SOLO SCOPE FOLLOWS THE OPTION, LIVE (QBX-256). One connection for
+    // the whole app: the value is per-user, the rule that consumes it is in
+    // `app/model`, and the project is where the two meet. The dialog writes
+    // the key on Apply/OK and `set-option` writes it from a .qxa, so both
+    // arrive here the same way.
+    QObject::connect( &SSettings::instance(), &SSettings::changed,
+                      this, [this]( const QString &key ) {
+                          if( key == QLatin1String( SOpt::SoloScope ) )
+                              pushSoloScope();
+                      } );
 
     // Restore the audio output device chosen in a previous session.
     QString devId = SSettings::instance().audioDeviceId();

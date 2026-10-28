@@ -230,7 +230,7 @@ void SMidiOutPump::start()
         // check_root_resolution: master -- the MIDI out pump pumps the master
         SObject *root = splacements::rootContainer( project );
         std::vector<STrack *> tracks;
-        collectTracks( root, ssolo::anySoloInTree( root ), tracks );
+        collectTracks( root, ssolo::anySoloInForce( root ), tracks );
         for( STrack *t : tracks ) {
             const QString portId = resolvePortId( t->getMidiOutPort() );
             if( !portId.isEmpty() ) schedulerFor( portId );
@@ -444,7 +444,7 @@ void SMidiOutPump::tick()
     // --- the tracks -------------------------------------------------------
     // check_root_resolution: master -- the MIDI out pump pumps the master
     SObject *root = splacements::rootContainer( project );
-    const bool anySolo = ssolo::anySoloInTree( root );
+    const bool anySolo = ssolo::anySoloInForce( root );
     std::vector<STrack *> tracks;
     collectTracks( root, anySolo, tracks );
 

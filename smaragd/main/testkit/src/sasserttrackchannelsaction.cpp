@@ -252,7 +252,7 @@ SApplyResult SAssertMasterSumsAction::apply( SProject *project )
     // The AUDIBLE tracks only: the mixer excludes a muted or soloed-out lane by
     // nulling its input plug, so including it here would make the sum wrong for
     // a reason that has nothing to do with channels.
-    const bool anySolo = ssolo::anySoloInTree( mixer );
+    const bool anySolo = ssolo::anySoloInForce( mixer );
     std::vector<std::shared_ptr<twOutputPage>> trackPages;
     for( SLink *lk : mixer->childLinks() ) {
         if( !lk ) continue;

@@ -69,6 +69,11 @@ SOptionsDialog::SOptionsDialog( QWidget *parent, int initialPage )
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Log" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Plugins" ) ) );
     tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Media" ) ) );
+    // APPENDED, and that is not a style choice (QBX-256). The tree and the
+    // stack map by top-level INDEX, openOptionsDialogAt() names Audio by its
+    // number, and SOpt::OptionsLastPage remembers a page -- so a category
+    // inserted anywhere but the end silently moves pages other code names.
+    tree_->addTopLevelItem( new QTreeWidgetItem( QStringList( "Mixing" ) ) );
 
     stack_ = new QStackedWidget;
     stack_->addWidget( buildMousePage() );        // index 0
@@ -78,6 +83,7 @@ SOptionsDialog::SOptionsDialog( QWidget *parent, int initialPage )
     stack_->addWidget( buildLogPage() );          // index 4
     stack_->addWidget( buildPluginsPage() );      // index 5
     stack_->addWidget( buildMediaPage() );        // index 6
+    stack_->addWidget( buildMixingPage() );       // index 7
 
     QObject::connect( tree_, &QTreeWidget::currentItemChanged,
                       this, [this]( QTreeWidgetItem *cur, QTreeWidgetItem * ) {
@@ -967,6 +973,55 @@ void SOptionsDialog::apply()
     applyMidiPage();
     applyLogPage();
     applyPluginsPage();
+    applyMixingPage();
+}
+
+// ------------------------------------------------------------- Mixing page
+// QBX-256. What SOLO is applied across. Worded as a BEHAVIOUR and not as the
+// scope's name: "arrangement" and "global" are what the INI stores and what
+// ssolorules.h branches on, and neither tells a user what they will hear.
+
+QWidget *SOptionsDialog::buildMixingPage()
+{
+    QWidget *page = new QWidget;
+    QFormLayout *form = new QFormLayout( page );
+
+    soloScope_ = new QComboBox;
+    soloScope_->addItem( "the whole project", "global" );
+    soloScope_->addItem( "only the arrangement it lives in", "arrangement" );
+    soloScope_->setToolTip(
+        "Solo a lane inside a sub-arrangement and the whole project goes "
+        "quiet except that lane, which is what the button means when you "
+        "hit it to fine-tune one sound. The other setting keeps a solo "
+        "inside the arrangement that holds it, so the rest of the "
+        "arrangement you placed it in keeps playing." );
+    form->addRow( "Solo affects:", soloScope_ );
+
+    loadMixingPage();
+    return page;
+}
+
+void SOptionsDialog::loadMixingPage()
+{
+    SSettings &s = SSettings::instance();
+    selectByData( soloScope_,
+        s.value( SOpt::SoloScope, SOpt::def( SOpt::SoloScope ) ).toString() );
+}
+
+void SOptionsDialog::applyMixingPage()
+{
+    // The write is all this does: SApplication watches SSettings::changed for
+    // this key and pushes the scope onto the project, so the setting is live
+    // and there is exactly one place that converts the string (QBX-256).
+    SSettings::instance().setValue( SOpt::SoloScope,
+                                    soloScope_->currentData().toString() );
+}
+
+QString SOptionsDialog::describeMixingPage() const
+{
+    return QStringLiteral( "soloScope=" )
+         + ( soloScope_ ? soloScope_->currentData().toString()
+                        : QStringLiteral( "?" ) );
 }
 
 // ---------------------------------------------------------------- Log page

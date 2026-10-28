@@ -38,6 +38,35 @@ and its children path-resolved) that is emphatically not a lane (no fader,
 no inserts, no instrument, no solo, no arm) — see `plan/proposed/
 41_LANE_FRAGMENTS.md` D3.
 
+**SOLO'S SCOPE IS A USER OPTION, AND THE RULE STAYS ONE RULE (QBX-256).**
+`SProject::soloScope()` says what `ssolorules.h` applies solo ACROSS:
+`Global` (the default — a solo anywhere is in force everywhere) or
+`Arrangement` (the per-root rule of QBX-231/233). It is RUNTIME state pushed
+in by the shell from `SOpt::SoloScope`, never serialized: `app/model` may not
+read `SSettings`, and a preference inside a project file would make one user's
+choice everybody's.
+
+Three things about it belong here rather than in the header, because they are
+what a reader gets wrong:
+
+1. **Every caller still passes the container that HOLDS the lane.** QBX-233's
+   census answer is unchanged, and `isLaneAudible`'s `root` parameter keeps its
+   meaning; in `Global` the terms span every root, so `root` then decides
+   nothing. No call site branches on the scope — the one that did would be the
+   fourth copy of the rule this header exists to prevent.
+2. **A caller that pre-computes the flag must use `anySoloInForce()`, not
+   `anySoloInTree()`.** The per-tree primitive is right for one tree and wrong
+   for the scope: in `Global` it answers false while another root holds the
+   solo, and the rule then never bites. `anySoloInTree` survives for
+   `fragment_test`, which asserts about one tree deliberately, and for
+   `anySoloInProject`, which folds it over the roots.
+3. **In `Global` the walks cross the PLACEMENT edge**, because an `SCut`'s
+   content link is one of its `childLinks()` — the same reference graph
+   `splayhead::detail::findRec` walks, with the same per-path guard and depth
+   cap. `isLane()` is still what carries solo, so a fragment still cannot
+   darken anything (proposal 41 D3 is untouched); what changed is which
+   containers the walk may pass THROUGH on the way to a lane.
+
 **`containerAt()` and the M2b widening of `placementAt()`.** `splacements.h`
 also has `containerAt()` — `isPathContainer()`, the strictly WIDER predicate
 — and since proposal 41 M2b, `placementAt()` (a clip PLACEMENT'S own

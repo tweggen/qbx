@@ -278,6 +278,60 @@ public:
     void clearArrangements();
     const QHash<QString,SObject*> &arrangements() const { return arrangementDict_; }
 
+    // --- THE SOLO SCOPE (QBX-256) ------------------------------------------
+    //
+    // What the audibility rule is applied ACROSS. The per-user option
+    // `mixer/soloScope` decides it and the SHELL pushes it in here
+    // (SApplication::setCurrentProject and the SSettings::changed wire),
+    // because `app/model` may not read SSettings while `ssolorules.h` — asked
+    // from twelve places in five modules — has the project in hand everywhere
+    // it is asked.
+    //
+    // IT IS RUNTIME STATE AND IS NEVER SERIALIZED. A preference that
+    // travelled in the project file would make one user's choice everybody's,
+    // and as an audible project property it would also have to stay out of
+    // SProjectProps::defaults() — where a value is what every project ever
+    // saved reads, so all of them re-render. The default lives in
+    // SOpt::def(SOpt::SoloScope) and the member below only mirrors it; a
+    // project nobody pushed a scope into answers Global, so the headless
+    // paths (unit tests, a .qxa that never touches the option) agree with a
+    // first-run app rather than with the old per-root behaviour.
+    enum class SoloScope {
+        Global,       ///< a solo anywhere is in force everywhere (the default)
+        Arrangement   ///< the rule stops at the root that holds the soloed lane
+    };
+    SoloScope soloScope() const { return soloScope_; }
+    void setSoloScope( SoloScope s )
+    {
+        if( s == soloScope_ ) return;
+        soloScope_ = s;
+        // Every root's wiring pass and every root's page cache depended on the
+        // old answer; see notifySoloTopologyChanged() for why nothing else
+        // would tell them.
+        emit soloTopologyChanged();
+    }
+
+    /**
+     * A SOLO FLAG MOVED, AND IN Global SCOPE THAT IS EVERY ROOT'S BUSINESS.
+     *
+     * A root hears its own lanes' soloChanged / subtreeSoloChanged and re-runs
+     * its own wiring pass. Nothing told the OTHER roots, and nothing could:
+     * an arrangement is reachable from no SLink in the master tree, and
+     * SObject::invalidateRenderPath() bumps only the chains that CONTAIN the
+     * lane whose flag moved. So in Global scope a solo in one root left every
+     * other root wired for the old answer AND serving pages frozen under it —
+     * a solo inside an arrangement left the master's own lanes playing, and a
+     * solo on a master lane left the arrangement's asset capture valid and
+     * stale (the capture's staleness is keyed on the CONTENT root's content
+     * epoch, which no walk from the master ever reaches).
+     *
+     * Called by the root that saw the change, after its own local pass. In
+     * Arrangement scope nothing calls it: the other roots' answers genuinely
+     * did not change, and bumping their chains would be invalidation nobody
+     * asked for.
+     */
+    void notifySoloTopologyChanged() { emit soloTopologyChanged(); }
+
     // Fire arrangementChanged(). Called from the action chokepoint after every
     // applied action so cached renders (asset captures) invalidate transparently
     // on any edit. Coarse by design (every action, not just arrangement edits);
@@ -390,6 +444,10 @@ signals:
     // and a project with no arrangements at all unregisters nothing while
     // still crossing the boundary. This fires either way, after the names.
     void arrangementsCleared();
+    // The solo scope changed, or a solo flag moved and the scope is Global:
+    // every root re-applies the audibility rule and drops the pages it froze
+    // under the old answer (QBX-256, see notifySoloTopologyChanged()).
+    void soloTopologyChanged();
     // Any applied action; consumers that cache rendered audio drop their cache.
     void arrangementChanged();
     // An async capture revalidation landed (preview/metadata fresh); views
@@ -448,6 +506,8 @@ private:
     QVector<MissingFile> missingFiles_;
     QHash<QString,SObject*> assetDict_;
     QHash<QString,SObject*> arrangementDict_;
+    // Runtime only, never saved — see the SoloScope block above.
+    SoloScope soloScope_ = SoloScope::Global;
 
     bool isPartialLoad_ = false;  // True if load failed partway through
 

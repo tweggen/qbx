@@ -209,4 +209,34 @@ private:
     bool    expect_ = true;
 };
 
+// assert-mixing-options - the Options -> Mixing page, built off screen.
+//
+// The house pattern of assert-midi-options and assert-media-options:
+// construct the REAL SOptionsDialog (never shown - a qxa run on Windows uses
+// the real platform plugin, so a shown dialog would appear on the developer's
+// screen), and match against SOptionsDialog::describeMixingPage(). Its
+// constructor runs loadMixingPage(), which is the code under test: that the
+// page SHOWS what the INI holds, and so that a user who opens Options after
+// a .qxa (or another app session) wrote the key does not see a stale default
+// and write it back.
+//
+//   contains     a substring of the describe() dump
+//   soloScope    the exact value, "global" | "arrangement"
+class SAssertMixingOptionsAction : public SAction
+{
+public:
+    SAssertMixingOptionsAction() = default;
+
+    QString name() const override
+    { return QStringLiteral( "assert-mixing-options" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString contains_;
+    QString soloScope_;
+};
+
 #endif // SMIXERTESTACTIONS_H

@@ -417,6 +417,14 @@ private slots:
     // A track's mute or solo flag changed: re-evaluate routing for all tracks
     // (solo on any track silences the others).
     void trackMuteSoloChanged();
+    // A SOLO flag changed, which in Global scope is more than our own
+    // business: our pass, then the project's (QBX-256). Mute stays local in
+    // both scopes and keeps using the slot above -- which is why solo needs a
+    // slot of its own rather than a branch inside that one.
+    void trackSoloChanged();
+    // Another root's solo moved, or the scope itself changed
+    // (SProject::soloTopologyChanged).
+    void onSoloTopologyChanged();
 
 private:
     void checkDurationChanged();

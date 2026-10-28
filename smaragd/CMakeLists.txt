@@ -351,6 +351,21 @@ if(TEST qxa.mixer_sections)
     set_tests_properties(qxa.mixer_sections PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# `mixer/soloScope` (QBX-256) is the one key TWO cases write, and the reason is
+# in the semantics rather than in convenience: `solo_scope_project_wide`
+# compares both scopes against rendered audio, and
+# `track_detail_meter_solo_scope` (QBX-233) asks WHICH ROOT the rule is asked
+# about -- a question that exists only in the per-root scope, where that case
+# therefore has to put the option. Both are RUN_SERIAL, both restore the SOpt
+# default (`global`), and each says so in its header; serialisation plus the
+# restore is what the one-owner-per-key rule is actually protecting.
+if(TEST qxa.solo_scope_project_wide)
+    set_tests_properties(qxa.solo_scope_project_wide PROPERTIES RUN_SERIAL TRUE)
+endif()
+if(TEST qxa.track_detail_meter_solo_scope)
+    set_tests_properties(qxa.track_detail_meter_solo_scope PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the deferred `media:` drop (proposal 38 gate 3) --------------------------
 #
 # Same INI argument as the three above (it writes media/lastSourceId and

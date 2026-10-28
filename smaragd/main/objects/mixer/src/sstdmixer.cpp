@@ -257,7 +257,7 @@ void SStdMixer::reconnectTracksToMixer()
 {
     int nTracks = childCount();
     // ONE whole-tree solo scan for the whole pass (see ssolorules.h).
-    const bool solo = ssolo::anySoloInTree( this );
+    const bool solo = ssolo::anySoloInForce( this );
 
     // THE SEND LANES ARE WIRED BY THIS PASS, NOT BESIDE IT (proposal 45 M7,
     // trap T3). This is the whole of AC7.4 and it is the one thing about send
@@ -741,7 +741,7 @@ void SStdMixer::rewireSendBuses()
     // above takes one (ssolorules.h). ASKED, never re-spelled (47 D5): two
     // local copies of the direct-children-only rule are how the meter and the
     // ear came to disagree about a nested lane (timeline/CONTRACT inv. 10).
-    const bool solo = ssolo::anySoloInTree( this );
+    const bool solo = ssolo::anySoloInForce( this );
 
     // THE CYCLE BREAK, AND IT LIVES HERE RATHER THAN ONLY IN THE VERB
     // (proposal 47 M3). `add-send` refuses a cycle, but the LOADER does not go
@@ -865,7 +865,7 @@ void SStdMixer::rewireSendBuses()
  */
 bool SStdMixer::anyTrackSoloed() const
 {
-    return ssolo::anySoloInTree( const_cast<SStdMixer *>( this ) );
+    return ssolo::anySoloInForce( const_cast<SStdMixer *>( this ) );
 }
 
 /**
@@ -908,6 +908,41 @@ void SStdMixer::trackMuteSoloChanged()
     // too. SOLO has always come through this slot with no invalidation at all,
     // so it carried the same staleness — this fixes both.
     invalidateRenderPath();
+}
+
+/**
+ * A SOLO flag changed somewhere in OUR tree. Our own pass is exactly what a
+ * mute does; what solo adds is the rest of the project (QBX-256).
+ *
+ * Our pass runs FIRST and unconditionally, so Arrangement scope behaves
+ * exactly as it always did and a project with one root costs one extra
+ * comparison. The project's signal comes back to us as well, and the second
+ * pass is a cheap no-op -- applyAudibility() is idempotent and
+ * twTrackMix::setClipMuted reports an empty range when the flag is already
+ * right -- which is why there is no "who emitted it" bookkeeping here.
+ */
+void SStdMixer::trackSoloChanged()
+{
+    trackMuteSoloChanged();
+    SProject *project = getProjectSafe();
+    if( project && project->soloScope() == SProject::SoloScope::Global )
+        project->notifySoloTopologyChanged();
+}
+
+/**
+ * Another root's solo moved, or the user changed the scope. Both mean our
+ * answer may have changed without anything in OUR tree moving, so neither the
+ * signals above nor the invalidation walk would have reached us.
+ */
+void SStdMixer::onSoloTopologyChanged()
+{
+    applyAudibility();
+    // ...and the pages we already froze hold the OLD answer. Rewiring only
+    // changes what FUTURE freezes produce (the reason trackMuteSoloChanged()
+    // ends the same way), and for a solo in ANOTHER root nothing else bumps
+    // us: invalidateRenderPath() walks down from every root but bumps only
+    // the chains that CONTAIN the lane whose flag moved.
+    bumpRenderChainEpoch();
 }
 
 // Slots.
@@ -1017,7 +1052,7 @@ void SStdMixer::insertTrack( STrack &trk )
         this, SLOT( trackMuteSoloChanged() ) );
     QObject::connect(
         (QObject*)&trk, SIGNAL( soloChanged( bool ) ),
-        this, SLOT( trackMuteSoloChanged() ) );
+        this, SLOT( trackSoloChanged() ) );
     // A solo on a lane NESTED inside this track is equally our business: solo is
     // global, so the whole tree's routing has to be re-evaluated. A nested lane
     // is not our child and reparenting explicitly drops track->mixer connections
@@ -1025,7 +1060,7 @@ void SStdMixer::insertTrack( STrack &trk )
     // forwards its subtree's solo changes up as this signal.
     QObject::connect(
         (QObject*)&trk, SIGNAL( subtreeSoloChanged() ),
-        this, SLOT( trackMuteSoloChanged() ) );
+        this, SLOT( trackSoloChanged() ) );
     // Construction parents the link to us, which appends it (childEvent keeps
     // childOrder_ in sync). Position it afterwards with reorderTrack().
     SLink *lk = new SLink( (SObject&)trk, this );
@@ -1426,6 +1461,12 @@ SStdMixer::SStdMixer( SProject *project )
     if( project ) {
         QObject::connect( project, SIGNAL( channelsChanged( int ) ),
                           this, SLOT( setChannels( int ) ),
+                          Qt::UniqueConnection );
+        // QBX-256: a solo in ANOTHER root, or a change of scope, is our
+        // business too. UniqueConnection for the same reason the line above
+        // carries it.
+        QObject::connect( project, SIGNAL( soloTopologyChanged() ),
+                          this, SLOT( onSoloTopologyChanged() ),
                           Qt::UniqueConnection );
     }
     QObject::connect( this, SIGNAL( trackInserted( int, STrack & ) ),

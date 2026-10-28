@@ -458,6 +458,31 @@ what feeds it.
     whole-chain and range root hooks (C/D/E and A/B), and the two system-lane
     owner hooks (D and E, one each).
 
+30. **A SOLO IS EVERY ROOT'S BUSINESS, AND NOTHING TOLD THE OTHERS**
+    (QBX-256). `insertTrack` connects a lane's `soloChanged` /
+    `subtreeSoloChanged` to `trackSoloChanged()`, which runs our own pass --
+    exactly what a MUTE does through `trackMuteSoloChanged()` -- and then, in
+    `Global` scope only, calls `SProject::notifySoloTopologyChanged()`. Every
+    root subscribes to that signal in its constructor and answers with
+    `applyAudibility()` + `bumpRenderChainEpoch()`.
+
+    Both halves are load-bearing and neither is reachable the other way. An
+    arrangement root is reachable from no `SLink` in the master tree, so no
+    signal of ours reaches it; and the containment walk bumps only the chains
+    that CONTAIN the lane whose flag moved, so a solo on a master lane leaves
+    an arrangement's asset capture VALID and stale -- its staleness is keyed
+    on the CONTENT root's content epoch (`SCut::contentEpochForCapture_`),
+    which no walk from the master ever touches. Mute keeps the old slot
+    because mute is local in both scopes; solo has a slot of its own rather
+    than a branch inside that one.
+
+    The re-entry is safe and deliberately unguarded: our own pass has already
+    run when the project's signal comes back to us, `applyAudibility()` is
+    idempotent, and `twTrackMix::setClipMuted` reports an empty range when the
+    flag is already right. In `Arrangement` scope nothing is published at all
+    -- the other roots' answers genuinely did not change, and bumping their
+    chains would be invalidation nobody asked for.
+
 ## RETURN TRACKS (proposal 55 M2, D1/D3/D7/D8/D9)
 
 30. **A RETURN IS WIRED BY THE PASS, NEVER BESIDE IT.** `rewireReturns()` is

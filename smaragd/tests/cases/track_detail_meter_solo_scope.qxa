@@ -38,9 +38,26 @@
   code gave 0, and (b) expects audible=0 where it gave 1. A sabotage cannot
   satisfy both by reporting a constant, and neither claim alone would notice a
   rule that had simply been inverted.
+
+  CORRECTION, 2026-10-28 (QBX-256): THIS CASE NOW DECLARES
+  `mixer/soloScope=arrangement`, AND THAT IS NOT A WORKAROUND. Both claims
+  below are about WHICH ROOT the rule is asked about, and that question only
+  exists in the per-root scope. In the new default, `global`, a solo anywhere
+  is in force everywhere and `isLaneAudible`'s `root` argument decides
+  nothing — so claim (a) is false there (the master solo DOES silence the
+  arrangement track, correctly) and, worse for a gate, the QBX-233 defect
+  itself becomes invisible: a read that passes the master root answers exactly
+  what a correct one does. So the case sets the scope it is about and restores
+  `global` at the end, and `solo_scope_project_wide.qxa` is where the other
+  scope's audibility is gated. Both are RUN_SERIAL and both restore the
+  default, which is what the one-owner-per-key rule is protecting.
 -->
 <SActionScript version="1" name="track_detail_meter_solo_scope">
   <actions>
+    <!-- See the CORRECTION in the header: the per-root scope is what this
+         case is about. -->
+    <set-option key="mixer/soloScope" value="arrangement"/>
+
     <add-track index="-1"/>
     <add-track index="-1"/>
     <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
@@ -91,5 +108,8 @@
     <select-track trackPath="1"/>
     <assert-track-detail-dock contains="|path=Drums:1"/>
     <assert-track-detail-dock contains="|audible=1"/>
+
+    <!-- The INI comes back as it was: `global` is SOpt::def(). -->
+    <set-option key="mixer/soloScope" value="global"/>
   </actions>
 </SActionScript>

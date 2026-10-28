@@ -275,7 +275,7 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
 
     std::map<const STrack *, int> indexOf;
     SObject   *root    = params.mixer;
-    const bool anySolo = ssolo::anySoloInTree( root );
+    const bool anySolo = ssolo::anySoloInForce( root );
 
     for( STrack *t : closure.ordered ) {
         twLiveTrackPlan tp;
