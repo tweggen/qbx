@@ -874,6 +874,67 @@ D5's ABI and insert half, D4 (key rows); `tw.test.clap.duck`, `TestDuck`.
   `test_plugin_insert.cc`, as WideGen is gated there).
 - **AC3.5** Goldens byte-identical.
 
+**M3 as built (2026-10-27, QBX-252).** Every AC holds as written, at the
+closed form: the duck is a hard gate, so the measured ratios are exact. What
+the build found that this document did not say:
+
+- **Measured.** AC3.1, out/dry RMS on both channels, CLAP `tw.test.clap.duck`
+  and VST3 `TestDuck` alike: **0.25** over `[18432, 40960)`, **1** over
+  `[0, 16384)` and over `[43008, 65536)` (the bound is ±0.5 %; the gate is
+  `out = in * 0.25f`, so nothing is left to round). AC3.2: the unwired slot's
+  page is memcmp-equal to its input, and a counting double sees only the
+  legacy `process()` call, no `setRoutedInBuses()`, and one planned
+  dependency (two once keyed). AC3.3: `TestDuck` reports its sidechain
+  activation as one frame of tail (0 unkeyed, 1 keyed, 0 again), and down the
+  deliberately broken host path it measures out/dry **1** inside the key
+  window. AC3.4: MEAN and DUPLICATE are bit-exact against the page (and COPY,
+  the refused row, D9 and a generator are gated beside them). AC3.5: the
+  committed goldens and the full suite pass unchanged.
+- **The bus-aware call is `processBuses()`, not a third `process`.** D5 named
+  it `process( inBuses, outBuses, ... )`. The generator path passes a literal
+  `nullptr` for `in`, and two pointer overloads make that ambiguous; a backend
+  overriding one `process` would also hide the other. Its default forwards
+  `inBuses[0]` to the event-aware call, as D5 asked. `setRoutedInBuses( mask )`
+  is the input twin of M1's `setRoutedOutBuses`.
+- **The key is wired through one call, `twPluginInsert::setKeySource( component )`**,
+  which wires port 1 AND tells the processor the key's width
+  (`twPluginSlotProcessor::setKeyChannels`). The width is the key PRODUCER's
+  `getOutputChannels()`, so "chosen once per wiring" (inv. 7) is literal: the
+  D4 row is decided there and re-decided on a rebuild, never per page. A key
+  gathered under another width than the one decided (a rewire racing a
+  render) is fed as silence. M4's mixer pass calls `setKeySource` with
+  `STrack::sendTapComponent( preFader )`.
+- **`setInput()` keeps one teardown "parent" per component**, and it is the
+  producer of whatever was wired last; unwiring clears it. A key wired after
+  the main input would have made teardown call `removeInput(1)` on the KEY's
+  source, so `setKeySource` preserves the main input's bookkeeping (gated by
+  a wire + unwire + teardown).
+- **A change of key RESETS the plugin**, not only re-prepares it. D5 and the
+  M1 mask both say "the DSP does not continue across it", but a `prepare()`
+  at an unchanged rate is a no-op in CLAP and `haveLastEnd_ = false` resets
+  nothing on the effect path: a CLAP duck keyed by a loud key and then
+  unkeyed ducked the first 2048 frames of the unkeyed render. `setKeyChannels`
+  now calls `reset()` on every instance when the applied key changes.
+  **M1's `setRoutedOutBuses` has the same shape** (re-prepare, no reset) and
+  was left as it is: a routed aux bus changes no DSP state in any fixture, so
+  nothing measures it. Recorded here for whoever touches it next.
+- **AC3.3's "gate with teeth" is an env knob**, invariant 31's pattern:
+  `SMARAGD_VST3_NO_SIDECHAIN_BUS=1` makes `prepare()` skip the activation of a
+  fed input while still handing it the key, and `TestDuck` (which reads its
+  sidechain only when activated) then does not duck.
+- **A keyed generator is fed too** (D9 lists the generator rows): bus 0 is
+  null, bus 1 the key. A pre-roll and a live catch-up run with no key in
+  hand, so their sidechain hears silence; a key-dependent instrument's
+  pre-roll is therefore not the state a continuous run would reach. No
+  fixture is such an instrument.
+- **The insert now reports two input ports** (`getNInputs() == 2`, port 1
+  `kKeyPort`). An unwired port 1 is a null plug that nothing plans, negotiates
+  or reads; `plugins_test`'s port-count check moved from 1 to 2.
+- **Not gated:** the processor's own epoch bump in `setKeyChannels`. On the
+  one path that reaches it (`setKeySource`), `setInput()` has already bumped
+  the insert's epoch, so removing it breaks no case; it covers only the race
+  of a render between the two calls. Kept, and recorded as not gated.
+
 ### M4 — Sidechain: model, verbs, persistence (X2.2)
 
 D5's model half, D6 (first half), D7's key edge, D8 (`<sidechain>`).

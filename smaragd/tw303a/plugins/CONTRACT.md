@@ -556,7 +556,9 @@ Invariants:
    main bus wherever the format declared it and the rest follow in the
    format's order with the main one taken out (CLAP and VST3 were port-indexed
    before M1, which agreed only while the main port was port 0). The routing
-   is invariants 58-62. AU stays unrouted (proposal 55 §7).
+   is invariants 58-62; the INPUT half (a sidechain key on input bus 1) is
+   invariants 63-68, since proposal 55 M3. AU stays unrouted in both
+   directions (proposal 55 §7).
 35. AU IS macOS-ONLY AND ITS EVENT PATH IS UNVERIFIED (proposal 37 P2). The
    `aumu`/`aumi` enumeration, `MusicDeviceMIDIEvent` posted BEFORE
    `AudioUnitRender` with its own `inOffsetSampleFrame`,
@@ -1325,3 +1327,85 @@ different views of the same type.
     Memory: 256 kB per routed aux channel per cached page of the insert,
     counted in its page statistics (`accountedBytesWithAux`), so
     `describePageMemory` shows it (55 T11).
+
+## Sidechain inputs (proposal 55 M3)
+
+63. **AN INSERT HAS AN OPTIONAL SECOND INPUT, PORT 1, THE KEY, AND UNWIRED IT
+    IS NOTHING.** `twPluginInsert::getNInputs()` is 2 (`kKeyPort` = 1). An
+    unwired port 1 is a null plug: the base `planPage()` plans no dependency
+    for it, the negotiator wires nothing, and the render gathers nothing. The
+    chain's series wiring is port 0 only and never touches port 1 (gated: a
+    `reorderPlugin()` leaves a keyed insert's plug in place). Re-asserting a
+    key after anything that rebuilds a SLOT's wiring is the model's job
+    (proposal 55 M4, T4).
+
+64. **AN INSERT IS KEYED THROUGH `setKeySource()` AND NOTHING ELSE.** It wires
+    the source's output 0 into port 1 and tells the processor the key's width
+    (`setKeyChannels( source->getOutputChannels() )`); null unwires both. A
+    bare `setInput( kKeyPort, ... )` wires a plug the processor was never told
+    about, and the render ignores it (the gather runs only while
+    `keyChannels() > 0`). `setKeySource()` preserves the main input's teardown
+    bookkeeping (`parentComponent_` / `myInputIndex_`), which `setInput()`
+    otherwise overwrites with the KEY's producer -- after which teardown would
+    call `removeInput(1)` on the key's source.
+
+65. **THE KEY MAPPING IS PROPOSAL 55 D4'S KEY ROWS, DECIDED ONCE PER WIRING.**
+    For a key of C channels into the plugin's input bus 1 of S channels:
+    COPY (S == C, no arithmetic), MEAN (S == 1, C > 1, the sum of the C
+    channels divided by C), DUPLICATE (S == 2, C == 1), else REFUSED (silent,
+    logged once). A plugin with no non-main input bus refuses too. Like
+    routing (inv. 60), a key is defined only on a single-instance mapping of a
+    present plugin -- Direct, MonoFold and the generator rows; on DualMono,
+    Transparent, Unsupported or Missing the key is UNROUTABLE (55 D9). The key
+    width is KEPT through a rebuild, a missing plugin and a DualMono mapping,
+    and applied again when it can be. `describeKey()` reports
+    `keyChannels=C|busChannels=S|mapping=<copy|mean|duplicate|refused|unroutable|none>`.
+
+66. **AN UNKEYED SLOT IS UNCHANGED, AND A KEYED ONE IS TOLD BEFORE IT IS
+    FED** (55 inv. 2). While no key is APPLIED (no wiring, or a refused or
+    unroutable mapping) the processor never calls `setRoutedInBuses()` or
+    `processBuses()` and makes exactly the pre-M3 calls -- the legacy overload
+    on the non-automated Direct path. Applied, every instance learns
+    `setRoutedInBuses( 1 << 1 )` and is RE-PREPARED (VST3 activates the bus
+    there) and RESET -- the DSP does not continue across a change of key, and
+    that needs the explicit `reset()`: a `prepare()` at an unchanged rate is a
+    no-op in CLAP, and `haveLastEnd_ = false` resets nothing on the effect
+    path (gated: a CLAP duck keyed by a loud key, then unkeyed, is an identity
+    from its first frame). The insert's epoch is bumped,
+    and every call of a page render goes through `processBuses()` with
+    `inBuses[1]` the mapped key for that chunk. The output side of that call is
+    exactly what the pre-M3 call would have handed (inv. 61's full bus array
+    once an aux bus is routed). A generator's `inBuses[0]` is null. Gated by
+    `plugins_test` (a counting double, before and after a key) and the
+    committed goldens.
+
+67. **THE KEY IS READ FOR THE PAGE IT BELONGS TO, AT THE WIDTH IT WAS DECIDED
+    FOR, OR IT IS SILENCE.** The insert gathers port 1's page at the page's
+    own position (`fetchInputPage( 1, startPos )`, zero-padded past its valid
+    frames, the main gather's pattern) and hands `render()` the gather and its
+    width. The processor feeds it only to that page's run, and only when the
+    width matches `keyChannels()`; a key gathered under another width (a
+    rewire racing the render), the legacy pull, a generator's pre-roll and a
+    live catch-up all feed the sidechain SILENCE, never stale or mis-mapped
+    samples. Lock order stays downstream -> upstream: the key page is fetched
+    with no lock held, before the processor's mutex is taken.
+
+68. **`processBuses()` IS THE INPUT HALF OF THE ABI, AND ITS DEFAULT IS THE
+    EVENT-AWARE CALL.** `twPlugin::processBuses( inBuses, outBuses, ... )`
+    forwards `inBuses[0]` to the event-aware `process()` by default (inv. 33's
+    identity trick), so a backend that does not override it changes by not one
+    instruction. A distinct NAME, not a third `process` overload: the
+    generator path passes a literal `nullptr` for `in`, which two pointer
+    overloads would make ambiguous. `setRoutedInBuses( mask )` is the input
+    twin of `setRoutedOutBuses`. CLAP and VST3 override both and share one
+    render body (`processImpl_`): a FED input bus gets the caller's key, every
+    other non-main input gets its zeroed scratch back on every call -- the
+    pointer `prepare()` left there, so an unkeyed call is unchanged. CLAP
+    needs no activation; VST3 ACTIVATES exactly the fed input bus at
+    `prepare()`, and `SMARAGD_VST3_NO_SIDECHAIN_BUS=1` suppresses that
+    activation while still handing the key -- the deliberately broken host
+    path, inv. 31's pattern: `TestDuck` reads its sidechain only when
+    activated and reports activation as one frame of tail, and `plugins_test`
+    runs it down the broken path and watches it NOT duck. AU keeps the
+    default (55 §7). Fixtures: `tw.test.clap.duck` and VST3 `TestDuck`, the
+    keyed hard gate of proposal 55 §5.

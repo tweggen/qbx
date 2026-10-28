@@ -224,6 +224,185 @@ float *const *const *twPluginSlotProcessor::busArrayForChunk_nolock( float *cons
     return busArr_.data();
 }
 
+// --------------------------------------------------- the sidechain key (M3)
+
+const char *twKeyMappingName( twKeyMapping m )
+{
+    switch( m ) {
+    case twKeyMapping::None:       return "none";
+    case twKeyMapping::Copy:       return "copy";
+    case twKeyMapping::Mean:       return "mean";
+    case twKeyMapping::Duplicate:  return "duplicate";
+    case twKeyMapping::Refused:    return "refused";
+    case twKeyMapping::Unroutable: return "unroutable";
+    }
+    return "?";
+}
+
+void twPluginSlotProcessor::setKeyChannels( idx_t keyChannels )
+{
+    if( keyChannels < 0 ) keyChannels = 0;
+    std::lock_guard<std::mutex> lock( mutex_ );
+    if( keyChannels == keyChannels_ ) return;
+    keyChannels_      = keyChannels;
+    loggedKeyRefused_ = false;
+
+    // What the plugin is told is whether the key is APPLIED (a defined D4 row
+    // on a single-instance mapping of a present plugin), exactly as the
+    // routed mask tells it only the buses the slot renders (inv. 60).
+    const std::uint32_t before = appliedInMask_;
+    computeKeyLayout_nolock();
+    if( appliedInMask_ != before ) {
+        for( const std::unique_ptr<twPlugin> &p : instances_ )
+            if( p ) p->setRoutedInBuses( appliedInMask_ );
+        // VST3 may activate an input bus only while inactive: re-prepare, as a
+        // routed-mask change does. The DSP does not continue across it -- and
+        // that has to be SAID with a reset(): a prepare() at an unchanged
+        // rate is a no-op in CLAP, and haveLastEnd_ = false alone resets
+        // nothing on the effect path, so a key-held gate would otherwise carry
+        // its last state into the first frames rendered without the key.
+        if( preparedRate_ > 0 ) {
+            for( const std::unique_ptr<twPlugin> &p : instances_ )
+                if( p ) p->prepare( (std::uint32_t)preparedRate_,
+                                    (std::uint32_t)kChunkFrames );
+        }
+        resetInstances_nolock();
+        haveLastEnd_ = false;
+    }
+
+    // THE KEY IS STATE: the insert's pages were rendered with another key
+    // (or none), so they are stale from the first frame.
+    bumpParamEpoch_nolock();
+}
+
+idx_t twPluginSlotProcessor::keyChannels() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return keyChannels_;
+}
+
+twKeyMapping twPluginSlotProcessor::keyMapping() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return keyMapping_;
+}
+
+std::string twPluginSlotProcessor::describeKey() const
+{
+    std::lock_guard<std::mutex> lock( mutex_ );
+    return "keyChannels=" + std::to_string( (long long)keyChannels_ ) +
+           "|busChannels=" + std::to_string( (unsigned)keyBusChannels_ ) +
+           "|mapping=" + twKeyMappingName( keyMapping_ );
+}
+
+void twPluginSlotProcessor::computeKeyLayout_nolock()
+{
+    keyMapping_     = twKeyMapping::None;
+    keyBusChannels_ = 0;
+    appliedInMask_  = 0;
+    if( keyChannels_ <= 0 ) return;
+
+    if( !auxRoutable_nolock() ) {
+        // 55 D9: on DualMono "the plugin's sidechain" has N candidates, and a
+        // Transparent / Unsupported / Missing slot has no plugin to feed. The
+        // key is kept and comes back with the plugin.
+        keyMapping_ = twKeyMapping::Unroutable;
+        if( !loggedKeyRefused_ ) {
+            loggedKeyRefused_ = true;
+            TW_LOGW( "plugins", "[slot] a %d-channel key is wired, but this slot cannot "
+                     "feed it (mode %d, state %d): only a single-instance mapping of a "
+                     "present plugin has 'the plugin's sidechain' (proposal 55 D9). The "
+                     "key is silent until it can.",
+                     (int)keyChannels_, (int)mode_, (int)state_ );
+        }
+        return;
+    }
+
+    const twPlugin   *p  = instances_[0].get();
+    const std::size_t nb = std::min<std::size_t>( p->audioInBusCount(), 32 );
+    const idx_t       S  = nb > 1 ? (idx_t)p->audioInBus( 1 ).channels : 0;
+    const idx_t       C  = keyChannels_;
+    keyBusChannels_ = (std::uint16_t)S;
+
+    // Proposal 55 D4, the key rows -- and nothing else: "anything else is
+    // refused", never guessed per page.
+    if( S <= 0 )                   keyMapping_ = twKeyMapping::Refused;
+    else if( S == C )              keyMapping_ = twKeyMapping::Copy;
+    else if( S == 1 && C > 1 )     keyMapping_ = twKeyMapping::Mean;
+    else if( S == 2 && C == 1 )    keyMapping_ = twKeyMapping::Duplicate;
+    else                           keyMapping_ = twKeyMapping::Refused;
+
+    if( keyMapping_ == twKeyMapping::Refused ) {
+        if( !loggedKeyRefused_ ) {
+            loggedKeyRefused_ = true;
+            if( S <= 0 )
+                TW_LOGW( "plugins", "[slot] a %d-channel key is wired, but the plugin has "
+                         "no sidechain input bus; the key is ignored (proposal 55 D4)",
+                         (int)C );
+            else
+                TW_LOGW( "plugins", "[slot] a %d-channel key into a %d-channel sidechain "
+                         "bus has no mapping (proposal 55 D4); the key is SILENT",
+                         (int)C, (int)S );
+        }
+        return;
+    }
+
+    appliedInMask_ = 1u << 1;
+    inBusArr_.assign( nb, nullptr );
+    keyChunk_.assign( (std::size_t)S, nullptr );
+    // The Mean row's output and the silent key, one chunk per bus channel.
+    // Sized here, on the UI thread, so the render allocates nothing.
+    keyMapped_.assign( (std::size_t)S, std::vector<sample_t>( (std::size_t)kChunkFrames, 0.0f ) );
+}
+
+const float *const *const *twPluginSlotProcessor::inBusArrayForChunk_nolock(
+    const float *const *mainIn, length_t off, length_t n )
+{
+    for( const float *const *&b : inBusArr_ ) b = nullptr;
+    if( inBusArr_.empty() ) inBusArr_.assign( 1, nullptr );
+    inBusArr_[0] = mainIn;
+    if( inBusArr_.size() < 2 ) return inBusArr_.data();
+
+    const std::size_t S = keyChunk_.size();
+    const sample_t *const *k = keyIn_;
+    if( !k ) {
+        // No key in hand (the legacy pull, a pre-roll, a key gathered under
+        // another width): the sidechain hears silence, never stale samples.
+        for( std::size_t s = 0; s < S; ++s ) {
+            std::fill( keyMapped_[s].begin(), keyMapped_[s].begin() + n, 0.0f );
+            keyChunk_[s] = keyMapped_[s].data();
+        }
+    } else {
+        switch( keyMapping_ ) {
+        case twKeyMapping::Copy:
+            for( std::size_t s = 0; s < S; ++s ) keyChunk_[s] = k[s] + off;
+            break;
+        case twKeyMapping::Duplicate:
+            for( std::size_t s = 0; s < S; ++s ) keyChunk_[s] = k[0] + off;
+            break;
+        case twKeyMapping::Mean: {
+            const idx_t C   = keyChannels_;
+            sample_t   *dst = keyMapped_[0].data();
+            for( length_t i = 0; i < n; ++i ) {
+                sample_t sum = 0.0f;
+                for( idx_t c = 0; c < C; ++c ) sum += k[c][off + i];
+                dst[i] = sum / (sample_t)C;
+            }
+            keyChunk_[0] = dst;
+            break;
+        }
+        default:
+            for( std::size_t s = 0; s < S; ++s ) {
+                std::fill( keyMapped_[s].begin(), keyMapped_[s].begin() + n, 0.0f );
+                keyChunk_[s] = keyMapped_[s].data();
+            }
+            break;
+        }
+    }
+    inBusArr_[1] = keyChunk_.data();
+    return inBusArr_.data();
+}
+
 // --- automation (proposal 37 P5, design D5) ---------------------------------
 
 void twPluginSlotProcessor::setParamCurves(
@@ -531,6 +710,9 @@ void twPluginSlotProcessor::rebuild_nolock()
     auxLayout_.clear();
     auxChannels_  = 0;
     appliedMask_  = 0;
+    appliedInMask_ = 0;
+    keyMapping_   = twKeyMapping::None;
+    keyBusChannels_ = 0;
     preparedRate_ = 0;
     mode_         = twPluginSlotMode::Transparent;
     state_        = twPluginSlotState::Active;
@@ -649,6 +831,7 @@ void twPluginSlotProcessor::rebuild_nolock()
                      "%d channel(s) (proposal 08 §Layer 3); the slot is UNSUPPORTED and "
                      "loads transparent", (int)nIn, (int)nOut, (int)nChannels_ );
         }
+        computeKeyLayout_nolock();   // a kept key reports itself unroutable
         return;
     }
 
@@ -662,6 +845,11 @@ void twPluginSlotProcessor::rebuild_nolock()
     if( appliedMask_ != 0 )
         for( const std::unique_ptr<twPlugin> &p : instances_ )
             p->setRoutedOutBuses( appliedMask_ );
+    // ...and its key (proposal 55 M3), on the same terms.
+    computeKeyLayout_nolock();
+    if( appliedInMask_ != 0 )
+        for( const std::unique_ptr<twPlugin> &p : instances_ )
+            p->setRoutedInBuses( appliedInMask_ );
 
     // prepare() is reached from setChannelCount(), i.e. from the UI thread —
     // which is where CLAP says activate() belongs.
@@ -755,7 +943,19 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
                 inPtrs_[c]  = in[c]  + off;
                 outPtrs_[c] = out[c] + off;
             }
-            if( appliedMask_ != 0 ) {
+            if( appliedInMask_ != 0 ) {
+                // KEYED (proposal 55 M3): the bus-aware call, its input bus 1
+                // the mapped key. The output side is exactly what the call
+                // below would have handed: the full bus array once an aux bus
+                // is routed, the main bus alone otherwise.
+                twEventOut noSink;
+                float *const *const one[1] = { outPtrs_.data() };
+                instances_[0]->processBuses(
+                    inBusArrayForChunk_nolock( inPtrs_.data(), off, n ),
+                    appliedMask_ != 0 ? busArrayForChunk_nolock( outPtrs_.data(), off, true )
+                                      : one,
+                    (std::uint32_t)n, list, automate ? autoSink_ : noSink, ctx );
+            } else if( appliedMask_ != 0 ) {
                 // ROUTED AUX (proposal 55 M1): the bus-aware call, with a bus
                 // array as long as the plugin's bus list -- the main bus where
                 // it always went and each routed aux bus into this chunk of
@@ -802,7 +1002,15 @@ void twPluginSlotProcessor::runChunked_nolock( const sample_t *const *in,
             inPtrs_[1]  = in[0] + off;
             outPtrs_[0] = foldOut_[0].data();
             outPtrs_[1] = foldOut_[1].data();
-            if( appliedMask_ != 0 ) {
+            if( appliedInMask_ != 0 ) {
+                twEventOut noSink;
+                float *const *const one[1] = { outPtrs_.data() };
+                instances_[0]->processBuses(
+                    inBusArrayForChunk_nolock( inPtrs_.data(), off, n ),
+                    appliedMask_ != 0 ? busArrayForChunk_nolock( outPtrs_.data(), off, true )
+                                      : one,
+                    (std::uint32_t)n, list, automate ? autoSink_ : noSink, ctx );
+            } else if( appliedMask_ != 0 ) {
                 twEventOut noSink;
                 instances_[0]->process( inPtrs_.data(),
                                         busArrayForChunk_nolock( outPtrs_.data(), off, true ),
@@ -1132,7 +1340,17 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
         }
 
         sink.clear();
-        if( appliedMask_ != 0 ) {
+        if( appliedInMask_ != 0 ) {
+            // KEYED (proposal 55 M3): a generator has no main input, so bus 0
+            // is null and bus 1 is the key -- silent during a pre-roll or a
+            // live catch-up, which run with no key in hand.
+            float *const *const one[1] = { genPtrs_.data() };
+            plug->processBuses( inBusArrayForChunk_nolock( nullptr, off, n ),
+                                appliedMask_ != 0
+                                    ? busArrayForChunk_nolock( genPtrs_.data(), off, !discard )
+                                    : one,
+                                (std::uint32_t)n, list, sink, ctx );
+        } else if( appliedMask_ != 0 ) {
             // ROUTED AUX (proposal 55 M1): the generator's aux buses go to the
             // side page in the same call. Never while discarding -- a bypassed
             // instrument's returns are silent like its main output, and the
@@ -1200,7 +1418,8 @@ void twPluginSlotProcessor::runGenerator_nolock( const sample_t *const *in,
 void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
                                     length_t len, offset_t startPos,
                                     bool positional, int sampleRate,
-                                    std::shared_ptr<twOutputPage> *auxOut )
+                                    std::shared_ptr<twOutputPage> *auxOut,
+                                    const sample_t *const *key, idx_t keyCh )
 {
     if( auxOut ) auxOut->reset();
     if( len <= 0 ) return;
@@ -1217,6 +1436,14 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
         sample_t **&base;
         ~AuxGuard() { base = nullptr; }
     } auxGuard{ auxBase_ };
+    // THE KEY (proposal 55 M3): held for the page's own run only, and only
+    // when it was gathered at the width the mapping was decided for.
+    struct KeyGuard {
+        const sample_t *const *&k;
+        ~KeyGuard() { k = nullptr; }
+    } keyGuard{ keyIn_ };
+    const sample_t *const *pageKey =
+        ( key && appliedInMask_ != 0 && keyCh == keyChannels_ ) ? key : nullptr;
     if( auxOut && !auxLayout_.empty() && auxChannels_ > 0 &&
         len <= (length_t)twOutputPage::FRAME_CAPACITY ) {
         side = std::make_shared<twOutputPage>( auxChannels_ );
@@ -1368,6 +1595,7 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
             mergeLiveBlock_nolock( pageBlock_, liveBlock_ );
         }
         if( side ) auxBase_ = auxBaseStore_.data();
+        keyIn_ = pageKey;
         runGenerator_nolock( in, out, len, startPos, pageBlock_, false, sampleRate );
         return;
     }
@@ -1399,6 +1627,7 @@ void twPluginSlotProcessor::render( const sample_t *const *in, sample_t **out,
     }
 
     if( side ) auxBase_ = auxBaseStore_.data();
+    keyIn_ = pageKey;
     runChunked_nolock( in, out, len, startPos, positional );
 }
 

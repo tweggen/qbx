@@ -53,8 +53,13 @@ public:
 
     // twComponent interface. ONE PORT each way — the channel dimension lives in
     // the page, not in the patch bay (§4.2 / §7 trap 8: getNOutputs() is the
-    // port count and must never be merged with getOutputChannels()).
-    idx_t getNInputs() const override  { return 1; }
+    // port count and must never be merged with getOutputChannels()) — plus,
+    // since proposal 55 M3, an OPTIONAL second input: port 1, the sidechain
+    // KEY (kKeyPort). Unwired, it is a null plug that nothing reads, plans or
+    // negotiates, so an unkeyed insert is byte for byte what it was. The
+    // chain's series wiring is port 0 only and never touches it.
+    static constexpr idx_t kKeyPort = 1;
+    idx_t getNInputs() const override  { return 2; }
     idx_t getNOutputs() const override { return 1; }
 
     // §4.2. The width the slot was configured for. This is what makes
@@ -114,6 +119,18 @@ public:
     // a producer.
     length_t pullInputStreaming( sample_t *dst, length_t len );
 
+    // THE SIDECHAIN KEY (proposal 55 D5, M3). Wires `source`'s output 0 into
+    // port 1 and tells the processor the key's width (the source's
+    // getOutputChannels()), from which it decides the D4 key mapping once;
+    // null unwires it. This is the ONE way to key an insert -- a bare
+    // setInput(kKeyPort, ...) wires a plug the processor was never told about
+    // and is ignored. Both halves stale the insert's pages (setInput bumps the
+    // epoch, and so does the processor). The caller owns the downstream path
+    // and re-asserting the key after anything that rebuilds the slot's wiring
+    // (proposal 55 M4: the mixer pass).
+    void setKeySource( const std::shared_ptr<twComponent> &source );
+    bool keyWired() const;
+
     // Plugin control. Both forward to the shared processor.
     void setBypass( bool bypass );
     bool getBypass() const;
@@ -157,6 +174,12 @@ private:
     std::vector<sample_t>         gather_;
     std::size_t                   gatherStride_ = 0;
     std::vector<const sample_t *> inPtrs_;
+    // The KEY gather (proposal 55 M3), the same pattern on port 1: one
+    // render-sized buffer per key channel, zero-padded past the key page's
+    // valid frames. Untouched while the slot is not keyed.
+    std::vector<sample_t>         keyGather_;
+    std::size_t                   keyGatherStride_ = 0;
+    std::vector<const sample_t *> keyPtrs_;
 };
 
 }  // namespace audio

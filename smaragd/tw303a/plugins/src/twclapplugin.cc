@@ -150,6 +150,15 @@ public:
         routedOutMask_.store( busMask & ~1u, std::memory_order_release );
     }
     twPluginBusInfo      audioOutBus( std::size_t i ) const override;
+    void                 setRoutedInBuses( std::uint32_t busMask ) override
+    {
+        // A sidechain needs no activation in CLAP either: a fed port simply
+        // gets the caller's buffers in process() (proposal 55 M3).
+        routedInMask_.store( busMask & ~1u, std::memory_order_release );
+    }
+    void processBuses( const float *const *const *inBuses, float *const *const *outBuses,
+                       std::uint32_t nframes, const twEventList &events,
+                       twEventOut &eventsOut, const twProcessContext &ctx ) override;
     std::size_t          audioInBusCount() const override { return inPortChans_.size(); }
     twPluginBusInfo      audioInBus( std::size_t i ) const override;
     std::uint32_t        tailFrames() const override;
@@ -273,6 +282,16 @@ private:
     // every plugin seen so far). Built once in readPortLayout().
     std::vector<int>           outBusPort_, inBusPort_;
     std::atomic<std::uint32_t> routedOutMask_{ 0 };
+    // Fed AUX INPUT buses (proposal 55 M3): a sidechain key. Per fed port the
+    // caller's channel pointers for this call, sized at prepare().
+    std::atomic<std::uint32_t> routedInMask_{ 0 };
+    std::vector<std::vector<float *>> auxInPtrs_;
+    // The one render body: the event-aware process() is processImpl_ with no
+    // input-bus array, processBuses() is it with one.
+    void processImpl_( const float *const *in, const float *const *const *inBuses,
+                       float *const *const *outBuses, std::uint32_t nframes,
+                       const twEventList &hostEvents, twEventOut &eventsOut,
+                       const twProcessContext &ctx );
     // Per routed port, the caller's channel pointers for this call. Sized at
     // prepare(), never in process().
     std::vector<std::vector<float *>> auxOutPtrs_;
@@ -1066,6 +1085,9 @@ void twClapPlugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     auxOutPtrs_.assign( outPortChans_.size(), std::vector<float *>{} );
     for( std::size_t p = 0; p < outPortChans_.size(); ++p )
         auxOutPtrs_[p].assign( outPortChans_[p], nullptr );
+    auxInPtrs_.assign( inPortChans_.size(), std::vector<float *>{} );
+    for( std::size_t p = 0; p < inPortChans_.size(); ++p )
+        auxInPtrs_[p].assign( inPortChans_[p], nullptr );
 
     mainInPtrs_.assign( io_.audioInputs, nullptr );
     mainOutPtrs_.assign( io_.audioOutputs, nullptr );
@@ -1574,6 +1596,24 @@ void twClapPlugin::process( const float *const *in, float *const *const *outBuse
                             std::uint32_t nframes, const twEventList &hostEvents,
                             twEventOut &eventsOut, const twProcessContext &ctx )
 {
+    processImpl_( in, nullptr, outBuses, nframes, hostEvents, eventsOut, ctx );
+}
+
+void twClapPlugin::processBuses( const float *const *const *inBuses,
+                                 float *const *const *outBuses, std::uint32_t nframes,
+                                 const twEventList &hostEvents, twEventOut &eventsOut,
+                                 const twProcessContext &ctx )
+{
+    processImpl_( ( inBuses && !inPortChans_.empty() ) ? inBuses[0] : nullptr, inBuses,
+                  outBuses, nframes, hostEvents, eventsOut, ctx );
+}
+
+void twClapPlugin::processImpl_( const float *const *in,
+                                 const float *const *const *inBuses,
+                                 float *const *const *outBuses, std::uint32_t nframes,
+                                 const twEventList &hostEvents, twEventOut &eventsOut,
+                                 const twProcessContext &ctx )
+{
     // outBuses[0] is the main bus, as the legacy overload always used it. An
     // aux bus is read only when ROUTED (proposal 55 M1, see below), because
     // only then does the caller promise an array as long as the bus list.
@@ -1657,6 +1697,31 @@ void twClapPlugin::process( const float *const *in, float *const *const *outBuse
             } else {
                 outBufs_[port].data32 = outScratch_[port].ptrs.empty()
                                             ? nullptr : outScratch_[port].ptrs.data();
+            }
+        }
+    }
+
+    // FED AUX INPUT BUSES (proposal 55 M3): a keyed sidechain port gets the
+    // caller's key (the slot's mapped key chunk); every other non-main input
+    // port gets its own zeroed scratch back, which is the pointer prepare()
+    // left there, so an unkeyed call hands the plugin exactly what it did.
+    // CLAP wants float**; the key buffers are host scratch, as `in` is.
+    {
+        const std::uint32_t fed = routedInMask_.load( std::memory_order_acquire );
+        for( std::size_t b = 1; b < inBusPort_.size(); ++b ) {
+            const std::size_t port = (std::size_t)inBusPort_[b];
+            if( port >= inBufs_.size() || port >= inScratch_.size() ) continue;
+            const float *const *caller = nullptr;
+            if( b < 32 && ( fed & ( 1u << b ) ) && inBuses )
+                caller = inBuses[b];
+            if( caller ) {
+                std::vector<float *> &ptrs = auxInPtrs_[port];
+                for( std::size_t c = 0; c < ptrs.size(); ++c )
+                    ptrs[c] = const_cast<float *>( caller[c] );
+                inBufs_[port].data32 = ptrs.empty() ? nullptr : ptrs.data();
+            } else {
+                inBufs_[port].data32 = inScratch_[port].ptrs.empty()
+                                           ? nullptr : inScratch_[port].ptrs.data();
             }
         }
     }

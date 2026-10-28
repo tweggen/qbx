@@ -177,6 +177,10 @@ public:
     twPluginCapabilities capabilities() const override { return caps_; }
     std::size_t          audioOutBusCount() const override { return outBusShape_.size(); }
     void                 setRoutedOutBuses( std::uint32_t busMask ) override;
+    void                 setRoutedInBuses( std::uint32_t busMask ) override;
+    void processBuses( const float *const *const *inBuses, float *const *const *outBuses,
+                       std::uint32_t nframes, const twEventList &events,
+                       twEventOut &eventsOut, const twProcessContext &ctx ) override;
     twPluginBusInfo      audioOutBus( std::size_t i ) const override;
     std::size_t          audioInBusCount() const override { return inBusShape_.size(); }
     twPluginBusInfo      audioInBus( std::size_t i ) const override;
@@ -264,6 +268,18 @@ private:
     std::atomic<std::uint32_t>         activeOutMask_{ 0 };  // read in process()
     std::vector<std::vector<float *>>  auxOutPtrs_;
     std::vector<float *const *>        legacyBuses_;
+    // FED AUX INPUTS (proposal 55 M3): a sidechain key. The wanted mask is
+    // what setRoutedInBuses() asked for; the routed one is what prepare()
+    // settled, and what process() hands caller buffers for. prepare()
+    // ACTIVATES exactly the routed inputs (see SMARAGD_VST3_NO_SIDECHAIN_BUS
+    // there for the one deliberate exception).
+    std::uint32_t                      wantedInMask_ = 0;    // hostMutex_
+    std::atomic<std::uint32_t>         routedInMask_{ 0 };   // read in process()
+    std::vector<std::vector<float *>>  auxInPtrs_;
+    void processImpl_( const float *const *in, const float *const *const *inBuses,
+                       float *const *const *outBuses, std::uint32_t nframes,
+                       const twEventList &hostEvents, twEventOut &eventsOut,
+                       const twProcessContext &ctx );
 
     std::vector<twPluginParamInfo> params_;
     std::vector<Vst::ParamID>      paramIds_;
@@ -547,6 +563,17 @@ void twVst3Plugin::setRoutedOutBuses( std::uint32_t busMask )
     preparedMax_.store( 0, std::memory_order_release );
 }
 
+void twVst3Plugin::setRoutedInBuses( std::uint32_t busMask )
+{
+    std::lock_guard<std::mutex> lock( hostMutex_ );
+    busMask &= ~1u;
+    if( busMask == wantedInMask_ ) return;
+    wantedInMask_ = busMask;
+    // As setRoutedOutBuses: activation is a setup change, made by the next
+    // prepare(), which must not take its idempotent early return.
+    preparedMax_.store( 0, std::memory_order_release );
+}
+
 // Event (note) buses + what the CONTROLLER offers (proposal 37 §5.2).
 //
 // VST3 puts the two halves of "can this thing take notes" in two places: the
@@ -770,12 +797,34 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     // 55 M1): an aux bus left active would have the plugin expecting a reader
     // we never supply, and an inactive one may legally be left unwritten,
     // which is why a routed bus must be switched on rather than merely handed
-    // buffers. Inputs: main only -- there is no sidechain routing yet (M3).
+    // buffers. Inputs: main, and of the rest exactly the FED aux inputs -- a
+    // keyed sidechain (proposal 55 M3) -- for the same reason: a plugin may
+    // ignore an input bus that was never switched on, and a real sidechain
+    // compressor does, so a key handed to an inactive bus would never duck.
     // Buffers are still handed over for inactive buses — the spec requires the
     // array and the channel count to match regardless.
-    for( std::size_t i = 0; i < inBusShape_.size(); ++i )
-        component_->activateBus( Vst::kAudio, Vst::kInput, (int32)i,
-                                 (int)i == mainInBus_ );
+    //
+    // SMARAGD_VST3_NO_SIDECHAIN_BUS=1 SUPPRESSES the activation of a fed aux
+    // input while still handing it the key -- the deliberately broken host
+    // path, which exists for invariant 31's reason: plugins_test runs TestDuck
+    // down it and watches it NOT duck, which is what proves the activation is
+    // load-bearing. Read per prepare(). Never set in production.
+    std::uint32_t routedIn = 0;
+    for( std::size_t b = 1; b < inBusIndex_.size() && b < 32; ++b )
+        if( wantedInMask_ & ( 1u << b ) ) routedIn |= ( 1u << b );
+    const char *noSideBus = std::getenv( "SMARAGD_VST3_NO_SIDECHAIN_BUS" );
+    const bool  activateSide = !( noSideBus && noSideBus[0] == '1' );
+    if( !activateSide && routedIn != 0 )
+        TW_LOGW( "plugins", "[vst3] SMARAGD_VST3_NO_SIDECHAIN_BUS=1: NOT activating the "
+                 "sidechain input of '%s' — this is the deliberately broken host path",
+                 uid_.c_str() );
+    for( std::size_t i = 0; i < inBusShape_.size(); ++i ) {
+        bool on = (int)i == mainInBus_;
+        for( std::size_t b = 1; !on && activateSide && b < inBusIndex_.size() && b < 32; ++b )
+            on = inBusIndex_[b] == (int)i && ( routedIn & ( 1u << b ) );
+        component_->activateBus( Vst::kAudio, Vst::kInput, (int32)i, on );
+    }
+    routedInMask_.store( routedIn, std::memory_order_release );
     std::uint32_t activeOut = 0;
     for( std::size_t b = 1; b < outBusIndex_.size() && b < 32; ++b )
         if( wantedOutMask_ & ( 1u << b ) ) activeOut |= ( 1u << b );
@@ -851,6 +900,10 @@ void twVst3Plugin::prepare( std::uint32_t sampleRate, std::uint32_t maxBlock )
     for( std::size_t i = 0; i < outBusShape_.size(); ++i )
         auxOutPtrs_[i].assign( (std::size_t)std::max<int32>( 0, outBusShape_[i].channels ),
                                nullptr );
+    auxInPtrs_.assign( inBusShape_.size(), std::vector<float *>{} );
+    for( std::size_t i = 0; i < inBusShape_.size(); ++i )
+        auxInPtrs_[i].assign( (std::size_t)std::max<int32>( 0, inBusShape_[i].channels ),
+                              nullptr );
 
     mainInPtrs_.assign( io_.audioInputs, nullptr );
     mainOutPtrs_.assign( io_.audioOutputs, nullptr );
@@ -1284,6 +1337,24 @@ void twVst3Plugin::process( const float *const *in, float *const *const *outBuse
                             std::uint32_t nframes, const twEventList &hostEvents,
                             twEventOut &eventsOut, const twProcessContext &ctx )
 {
+    processImpl_( in, nullptr, outBuses, nframes, hostEvents, eventsOut, ctx );
+}
+
+void twVst3Plugin::processBuses( const float *const *const *inBuses,
+                                 float *const *const *outBuses, std::uint32_t nframes,
+                                 const twEventList &hostEvents, twEventOut &eventsOut,
+                                 const twProcessContext &ctx )
+{
+    processImpl_( ( inBuses && !inBusShape_.empty() ) ? inBuses[0] : nullptr, inBuses,
+                  outBuses, nframes, hostEvents, eventsOut, ctx );
+}
+
+void twVst3Plugin::processImpl_( const float *const *in,
+                                 const float *const *const *inBuses,
+                                 float *const *const *outBuses, std::uint32_t nframes,
+                                 const twEventList &hostEvents, twEventOut &eventsOut,
+                                 const twProcessContext &ctx )
+{
     // outBuses[0] is the main bus. An aux bus is read only when ROUTED and
     // activated (proposal 55 M1, below).
     float *const *out = ( outBuses && !outBusShape_.empty() ) ? outBuses[0] : nullptr;
@@ -1356,6 +1427,30 @@ void twVst3Plugin::process( const float *const *in, float *const *const *outBuse
             } else {
                 outBufs_[vb].channelBuffers32 = outBusPtrs_[vb].empty()
                                                     ? nullptr : outBusPtrs_[vb].data();
+            }
+        }
+    }
+
+    // FED AUX INPUTS (proposal 55 M3): a routed sidechain input with a
+    // non-null entry gets the caller's key; every other non-main input gets
+    // its zeroed scratch back -- the pointer prepare() left there, so an
+    // unkeyed call hands the plugin exactly what it did before.
+    {
+        const std::uint32_t fed = routedInMask_.load( std::memory_order_acquire );
+        for( std::size_t b = 1; b < inBusIndex_.size(); ++b ) {
+            const std::size_t vb = (std::size_t)inBusIndex_[b];
+            if( vb >= inBufs_.size() || vb >= inBusPtrs_.size() ) continue;
+            const float *const *caller = nullptr;
+            if( b < 32 && ( fed & ( 1u << b ) ) && inBuses )
+                caller = inBuses[b];
+            if( caller ) {
+                std::vector<float *> &ptrs = auxInPtrs_[vb];
+                for( std::size_t c = 0; c < ptrs.size(); ++c )
+                    ptrs[c] = const_cast<float *>( caller[c] );
+                inBufs_[vb].channelBuffers32 = ptrs.empty() ? nullptr : ptrs.data();
+            } else {
+                inBufs_[vb].channelBuffers32 = inBusPtrs_[vb].empty()
+                                                   ? nullptr : inBusPtrs_[vb].data();
             }
         }
     }
