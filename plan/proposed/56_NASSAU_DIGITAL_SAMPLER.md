@@ -1149,3 +1149,35 @@ built, and where the text above did not survive the build:
     inverse rebuilds a NEW slot from descriptor and blob; a model child is in
     neither). `sampler-test-install` (Q0's test verb) bypasses the model; the
     next model edit on the same slot replaces its initializer.
+
+
+### Core bump to nassau-digital 5adc61a (2026-10-27)
+
+`NASSAU_DIGITAL_GIT_REF` moved from 041456a to 5adc61a (nassau-digital main,
+nassau-digital#17). The core now carries gates C5 (drive, filter, kit bus, on
+nassau-dsp's filters) and C6 (main + 8 aux outputs); C7 and C8 were already in
+at 041456a. The canonical locator `cmake/bootstrap/NassauDigital.cmake` did not
+change between the two refs, so qbx's verbatim copy stands.
+
+1. **nassau-dsp is found by the core, not by qbx** (§4.1). The core includes
+   its own verbatim `cmake/NassauDSP.cmake` with `NASSAU_DSP_GIT_REF` 76e38fb
+   and resolves an explicit `NASSAU_DSP_DIR`, then `../nassau-dsp` beside the
+   CORE's checkout, then a fetch. A bare qbx clone (and qbx's CI) fetches both
+   (`nassau-dsp: fetched 76e38fb…`, `nassau-digital: fetched 5adc61a…`); the
+   sibling workspace finds both as siblings. qbx needs no line of its own for
+   nassau-dsp. §7's "a stale sibling builds stale core code" now holds for
+   nassau-dsp as well.
+2. **The zone filter defaults to `off`** (nassau-digital#17, the author's
+   decision of 2026-10-27), a true bypass, so a program that names no filter
+   renders exactly as before C5. Measured: `sampler_test` D stays at
+   7.8e-4 (L 0.000782686, R 0.000391343) and `sampler_q0_note.wav` is still
+   byte-identical; no golden or bound moved. An interim build against d464b79,
+   where C5's default was a 24 dB low-pass at 20 kHz, moved D to 1.74e-2 and
+   broke the Q0 golden; that ref was never pinned.
+3. **B7 holds with no change.** `tw/sampler` calls the core's main-only
+   `process(…, outL, outR, n)` overload, under which every zone plays on main
+   (an aux output with no buffer counts as unrouted). The routed mask is not
+   forwarded to the core yet; when Q8 forwards it, note that the core's mask
+   is `twSamplerHost::setRoutedOutputs`'s layout (bit k = aux k + 1), which is
+   the slot processor's `setRoutedOutBuses` mask (main = bit 0) shifted right
+   by one.
