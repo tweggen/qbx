@@ -305,6 +305,7 @@ SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
         }
     }
     if (expectSecondWidth_ >= 0.0 || expectScrollX_ >= 0
+        || expectHScroll_ >= 0
         || !snapshot_.isEmpty() || !compareTo_.isEmpty()
         || minScrollX_ >= 0) {
         const QString view = win->arrangerDescribeView();
@@ -331,6 +332,20 @@ SApplyResult SAssertLaneViewAction::apply(SProject * /*project*/)
             if (!m.hasMatch() || got != expectScrollX_) {
                 qWarning() << "assert-lane-view FAILED: scrollX=" << got
                            << "expected" << expectScrollX_ << "in" << view;
+                return {false, nullptr};
+            }
+        }
+        // QBX-255: the SCROLL BAR's own value. Checked separately from
+        // `scrollX` and never derived from it -- the whole point is that the
+        // two can disagree, and did after every project open.
+        if (expectHScroll_ >= 0) {
+            const QRegularExpression re(QStringLiteral("hScroll=([0-9]+)"));
+            const QRegularExpressionMatch m = re.match(view);
+            const qlonglong got = m.hasMatch()
+                ? (qlonglong) m.captured(1).toULongLong() : -1;
+            if (!m.hasMatch() || got != expectHScroll_) {
+                qWarning() << "assert-lane-view FAILED: hScroll=" << got
+                           << "expected" << expectHScroll_ << "in" << view;
                 return {false, nullptr};
             }
         }
@@ -386,6 +401,8 @@ void SAssertLaneViewAction::writeXml(QDomElement &elem) const
         elem.setAttribute("secondWidth", expectSecondWidth_);
     if (expectScrollX_ >= 0)
         elem.setAttribute("scrollX", (qlonglong) expectScrollX_);
+    if (expectHScroll_ >= 0)
+        elem.setAttribute("hScroll", (qlonglong) expectHScroll_);
     if (!snapshot_.isEmpty())  elem.setAttribute("snapshot", snapshot_);
     if (!compareTo_.isEmpty()) elem.setAttribute("compareTo", compareTo_);
     if (minScrollX_ >= 0)      elem.setAttribute("minScrollX", (qlonglong) minScrollX_);
@@ -400,6 +417,8 @@ bool SAssertLaneViewAction::readXml(const QDomElement &elem, int /*version*/)
         ? elem.attribute("secondWidth").toDouble() : -1.0;
     expectScrollX_ = elem.hasAttribute("scrollX")
         ? (qlonglong) elem.attribute("scrollX").toULongLong() : -1;
+    expectHScroll_ = elem.hasAttribute("hScroll")
+        ? (qlonglong) elem.attribute("hScroll").toULongLong() : -1;
     expectLaneScale_ = elem.hasAttribute("laneScale")
         ? elem.attribute("laneScale").toDouble() : -1.0;
     expectTakesExpanded_ = elem.hasAttribute("takesExpanded")

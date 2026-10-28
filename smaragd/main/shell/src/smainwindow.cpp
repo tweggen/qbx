@@ -5344,13 +5344,21 @@ QString SMainWindow::describeLaneView( const QString &trackPath )
 // TEST ENTRY POINT (fix/track-list-polish m): the arranger's zoom/pan, the
 // same two numbers loadViewStateFromProject()/saveViewStateToProject() round
 // trip through the project. "" when there is no arranger.
+//
+// `hScroll` (QBX-255) is the SCROLL BAR's own value, in the same frame domain
+// as `scrollX`, so a case can state that the THUMB agrees with the canvas --
+// which for three releases it did not after any project open. APPENDED, never
+// inserted: the assert-* verbs match substrings of this string, and `hScroll`
+// is spelled so the existing `scrollX=([0-9]+)` cannot match inside it (which
+// `hScrollX` would have allowed).
 QString SMainWindow::arrangerDescribeView()
 {
     SStdMixerView *v = ensureArranger_();
     if( !v || !v->contentView() ) return QString();
-    return QStringLiteral( "secondWidth=%1|scrollX=%2" )
+    return QStringLiteral( "secondWidth=%1|scrollX=%2|hScroll=%3" )
         .arg( v->contentView()->getSecondWidth(), 0, 'f', 6 )
-        .arg( (qulonglong) v->contentView()->getLeftOffset() );
+        .arg( (qulonglong) v->contentView()->getLeftOffset() )
+        .arg( v->tkHScrollValue() );
 }
 
 // --- proposal 37 P6 test seams -------------------------------------------

@@ -18,6 +18,18 @@
   `assert-lane-view` is the read-back verb this change adds: `collapsed`
   needs no arranger at all (it reads STrack::isCollapsed() directly), while
   `secondWidth`/`scrollX` read the arranger's own state.
+
+  CORRECTION, 2026-10-27 (QBX-255): the zoom/pan assertions AFTER the round
+  trip do not prove what they look like they prove. `load-project` loads INTO
+  the live project and does not rebuild the arranger (measured: this case
+  constructs SMVActualView exactly once, before the save), so
+  `secondWidth`/`scrollX` read back the same view `set-lane-view` had already
+  moved; `loadViewStateFromProject()` never runs here, and a restore that was
+  broken for three releases passed this case every time. What this case does
+  gate is the FOLD state (read off STrack, no arranger involved) and that the
+  save writes the pair at all. The RESTORE is gated by
+  arranger_scrollbar_follows_restored_pan.qxa, which loads a committed
+  fixture before any arranger exists.
 -->
 <SActionScript version="1" name="track_list_view_roundtrip">
 

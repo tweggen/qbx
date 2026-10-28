@@ -170,6 +170,13 @@ private:
  * `secondWidth` compares to a tolerance (it is a double, px/second);
  * `scrollX` compares EXACTLY (project frames, an integer quantity).
  *
+ * `hScroll` (QBX-255) is the SCROLL BAR's own value, in the same frames, also
+ * compared EXACTLY. `scrollX` is what the arranger SHOWS and `hScroll` is
+ * where the thumb sits, so `scrollX="N" hScroll="N"` is how a case says the
+ * two agree -- the one thing no assertion could say while
+ * arrangerDescribeView() reported the canvas alone, which is why a restored
+ * pan left the thumb at 0 for three releases.
+ *
  * Since proposal 46 M3 it also reads back the OTHER THREE per-track view
  * properties that moved onto STrack beside `collapsed`, and they persist by
  * the same mechanism — an ordinary non-default-only attribute:
@@ -190,6 +197,7 @@ private:
  * XML format:
  * <assert-lane-view trackPath="0" collapsed="1"/>
  * <assert-lane-view secondWidth="45.0" scrollX="12345"/>
+ * <assert-lane-view scrollX="12345" hScroll="12345"/>
  * <assert-lane-view trackPath="0" laneScale="2.5" takesExpanded="1"
  *                   automation="self:Volume"/>
  */
@@ -214,6 +222,8 @@ private:
     QString expectAutomation_;
     double  expectSecondWidth_ = -1.0;  // < 0 = not checked
     qlonglong expectScrollX_ = -1;      // < 0 = not checked
+    // QBX-255: the SCROLL BAR's own value, not the canvas'. < 0 = not checked.
+    qlonglong expectHScroll_ = -1;
     // RELATIVE pan checks (same shape as assert-envelope's, and for the same
     // reason): `snapshot` records the current scrollX under a name and asserts
     // nothing; `compareTo` asserts the current scrollX EQUALS the named one,

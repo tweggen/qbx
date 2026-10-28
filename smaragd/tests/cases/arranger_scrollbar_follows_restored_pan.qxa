@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-255: the arranger's horizontal scroll bar follows the canvas' pan, so a
+  RESTORED pan does not leave the thumb at the far left.
+
+  THE ORDER IS THE WHOLE FIXTURE. `loadViewStateFromProject()` runs inside
+  SMVActualView's constructor, so the only way to reach it is to have the
+  project's properties already in place when the arranger is BUILT. That is
+  what every startup does: main()'s interactive path is `openMostRecent()`,
+  whose own comment says it "creates the project and with it the central
+  widget (the mixer view)". So nothing here may touch the arranger before the
+  load: `load-project` is the first action, and the `assert-lane-view` right
+  after it is what constructs the view.
+
+  Measured before the fix, with a probe at the end of the constructor:
+
+      hbar.value=0  hbar.max=321759  canvas.leftOffset=123456
+
+  The bar's maximum already had room for 123456, so this was never a clamp:
+  the value was simply never set. `loadViewStateFromProject()` assigns
+  `upperLeftOffset_` directly rather than through `setLeftOffset()`, so no
+  `leftOffsetChanged` is emitted, and it runs before SStdMixerView has wired
+  that signal to `avLeftOffsetChanged()` at all.
+
+  WHY track_list_view_roundtrip.qxa CANNOT SEE THIS, although it reads the
+  same two numbers back after a save/load: `load-project` loads INTO the live
+  project and does not rebuild the arranger (measured: the constructor runs
+  exactly once in that case, before the save), so its post-load assertions
+  are satisfied by the same view `set-lane-view` had already moved. The
+  restore path never runs there. A committed fixture loaded by a case that
+  has built no arranger yet is the only shape that reaches it.
+
+  `hScroll` is the scroll bar's own `value()`, in the same project frames as
+  `scrollX`; QBX-255 adds it to `arrangerDescribeView()` because the describe
+  string used to report the canvas alone, which is why no assertion could see
+  the thumb at all.
+-->
+<SActionScript version="1" name="arranger_scrollbar_follows_restored_pan">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- FIRST, and nothing before it: the fixture's properties carry
+         timelineZoomSecondWidth=45.5 and timelineScrollX=123456, and no
+         arranger exists yet to read them. -->
+    <load-project path="../arranger_view_state_restore.qxp"/>
+
+    <!-- This is what builds the arranger. The canvas restores the pan
+         (scrollX) and the thumb must be in the same place (hScroll). Both
+         EXACT: these are project frames the fixture states, not a wheel
+         landing position, so no user setting can move them. -->
+    <assert-lane-view secondWidth="45.5" scrollX="123456" hScroll="123456"/>
+
+    <!-- The bar is not merely parked at its own maximum by luck: pan back to
+         the start through the ordinary setter and the thumb follows there
+         too, which is the path that always worked and must keep working. -->
+    <set-lane-view scrollX="0"/>
+    <assert-lane-view scrollX="0" hScroll="0"/>
+  </actions>
+
+  <assertions>
+    <!-- The fixture really loaded: two top-level tracks. -->
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

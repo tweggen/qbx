@@ -585,6 +585,29 @@ long-term shape.
     round-tripped back through `timeSliderMoved()`. `SMainWindow::
     arrangerSetZoomPan()` is unaffected — it already spoke frames.
 
+    **That identity is MAINTAINED, not automatic (QBX-255).** The one writer
+    that moves the canvas WITHOUT `setLeftOffset()` is
+    `SMVActualView::loadViewStateFromProject()`: it assigns
+    `upperLeftOffset_` directly, and it runs inside the content view's
+    constructor, before this class has wired `leftOffsetChanged` to
+    `avLeftOffsetChanged()` at all — so a restored pan reached the canvas and
+    never the bar. Measured at the end of the constructor: `hbar.value=0
+    hbar.max=321759 canvas.leftOffset=123456`, i.e. not a clamp (the maximum
+    had room) but a value never set, and every project open therefore left
+    the thumb at the far left while the arranger showed the middle of the
+    timeline. `recalcPageStep()` now mirrors `getLeftOffset()` into the bar
+    as the last thing it does, and `avLeftOffsetChanged()` is a call to it,
+    so the mirror has ONE definition. `recalcPageStep()` is the right home
+    because it runs again on every resize and every zoom, so a bar built
+    before the geometry was known gets the value as soon as it is; and the
+    maximum always has room, since `horizontalExtent()` is `max(dur, cur +
+    visSpan)` while the maximum is `extent - pageStep` with `pageStep ==
+    visSpan`, giving `maximum >= cur` identically. Gate:
+    `arranger_scrollbar_follows_restored_pan.qxa`, which loads a COMMITTED
+    fixture before anything builds the arranger — `track_list_view_
+    roundtrip.qxa` cannot see this, because `load-project` loads into the
+    live project and does not rebuild the view.
+
 53. **The lane paint is CLIPPED below the ruler band, and the head column
     has a matching clamp** (fix/arranger-ui-fixes C, a consequence of inv.
     27's pixel granularity). `SMVActualView::paintEvent()` wraps the lane

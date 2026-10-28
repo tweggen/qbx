@@ -3421,6 +3421,16 @@ void SMVActualView::saveViewStateToProject()
     p.setProp( SProjectProps::TimelineScrollX, (qulonglong) upperLeftOffset_ );
 }
 
+// NOTE (QBX-255): this deliberately does NOT go through setSecondWidth()/
+// setLeftOffset(). It runs inside this view's CONSTRUCTOR, where smv_ is only
+// half built and where SStdMixerView has not yet connected
+// leftOffsetChanged -- so an emit would be dropped rather than reach the
+// scroll bar, which is exactly how the thumb came to sit at 0 after every
+// project open. What keeps the bar in step is
+// SStdMixerView::recalcPageStep(), which mirrors getLeftOffset() into it
+// every time it runs (timeline CONTRACT inv. 52). Moving this call out of
+// the constructor would not break that mirror; deleting the mirror would
+// bring the desync back.
 void SMVActualView::loadViewStateFromProject()
 {
     SProject &p = smv_.model_->getProject();
@@ -5695,28 +5705,21 @@ void SStdMixerView::nTracksChanged()
     qScrollVert_->setMaximum( verticalScrollMaximum( pageStep ) );
 }
 
-void SStdMixerView::avLeftOffsetChanged( offset_t newValue )
+void SStdMixerView::avLeftOffsetChanged( offset_t /*newValue*/ )
 {
-    // The bar's domain is FRAMES now (fix/arranger-ui-fixes B), matching
+    // The bar's domain is FRAMES (fix/arranger-ui-fixes B), matching
     // getLeftOffset() exactly — no HSliderRange rescale, so no quantisation
     // and no "+dur" fudge that used to map offset 0 to slider value 1.
-    // Recompute the horizontal extent/range FIRST: an unbounded wheel-pan
-    // past the last clip must grow the bar's maximum before the bar's VALUE
-    // is synced to it, or the bar would visibly lag one step behind what the
-    // wheel can already reach.
+    //
+    // Both halves of the sync live in recalcPageStep() since QBX-255, in that
+    // order and for the reason this slot always had them in it: the extent
+    // and range must be recomputed BEFORE the value is set, or an unbounded
+    // wheel-pan past the last clip would leave the bar one step behind what
+    // the wheel can already reach. `newValue` is not read — it is exactly
+    // `qContent_->getLeftOffset()`, which setLeftOffset() stored before
+    // emitting, and asking the canvas instead is what lets ONE definition
+    // serve the paths that emit nothing at all (see syncHScrollToCanvas_).
     recalcPageStep();
-    offset_t v = newValue;
-    if( v < 0 ) v = 0;
-    if( v > 0x7fffffff ) v = 0x7fffffff;
-    // Re-entrancy guard: this slot exists only to keep the SCROLLBAR in step
-    // with the canvas' exact frame offset. setValue() re-fires the bar's own
-    // valueChanged() -> timeSliderMoved() -> setLeftOffset(); blocking it here
-    // means the wheel's exact offset is set once, not round-tripped through
-    // the bar and back.
-    if( (int) v != qScrollHoriz_->value() ) {
-        QSignalBlocker blocker( qScrollHoriz_ );
-        qScrollHoriz_->setValue( (int) v );
-    }
 }
 
 void SStdMixerView::timeSliderMoved( int newValue )
@@ -6095,6 +6098,11 @@ int SStdMixerView::tkVerticalScrollMaximum() const
     return qScrollVert_->maximum();
 }
 
+int SStdMixerView::tkHScrollValue() const
+{
+    return qScrollHoriz_->value();
+}
+
 QString SStdMixerView::tkCheckLaneAlignment() const
 {
     // 1. The row model itself: heights present, prefix sums consistent, and
@@ -6218,6 +6226,12 @@ void SStdMixerView::recalcPageStep()
     offset_t maxFrames = ( extent > (offset_t) ps ) ? extent - (offset_t) ps : (offset_t) 0;
     if( maxFrames > 0x7fffffff ) maxFrames = 0x7fffffff;
     qScrollHoriz_->setMaximum( (int) maxFrames );
+    // ...and the bar's VALUE, from the canvas, which is the AUTHORITY for the
+    // pan (QBX-255). The maximum just computed always has room for it:
+    // horizontalExtent() is max(dur, cur + visSpan) and `ps` IS that visSpan,
+    // so maximum >= cur identically -- the sync can never be clamped away,
+    // not even at construction time when the canvas has no real width yet.
+    syncHScrollToCanvas_();
 
     // Vertical (fix/arranger-ui-fixes C): pixel-granular, so the page step is
     // simply the visible pixel height below the ruler.
@@ -6225,6 +6239,26 @@ void SStdMixerView::recalcPageStep()
     qScrollVert_->setPageStep( availPx );
     qScrollVert_->setSingleStep( qMax( 1, getTrackHeight() / 8 ) );
     qScrollVert_->setMaximum( verticalScrollMaximum( availPx ) );
+}
+
+// QBX-255. The canvas is the authority for the pan: setLeftOffset() has
+// already stored the exact frame offset by the time anything mirrors it, and
+// asking the canvas rather than taking a signal's argument is what lets the
+// SAME code serve the paths that emit nothing -- loadViewStateFromProject()
+// assigns upperLeftOffset_ directly, from inside SMVActualView's constructor,
+// so a restored pan reached the canvas and never the bar and every project
+// open left the thumb at 0 while the arranger showed the middle of the
+// timeline (measured: hbar.value=0, hbar.max=321759, leftOffset=123456).
+void SStdMixerView::syncHScrollToCanvas_()
+{
+    offset_t v = qContent_ ? qContent_->getLeftOffset() : (offset_t) 0;
+    if( v > 0x7fffffff ) v = 0x7fffffff;
+    if( (int) v == qScrollHoriz_->value() ) return;
+    // Re-entrancy guard: setValue() would re-fire the bar's own
+    // valueChanged() -> timeSliderMoved() -> setLeftOffset(), round-tripping
+    // the offset through the bar and back.
+    QSignalBlocker blocker( qScrollHoriz_ );
+    qScrollHoriz_->setValue( (int) v );
 }
 
 // See the header for why this exists: a single definition of "how far may

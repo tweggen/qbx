@@ -796,6 +796,13 @@ public:
     // must read this number and scroll to IT (in pixels, via
     // `contentView()->setTopPixel()`), not to `rowCount()-1`.
     int tkVerticalScrollMaximum() const;
+    // TEST ENTRY POINT (QBX-255): the HORIZONTAL scrollbar's own `value()`,
+    // in project FRAMES -- the bar's domain since fix/arranger-ui-fixes B, so
+    // it is directly comparable with `contentView()->getLeftOffset()`. The
+    // canvas' pan is what the arranger SHOWS; this is what the THUMB says,
+    // and the two silently disagreed after every project open because
+    // arrangerDescribeView() could only ever report the canvas.
+    int tkHScrollValue() const;
     // The automation half of that check (proposal 37 P6), defined in
     // sautomationlane.cpp: every Automation row must still name a lane the
     // model can resolve. A row left behind by a removed lane paints an empty
@@ -1095,6 +1102,12 @@ protected:
     // frame offset, with no lossy round trip through either converter. See
     // horizontalExtent(), avLeftOffsetChanged() and timeSliderMoved().
     void recalcPageStep();
+    // The ONE definition of "put the thumb where the canvas is" (QBX-255),
+    // called from recalcPageStep() so it also runs on the paths that never
+    // emit leftOffsetChanged -- above all loadViewStateFromProject(), which
+    // moves the canvas from inside SMVActualView's constructor, before this
+    // class has connected that signal at all.
+    void syncHScrollToCanvas_();
     // The scrollable horizontal TIMELINE EXTENT, in project frames: at least
     // the content duration, at least far enough to cover the current pan plus
     // one visible span (so an unbounded wheel-pan past the last clip always
