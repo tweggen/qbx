@@ -15,6 +15,7 @@
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sampler/twsamplerregistry.h"
+#include "app/shell/ssamplerwiring.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
@@ -724,6 +725,10 @@ void SApplication::initPluginRegistry()
     // before the first scan and before any project can name it — never by a
     // static initializer. Every --test-case run comes through here too.
     audio::registerNassauDigital( reg );
+    // ...and its model (Q1): the sampler verbs find a slot's program, and a
+    // program is bound to its slot, through two hooks only the shell can
+    // install (Q-6: objects/sampler does not depend on objects/track).
+    ssamplerwiring::install();
 
     // The cache lives next to smaragd.ini, not in the sidecar store: the
     // sidecar store keys on a content hash of audio PCM and caps itself with an

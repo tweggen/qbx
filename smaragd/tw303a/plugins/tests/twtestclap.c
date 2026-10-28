@@ -11,7 +11,7 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * NINE entry points:
+ * TEN entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
@@ -22,6 +22,23 @@
  *   tw.test.clap.reopen       gui that answers 0x0 after its first attach (QBX-219)
  *   tw.test.clap.split        stereo in / stereo main + stereo AUX out   (55 M1)
  *   tw.test.clap.monosplit    split with every port MONO                 (55 M2)
+ *   tw.test.clap.duck         stereo in + stereo SIDECHAIN in / stereo out (55 M3)
+ *
+ * --- tw.test.clap.duck (proposal 55 §5, M3) ------------------------------------
+ *
+ * A KEYED HARD GATE, for the sidechain gates. Stereo main in/out plus a stereo
+ * SIDECHAIN input (port 1, not main, so the plugin's input bus 1). The key is
+ * "on" from the first frame whose absolute key value (on any sidechain channel)
+ * exceeds Threshold until TW_DUCK_HOLD (2048) frames after the last such frame;
+ * while on, out = in * DuckGain, otherwise out = in:
+ *
+ *   id 0  "Threshold"  0 .. 1, default 0.01
+ *   id 1  "Duck Gain"  0 .. 1, default 0.25 (-12.04 dB)
+ *
+ * No attack or release curve, so the gain is a closed form: more than Hold
+ * frames inside a key region the output is exactly 0.25 x the input, outside
+ * one it is exactly the input. With no key (a host that feeds the port the
+ * zeroed scratch every unkeyed port gets) it is an identity, byte for byte.
  *
  * --- tw.test.clap.split (proposal 55 §5, M1) -----------------------------------
  *
@@ -163,12 +180,16 @@
 #define TW_TESTCLAP_REOPEN_ID  "tw.test.clap.reopen"
 #define TW_TESTCLAP_SPLIT_ID   "tw.test.clap.split"
 #define TW_TESTCLAP_MONOSPLIT_ID "tw.test.clap.monosplit"
+#define TW_TESTCLAP_DUCK_ID    "tw.test.clap.duck"
 
 /* Which behaviour this instance has. tw.test.clap.gui and
  * tw.test.clap.restart share GAIN's, and are told apart by hasGui /
  * restartsOnReset rather than by a kind of their own. */
 enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP = 3,
-               TW_KIND_SPLIT = 4 };
+               TW_KIND_SPLIT = 4, TW_KIND_DUCK = 5 };
+
+/* tw.test.clap.duck: frames the key stays on after its last hit. */
+#define TW_DUCK_HOLD 2048u
 
 #define TW_SINE_VOICES 16
 #define TW_ARP_GRID    4096u
@@ -236,6 +257,19 @@ static const clap_plugin_descriptor_t s_desc_monosplit = {
    .support_url  = "",
    .version      = "1.0.0",
    .description  = "Test fixture: the split with every port mono (a DualMono slot on a stereo track)",
+   .features     = s_features,
+};
+
+static const clap_plugin_descriptor_t s_desc_duck = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_DUCK_ID,
+   .name         = "Smaragd Test Duck",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: a keyed hard gate, stereo main in/out plus a stereo sidechain in",
    .features     = s_features,
 };
 
@@ -414,6 +448,11 @@ typedef struct {
    /* tw.test.clap.monosplit: every SPLIT port is mono (proposal 55 M2) */
    int      monoPorts;
 
+   /* tw.test.clap.duck (proposal 55 M3) */
+   double   duckThreshold;
+   double   duckGain;
+   uint32_t duckSince;   /* frames since the last key hit; > HOLD = off */
+
    /* gui (proposal 33 M6) */
    int      hasGui;
    /* tw.test.clap.restart: ask the host to restart us from activate() and
@@ -446,6 +485,8 @@ static uint32_t tc_params_count( const clap_plugin_t *p )
       return 2;   /* Gain, Stereo Skew */
    if( self->kind == TW_KIND_SPLIT )
       return 1;   /* Main Level */
+   if( self->kind == TW_KIND_DUCK )
+      return 2;   /* Threshold, Duck Gain */
    return 3;      /* Gain, Report Block Size, Clip Threshold */
 }
 
@@ -454,6 +495,17 @@ static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
    memset( info, 0, sizeof( *info ) );
+   if( self->kind == TW_KIND_DUCK ) {
+      if( index > 1 )
+         return false;
+      info->id            = index;
+      info->flags         = CLAP_PARAM_IS_AUTOMATABLE;
+      info->min_value     = 0.0;
+      info->max_value     = 1.0;
+      info->default_value = index == 0 ? 0.01 : 0.25;
+      strncpy( info->name, index == 0 ? "Threshold" : "Duck Gain", CLAP_NAME_SIZE - 1 );
+      return true;
+   }
    if( index == 0 ) {
       info->id            = 0;
       info->flags         = CLAP_PARAM_IS_AUTOMATABLE;
@@ -509,6 +561,11 @@ static bool tc_params_get_info( const clap_plugin_t *p, uint32_t index,
 static bool tc_params_get_value( const clap_plugin_t *p, clap_id id, double *out )
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
+   if( self->kind == TW_KIND_DUCK ) {
+      if( id == 0 ) { *out = self->duckThreshold; return true; }
+      if( id == 1 ) { *out = self->duckGain;      return true; }
+      return false;
+   }
    if( id == 0 ) { *out = self->gain;   return true; }
    if( self->kind == TW_KIND_SPLIT ) return false;
    if( self->kind == TW_KIND_SINE && id == 3 ) { *out = self->skew; return true; }
@@ -549,6 +606,11 @@ static bool tc_params_text_to_value( const clap_plugin_t *p, clap_id id,
 
 static void tc_apply_param( tw_testclap_t *self, clap_id id, double value )
 {
+   if( self->kind == TW_KIND_DUCK ) {
+      if( id == 0 ) self->duckThreshold = value;
+      if( id == 1 ) self->duckGain      = value;
+      return;
+   }
    if( id == 0 ) self->gain   = value;
    if( id == 1 ) self->report = value;
    if( id == 2 ) self->clip   = value;
@@ -635,6 +697,8 @@ static uint32_t tc_ports_count( const clap_plugin_t *p, bool is_input )
       return is_input ? 0u : 2u;      /* an instrument: main stereo + aux mono */
    if( self->kind == TW_KIND_SPLIT )
       return is_input ? 1u : 2u;      /* main stereo in; main + aux stereo out */
+   if( self->kind == TW_KIND_DUCK )
+      return is_input ? 2u : 1u;      /* main + sidechain stereo in; main out */
    return 1;
 }
 
@@ -674,6 +738,15 @@ static bool tc_ports_get( const clap_plugin_t *p, uint32_t index, bool is_input,
       return false;
    }
 
+   if( self->kind == TW_KIND_DUCK && is_input && index == 1 ) {
+      /* The SIDECHAIN: not main, so the plugin's input bus 1. */
+      info->id            = 2;
+      info->flags         = 0;
+      info->channel_count = 2;
+      info->port_type     = CLAP_PORT_STEREO;
+      strncpy( info->name, "Sidechain", CLAP_NAME_SIZE - 1 );
+      return true;
+   }
    if( self->kind == TW_KIND_SPLIT && !is_input && index == 1 ) {
       /* The AUX out: not main, so the plugin's bus 1. A copy of the input. */
       info->id            = 2;
@@ -774,6 +847,13 @@ static bool tc_state_save( const clap_plugin_t *p, const clap_ostream_t *os )
 {
    const tw_testclap_t *self = (const tw_testclap_t *)p->plugin_data;
 
+   if( self->kind == TW_KIND_DUCK ) {
+      uint8_t two[16];
+      tc_put_double( two,     self->duckThreshold );
+      tc_put_double( two + 8, self->duckGain );
+      return tc_write_all( os, two, sizeof( two ) );
+   }
+
    if( self->kind == TW_KIND_SINE ) {
       /* The skew is appended ONLY when it is on, exactly as the gain fixture's
        * clip threshold is: a default instrument's blob stays the 8 bytes every
@@ -804,6 +884,19 @@ static bool tc_state_save( const clap_plugin_t *p, const clap_ostream_t *os )
 static bool tc_state_load( const clap_plugin_t *p, const clap_istream_t *is )
 {
    tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
+
+   if( self->kind == TW_KIND_DUCK ) {
+      uint8_t  two[16];
+      uint64_t got = 0;
+      while( got < sizeof( two ) ) {
+         int64_t k = is->read( is, two + got, sizeof( two ) - got );
+         if( k <= 0 ) return false;
+         got += (uint64_t)k;
+      }
+      memcpy( &self->duckThreshold, two,     sizeof( double ) );
+      memcpy( &self->duckGain,      two + 8, sizeof( double ) );
+      return true;
+   }
 
    if( self->kind == TW_KIND_SINE ) {
       uint8_t one[8];
@@ -1010,6 +1103,7 @@ static void tc_reset( const clap_plugin_t *p )
    self->arpOffPending = 0;
    self->arpOffAt      = 0;
    self->arpNextId     = 0;
+   self->duckSince     = TW_DUCK_HOLD + 1u;   /* the gate starts open */
    tc_request_restart_if_asked( self );
 }
 
@@ -1307,6 +1401,64 @@ static clap_process_status tc_process_arp( tw_testclap_t *self,
    return CLAP_PROCESS_CONTINUE;
 }
 
+/* tw.test.clap.duck: the keyed hard gate (see the header). Parameter events
+ * apply from their own frame. A missing sidechain buffer is read as silence:
+ * the gate then never closes, so the plugin is an identity. */
+static clap_process_status tc_process_duck( tw_testclap_t *self,
+                                            const clap_process_t *proc )
+{
+   if( !proc->audio_inputs || !proc->audio_outputs ||
+       proc->audio_inputs_count < 1 || proc->audio_outputs_count < 1 )
+      return CLAP_PROCESS_ERROR;
+   const clap_audio_buffer_t *ib = &proc->audio_inputs[0];
+   const clap_audio_buffer_t *kb =
+      proc->audio_inputs_count > 1 ? &proc->audio_inputs[1] : NULL;
+   clap_audio_buffer_t *ob = &proc->audio_outputs[0];
+   if( !ib->data32 || !ob->data32 )
+      return CLAP_PROCESS_ERROR;
+
+   const uint32_t n   = proc->frames_count;
+   const clap_input_events_t *in = proc->in_events;
+   const uint32_t nev = ( in && in->size && in->get ) ? in->size( in ) : 0;
+   uint32_t ev = 0;
+
+   for( uint32_t i = 0; i < n; ++i ) {
+      while( ev < nev ) {
+         const clap_event_header_t *h = in->get( in, ev );
+         if( h && h->time > i ) break;
+         ++ev;
+         if( h && h->space_id == CLAP_CORE_EVENT_SPACE_ID &&
+             h->type == CLAP_EVENT_PARAM_VALUE ) {
+            const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
+            tc_apply_param( self, e->param_id, e->value );
+         }
+      }
+      int hit = 0;
+      if( kb && kb->data32 ) {
+         for( uint32_t c = 0; c < kb->channel_count && !hit; ++c ) {
+            const float *k = kb->data32[c];
+            if( k && fabs( (double)k[i] ) > self->duckThreshold )
+               hit = 1;
+         }
+      }
+      if( hit )
+         self->duckSince = 0;
+      else if( self->duckSince <= TW_DUCK_HOLD )
+         ++self->duckSince;
+      const int   on = self->duckSince <= TW_DUCK_HOLD;
+      const float g  = (float)self->duckGain;
+      for( uint32_t c = 0; c < ob->channel_count; ++c ) {
+         float *o = ob->data32[c];
+         if( !o )
+            continue;
+         const float *x = c < ib->channel_count ? ib->data32[c] : NULL;
+         const float  v = x ? x[i] : 0.0f;
+         o[i] = on ? v * g : v;
+      }
+   }
+   return CLAP_PROCESS_CONTINUE;
+}
+
 static clap_process_status tc_process( const clap_plugin_t *p, const clap_process_t *proc )
 {
    tw_testclap_t *self = (tw_testclap_t *)p->plugin_data;
@@ -1325,6 +1477,8 @@ static clap_process_status tc_process( const clap_plugin_t *p, const clap_proces
       return tc_process_sine( self, proc );
    if( self->kind == TW_KIND_ARP )
       return tc_process_arp( self, proc );
+   if( self->kind == TW_KIND_DUCK )
+      return tc_process_duck( self, proc );
    if( self->kind == TW_KIND_SPLIT ) {
       /* The aux is written FIRST and from the input alone, so it is a copy
        * whatever the main path's parameters do. A host that hands the aux
@@ -1589,7 +1743,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 9;
+   return 10;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1605,6 +1759,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 6 ) return &s_desc_reopen;
    if( index == 7 ) return &s_desc_split;
    if( index == 8 ) return &s_desc_monosplit;
+   if( index == 9 ) return &s_desc_duck;
    return NULL;
 }
 
@@ -1625,6 +1780,7 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    else if( !strcmp( id, TW_TESTCLAP_SPLIT_ID ) ) { kind = TW_KIND_SPLIT; desc = &s_desc_split; }
    else if( !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID ) )
                                                  { kind = TW_KIND_SPLIT; desc = &s_desc_monosplit; }
+   else if( !strcmp( id, TW_TESTCLAP_DUCK_ID ) )  { kind = TW_KIND_DUCK; desc = &s_desc_duck; }
    /* GUI behaves as GAIN in every respect that is not the gui extension - same
     * params, same ports, same DSP - so it reuses the kind rather than adding a
     * fifth branch to every switch in the file. hasGui is the only difference. */
@@ -1656,6 +1812,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
                       self->zeroOnReattach;
    self->guiScale   = 1.0;
    self->monoPorts  = !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID );
+   self->duckThreshold = 0.01;
+   self->duckGain      = 0.25;
+   self->duckSince     = TW_DUCK_HOLD + 1u;
 
    self->base.desc            = desc;
    self->base.plugin_data     = self;

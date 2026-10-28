@@ -85,6 +85,39 @@ bool twPluginInsert::getBypass() const
     return proc_ ? proc_->bypass() : false;
 }
 
+void twPluginInsert::setKeySource( const std::shared_ptr<twComponent> &source )
+{
+    // setInput() records the PRODUCER of the plug it installs as this
+    // component's teardown "parent" (twComponent::parentComponent_ /
+    // myInputIndex_), and unwiring clears it. That bookkeeping belongs to the
+    // main input; a key wired or unwired after it must not overwrite it, or
+    // teardown would call removeInput(1) on the key's source.
+    std::weak_ptr<twComponent> parent;
+    idx_t                      parentIdx;
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        parent    = parentComponent_;
+        parentIdx = myInputIndex_;
+    }
+    if( source ) {
+        setInput( kKeyPort, source->linkOutput( 0 ) );
+    } else {
+        setInput( kKeyPort, nullptr );
+    }
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        parentComponent_ = parent;
+        myInputIndex_    = parentIdx;
+    }
+    if( proc_ )
+        proc_->setKeyChannels( source ? std::max<idx_t>( 1, source->getOutputChannels() ) : 0 );
+}
+
+bool twPluginInsert::keyWired() const
+{
+    return getInputPlug( kKeyPort ) != nullptr;
+}
+
 twPlugin *twPluginInsert::getPlugin() const
 {
     return proc_ ? proc_->plugin() : nullptr;
@@ -170,8 +203,38 @@ length_t twPluginInsert::renderCore_( sample_t **outCh, idx_t nCh,
         inPtrs_[c] = dst;
     }
 
+    // THE KEY (proposal 55 D5): port 1's page at the same position, gathered
+    // exactly like the main input. Read only while the processor says the
+    // slot is keyed; its width is handed along, so a key gathered under one
+    // width is never mapped by a mapping decided for another (render() feeds
+    // silence then).
+    const sample_t *const *key = nullptr;
+    const idx_t keyCh = proc_->keyChannels();
+    if( keyCh > 0 ) {
+        if( keyGatherStride_ != stride || keyGather_.size() < (std::size_t)keyCh * stride ) {
+            keyGather_.assign( (std::size_t)keyCh * stride, 0.0f );
+            keyGatherStride_ = stride;
+        }
+        if( (idx_t)keyPtrs_.size() < keyCh ) keyPtrs_.resize( (std::size_t)keyCh );
+        std::shared_ptr<twOutputPage> kp = fetchInputPage( kKeyPort, startPos );
+        const bool haveKey = kp && kp->validAspects != 0 && kp->startPosition == startPos;
+        const length_t km = haveKey
+            ? std::min<length_t>( frames, (length_t)kp->validFrames )
+            : 0;
+        for( idx_t c = 0; c < keyCh; ++c ) {
+            sample_t *dst = keyGather_.data() + (std::size_t)c * stride;
+            if( km > 0 ) {
+                const sample_t *s = kp->channelPtr( twPageClampChannel( *kp, c ) );
+                std::copy( s, s + km, dst );
+            }
+            if( km < frames ) std::fill( dst + km, dst + frames, 0.0f );
+            keyPtrs_[c] = dst;
+        }
+        key = keyPtrs_.data();
+    }
+
     proc_->render( inPtrs_.data(), outCh, frames, startPos, positional,
-                   env.getSRate(), aux );
+                   env.getSRate(), aux, key, keyCh );
     return frames;
 }
 

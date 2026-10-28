@@ -1072,8 +1072,10 @@ tw_module(sampler
         sampler/include/tw/sampler/twsamplertypes.h
         sampler/include/tw/sampler/twsamplerhost.h
         sampler/include/tw/sampler/twsamplerregistry.h
+        sampler/include/tw/sampler/twsamplerprogrammodel.h
         sampler/src/twsamplerimpl.h
         sampler/src/twsamplertypes.cc
+        sampler/src/twsamplerprogrammodel.cc
         sampler/src/twsamplerinstrument.cc
     DEPS tw_core tw_graph tw_events tw_plugins
 )

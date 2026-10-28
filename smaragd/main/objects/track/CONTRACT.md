@@ -619,6 +619,24 @@ enforced by `check_layering.py`: `tw/sampler` is not in this slice's
    8-byte header and the program will live in the model (Q1, an `SObject` child
    of the slot, proposal 56 B4), so a 10 MiB sample adds 0 bytes to the saved
    project (`sampler_slot_test`, Q0.4).
+4. **MODEL CHILDREN, AND THE CHILD-ADOPTED HOOK** (proposal 56 B4, Q1,
+   QBX-253). A slot may hold `SObject` children through its `SLink` loop:
+   `SPluginSlot::adoptChild(obj)` links one at run time, and
+   `instantiateFromDomElement` now ATTACHES the `<SLink>` children it used to
+   ignore (it had always written them; nothing ever read them back). Every
+   child that arrives either way is handed to the static
+   `SPluginSlot::setChildAdoptedHook()` hook — installed by the SHELL
+   (`ssamplerwiring.cpp`), which binds a NassauDigital program to its slot by
+   item 1 and 2. GENERIC: the slot never learns what its child is, and this
+   slice still does not depend on `objects/sampler` (Q-6, answered
+   2026-10-27; proposal 56 invariant 12). A slot with no children writes
+   exactly what it wrote before, so every pre-Q1 file and golden is unchanged.
+   **`SPluginSlot` is a CONTAINER element kind** since then: a child the file
+   lost, or a child element an older build does not know, costs that child's
+   link and never the slot and its state chunk (proposal 37 D8a), gated by
+   `qxa.sampler_q1_newer_program`'s lost-program section. (`remove-plugin` +
+   undo rebuilds a NEW slot from descriptor and blob, so a model child does
+   not survive it yet; recorded in `objects/sampler/CONTRACT.md`.)
 
 ## The PUPPET POSE (proposal 40 M3e AC 4)
 

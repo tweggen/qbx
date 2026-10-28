@@ -245,6 +245,14 @@ set(APP_OBJECTS_FILES
     objects/midi/src/smidifileactions.cpp
     objects/midi/src/smidirndrinline.cpp
     objects/midi/src/smidisequence.cpp
+    # objects/sampler (proposal 56 Q1): NassauDigital's model and verbs, at
+    # the rank of objects/midi -- no edge to objects/track (Q-6).
+    objects/sampler/include/app/objects/sampler/ssamplerprogram.h
+    objects/sampler/include/app/objects/sampler/ssamplerslots.h
+    objects/sampler/include/app/objects/sampler/ssampleractions.h
+    objects/sampler/src/ssamplerprogram.cpp
+    objects/sampler/src/ssamplerslots.cpp
+    objects/sampler/src/ssampleractions.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/sinstrumenttracks.h
@@ -493,6 +501,8 @@ set(APP_UI_FILES
     shell/include/app/shell/ssettings.h
     shell/src/sautomationrecorder.cpp
     shell/src/sapplication.cpp
+    shell/include/app/shell/ssamplerwiring.h
+    shell/src/ssamplerwiring.cpp
     shell/src/saudiorecorder.cpp
     shell/src/sunusedrecordingsview.cpp
     shell/src/stransportreadout.cpp
@@ -685,12 +695,13 @@ target_include_directories(app_objects PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/cut/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/recplan/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/midi/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/objects/sampler/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/wave/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/track/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/fragment/include
     ${CMAKE_CURRENT_SOURCE_DIR}/objects/mixer/include
 )
-target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar)
+target_link_libraries(app_objects PUBLIC app_core tw_mix tw_plugins tw_sidecar tw_sampler)
 
 # Layer 4 — the UI and the shell (the only layer that may see everything).
 add_library(app_ui OBJECT ${APP_UI_FILES})

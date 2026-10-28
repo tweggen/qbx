@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 class tw303aEnvironment;
@@ -58,6 +59,20 @@ enum class twPluginSlotMode {
     WideGen         // 0 -> M with M > C: outs 0..C-1 to the page, the surplus
                     // into the slot's own buffer for the aux taps of 5.4 (P9)
 };
+
+// How a slot's KEY (proposal 55 D5, M3) of C channels -- the width of the
+// page wired into the insert's port 1 -- reaches the plugin's sidechain input
+// bus of S channels. Proposal 55 D4's key rows, decided ONCE per wiring
+// (setKeyChannels / a rebuild), never per page.
+enum class twKeyMapping {
+    None,           // not keyed: the slot makes exactly the calls it made before M3
+    Copy,           // S == C: channel for channel, no arithmetic
+    Mean,           // S == 1, C > 1: the mean of the C key channels
+    Duplicate,      // S == 2, C == 1: the one key channel on both inputs
+    Refused,        // keyed, but no row (or no sidechain bus): the key is silent
+    Unroutable      // keyed, but the slot has no single instance to feed (55 D9)
+};
+const char *twKeyMappingName( twKeyMapping m );
 
 // THE LIVE TRANSPORT (proposal 21 L1a, design D2).
 //
@@ -310,6 +325,24 @@ public:
     /// channel offsets in the side page. Empty when nothing is routed.
     std::vector<twAuxBusSlice> auxLayout() const;
 
+    // --- the sidechain key (proposal 55 D5, M3) ----------------------------
+    //
+    // THE KEY IS STATE: `keyChannels` is the width of the page wired into the
+    // insert's port 1 (0 = not keyed). The insert says it when it wires or
+    // unwires the port (twPluginInsert::setKeySource); nothing else should.
+    // From it, the mode and instance 0's own input-bus list the processor
+    // derives the D4 key mapping, once, and the plugin is told to expect its
+    // input bus 1 (setRoutedInBuses) exactly when the mapping is defined -- a
+    // change re-prepares every instance (VST3 activates the bus there) and
+    // stales the insert's pages. Like the routed mask it is KEPT across a
+    // rebuild, a missing plugin and a DualMono mapping, and applied again when
+    // it can be. Unkeyed, render() makes exactly the calls it made before M3.
+    void          setKeyChannels( idx_t keyChannels );
+    idx_t         keyChannels() const;
+    twKeyMapping  keyMapping() const;
+    /// "keyChannels=C|busChannels=S|mapping=<name>" -- what the slot decided.
+    std::string   describeKey() const;
+
     // --- automation (proposal 37 P5, design D5 / §4.5) ----------------------
 
     // How often a CONTINUOUS segment is re-stated inside a chunk. 64 frames is
@@ -357,9 +390,17 @@ public:
     // layout it was filled by can never come from two different masks (T10).
     // Null -- the default, and every caller before M1 -- makes exactly the
     // calls render() always made.
+    //
+    // `key` / `keyCh` (proposal 55 M3): the KEY, keyCh planar buffers of at
+    // least `len` frames (the insert's gather of its port-1 page). Read only
+    // while a key mapping is applied, and only when keyCh is the width the
+    // mapping was decided for: a key gathered under another width (a rewire
+    // racing the render) is fed as silence, never mis-mapped. Null -- the
+    // default -- feeds a keyed plugin a silent key.
     void render( const sample_t *const *in, sample_t **out, length_t len,
                  offset_t startPos, bool positional, int sampleRate,
-                 std::shared_ptr<twOutputPage> *auxOut = nullptr );
+                 std::shared_ptr<twOutputPage> *auxOut = nullptr,
+                 const sample_t *const *key = nullptr, idx_t keyCh = 0 );
 
     // The pre-roll floor and ceiling of design D4's
     //     K = min( max(4096, tailFrames(), P - start(earliest held note)), 4 s )
@@ -496,6 +537,29 @@ private:
     std::vector<sample_t *>     auxBaseStore_;
     std::vector<sample_t *>     auxChunk_;
     std::vector<float *const *> busArr_;
+
+    // The sidechain key (proposal 55 M3). Derived like the aux layout, at
+    // every change of the key width, the mode or the instance.
+    void  computeKeyLayout_nolock();
+    // inBusArr_ for this chunk: [0] = the main input (null for a generator),
+    // [1] = the mapped key at chunk offset `off` (silence when no key is in
+    // hand), every other entry null. Only called while appliedInMask_ != 0.
+    const float *const *const *inBusArrayForChunk_nolock( const float *const *mainIn,
+                                                          length_t off, length_t n );
+
+    idx_t                      keyChannels_   = 0;
+    twKeyMapping               keyMapping_    = twKeyMapping::None;
+    std::uint16_t              keyBusChannels_ = 0;   // S
+    // Bit 1 when the key is applied: what the plugin was told, and the switch
+    // between the pre-M3 calls and processBuses().
+    std::uint32_t              appliedInMask_ = 0;
+    bool                       loggedKeyRefused_ = false;
+    // Set for the duration of ONE page render (render() with a key of the
+    // decided width); null otherwise, which feeds silence.
+    const sample_t *const     *keyIn_ = nullptr;
+    std::vector<std::vector<sample_t>> keyMapped_;   // S x kChunkFrames, Mean/Duplicate
+    std::vector<const sample_t *>      keyChunk_;    // S pointers for this chunk
+    std::vector<const float *const *>  inBusArr_;    // audioInBusCount() entries
 
     // --- the instrument slot (proposal 37 P3b) ------------------------------
 

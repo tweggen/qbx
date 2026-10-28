@@ -201,6 +201,25 @@ public:
     // gets its state from the initializer when it is built. UI thread.
     std::size_t applyToInstances( const std::function<void( audio::twPlugin & )> &fn );
 
+    // --- the slot's MODEL CHILDREN (proposal 56 B4, Q1) -----------------------
+    //
+    // A plugin whose state is model data rather than a blob (NassauDigital's
+    // program, objects/sampler's SSamplerProgram) keeps that data in an SObject
+    // CHILD of its slot, serialized through the slot's SLink-children loop
+    // (serialize() below) and attached again on load (instantiateFromDomElement).
+    // GENERIC, like the two seams above: the slot never learns what the child is.
+    //
+    // adoptChild() links `child` under this slot. Every child that arrives --
+    // adopted at run time or read back from a file -- is then handed to the
+    // CHILD-ADOPTED HOOK, which the SHELL installs (the one module that sees
+    // both this slice and the child's): that is where the child is bound to
+    // the slot, e.g. given as its instance initializer, without objects/track
+    // naming objects/sampler or the reverse (proposal 56 Q-6, answered
+    // 2026-10-27). No hook installed = nothing is bound. UI thread.
+    SLink *adoptChild( SObject &child );
+    using ChildAdoptedHook = std::function<void( SPluginSlot &slot, SObject &child )>;
+    static void setChildAdoptedHook( ChildAdoptedHook hook );
+
     // --- aux routing (proposal 55 D8/D9, M2) ---------------------------------
     //
     // THE SLOT ID: a stable number a return track's <auxSource slot=> names.
@@ -337,6 +356,8 @@ private:
     audio::twPluginSlotProcessor::Factory makeFactory() const;
     // Collect every `param:` lane into the processor's curve map.
     void pushParamCurves();
+    // Hand a newly attached model child to the child-adopted hook.
+    void notifyChildAdopted_( SObject &child );
 
     audio::twPluginDescriptor descriptor_;   // as stored / as given (VERBATIM)
     audio::twPluginDescriptor effective_;    // as resolved against the registry

@@ -470,8 +470,9 @@ int SPluginSlot::serialize( QTextStream &o )
           << "</state>\n";
     }
 
-    // A slot has no SLink children today; keep the base class's shape so it
-    // stays correct if one is ever added (a side-chain source, say).
+    // The slot's MODEL CHILDREN (proposal 56 B4): an SLink per child, the
+    // base class's shape. Since Q1 a NassauDigital slot has one, its program;
+    // every other slot still has none, so their files are byte-unchanged.
     for( SLink *lk : childLinks() ) {
         int r = lk->serialize( o );
         if( r < 0 ) break;
@@ -503,8 +504,53 @@ SLink *SPluginSlot::instantiateFromDomElement(
 
     SPluginSlot *slot = new SPluginSlot( &projectLoader.getProject(), desc );
     slot->readPreChildrenAttributes( element );
+
+    // The model children (proposal 56 B4, Q1). The loader instantiates an
+    // element only once every <SLink> child of it resolves, so each target is
+    // in the dictionary here; one that is not was pruned (the slot is a
+    // CONTAINER kind, below) and costs only its own link.
+    QList<SObject *> adopted;
+    for( QDomElement c = element.firstChildElement( "SLink" ); !c.isNull();
+         c = c.nextSiblingElement( "SLink" ) ) {
+        const QString objectId = c.attribute( "objectId" );
+        SLink *target = projectLoader.getObjectDictionary().value( objectId );
+        if( !target ) {
+            qWarning( "SPluginSlot: child object %s is not in the file; skipped",
+                      qPrintable( objectId ) );
+            continue;
+        }
+        new SLink( target->getSObject(), slot );
+        adopted.append( &target->getSObject() );
+    }
+
     slot->readPostChildrenAttributes( element );
+    for( SObject *child : adopted ) slot->notifyChildAdopted_( *child );
     return new SLink( *slot );
+}
+
+namespace {
+SPluginSlot::ChildAdoptedHook &childAdoptedHook()
+{
+    static SPluginSlot::ChildAdoptedHook hook;
+    return hook;
+}
+}  // namespace
+
+void SPluginSlot::setChildAdoptedHook( ChildAdoptedHook hook )
+{
+    childAdoptedHook() = std::move( hook );
+}
+
+SLink *SPluginSlot::adoptChild( SObject &child )
+{
+    SLink *lk = new SLink( child, this );
+    notifyChildAdopted_( child );
+    return lk;
+}
+
+void SPluginSlot::notifyChildAdopted_( SObject &child )
+{
+    if( childAdoptedHook() ) childAdoptedHook()( *this, child );
 }
 
 // Self-registration with the project loader (proposal 14, Phase 5): the
@@ -512,7 +558,12 @@ SLink *SPluginSlot::instantiateFromDomElement(
 // element name. Relies on the app being an OBJECT library (no TU elision).
 static const bool s_registered_spluginslot =
     ( SProjectLoader::registerSObjectClass( "SPluginSlot",
-          SPluginSlot::instantiateFromDomElement ), true );
+          SPluginSlot::instantiateFromDomElement,
+          // A CONTAINER since proposal 56 Q1, when a slot gained model
+          // children: a child the file lost (or that failed to load) costs its
+          // own link, never the slot -- the user's plugin and its state chunk
+          // still load (proposal 37 D8a's rule for a container).
+          SElementKind::Container ), true );
 
 // --- runtime control ---------------------------------------------------------
 

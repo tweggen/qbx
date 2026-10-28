@@ -390,13 +390,16 @@ itself (`spluginslot.h:240-250`).
 `shared_ptr<const twSamplerProgram>` snapshots to the instance; it owns undo,
 links and signals. It is an `SObject` child of the `SPluginSlot` (B4), created
 when a NassauDigital slot is inserted and when one is loaded, and installed as
-the slot's instance initializer.
+the slot's instance initializer. *(Q1: created by the first edit that succeeds,
+not at insert — §11 Q1 item 2.)*
 
 **Persistence (A4).** `SSamplerProgram::serialize` writes its own element with
 the core's program element **nested verbatim** inside it, followed by one
 `SLink` child per asset-backed layer, each naming the layer id it serves. On
 load the loader hands the element over; qbx serializes the nested
 `<NassauDigitalProgram>` subtree back to text and gives the core that string.
+*(Wrong as built: QDom reorders attributes, so the core's element is stored as
+CDATA text — §11 Q1 item 3.)*
 qbx never reads a program attribute itself, so unknown attributes and elements
 survive by the core's rule (R4, C1.2). It self-registers with `SProjectLoader`
 from a static initializer, as `SPluginSlot` does
@@ -424,6 +427,7 @@ built shape differs in one edge:
   the slot an instance initializer that `objects/sampler` provides, so the
   slot calls it on every instance it creates without either slice naming the
   other. Q1 records the exact seam as built, here and in the three CONTRACTs.
+  *(Built in Q1: two hooks and a generic slot seam — §11 Q1 item 1.)*
 
 As first proposed:
 
@@ -1067,6 +1071,84 @@ is kept and points here.
 11. **`SPluginSlot::applyToInstances()`** wraps §4.3's two steps
     (`applyToInstances(install)` → `notifyPluginEdited()`) into one call,
     without the second epoch bump `notifyPluginEdited()` would add.
+
+
+### Q1 (QBX-253, 2026-10-27)
+
+Built: `objects/sampler` (`SSamplerProgram`, the verbs), `tw/sampler`'s
+`twSamplerProgramModel`, two shell hooks (`ssamplerwiring.cpp`) and one generic
+seam in `SPluginSlot` (model children + a child-adopted hook). The seams as
+built, and where the text above did not survive the build:
+
+1. **The seam the Q-6 answer asked for, as built** (§4.4 *Layering*).
+   `objects/sampler` has `APP_DEPS = {actions, model, persistence}` (the rank
+   of `objects/midi`) and `APP_ENG = base + {plugins, sampler}` — none of the
+   asset-bounce, stretch and sidecar edges, which arrive with Q2–Q4. Two
+   hooks, both installed by `ssamplerwiring::install()` beside
+   `registerNassauDigital()`: `ssampler::setResolver` (trackPath + pathRoot +
+   slotIndex → the slot's program, created on first edit) and
+   `SPluginSlot::setChildAdoptedHook` (every program that arrives under a
+   NassauDigital slot, at run time or from a file, is BOUND: initializer, then
+   `applyToInstances`). `objects/track` gained `adoptChild()` and the hook,
+   and its loader now attaches the `<SLink>` children it always wrote and
+   never read back. Recorded in the three CONTRACTs.
+2. **The program is NOT created when the slot is inserted** (§4.4 "created
+   when a NassauDigital slot is inserted and when one is loaded"). It is
+   created by the first edit that SUCCEEDS (a refused `add-zone` creates
+   nothing). A slot without one plays nothing — as one with an empty program
+   does — and every Q0 file and golden stays byte-identical. Easily changed if
+   the author wants the object from the insert on.
+3. **The core's element is nested as CHARACTER DATA, not as elements** (§4.4
+   *Persistence*: "nested verbatim … qbx serializes the nested subtree back to
+   text"). Measured: QDom writes attributes SORTED BY NAME, so a subtree
+   handed back to the core through QDom has its unknown attributes reordered,
+   and the core's structural equality (Extras in document order) then calls
+   it a different program. Stored as `<program><![CDATA[…]]></program>`, the
+   core reads exactly what it wrote. The sabotage that implements §4.4's
+   design (nested elements, read back with `QDomElement::save`) fails
+   `qxa.sampler_q1_newer_program` at the equality after the reload.
+4. **`SPluginSlot` became a CONTAINER element kind.** With a model child, a
+   slot has an `<SLink>` that can dangle (a lost or unloadable program); as a
+   PLAIN kind the loader would then drop the whole slot and its state chunk.
+5. **A program the core refuses on load is kept verbatim** (not in §4.4):
+   written back unchanged on save, played as the empty program, every edit
+   refused and announced.
+6. **Inverses are verbs of their own**: `reinsert-zone`, `reinsert-layer`
+   (§4.5's "add-zone restoring the id and every layer", as the core's zone
+   XML in CDATA, validated: ids free and `< nextId`) and
+   `restore-sampler-values` (§4.5's "set-zone per zone, absolute", one element
+   carrying every replaced value). qbx's history RE-APPLIES THE FORWARD action
+   on redo, so `add-zone` / `add-layer` remember what they made and re-insert
+   it with the same ids; a fresh add on redo would mint new ids and break the
+   redo of every later verb that names them.
+7. **`nextId` is not restored by an undo** (Q1.1 vs Q1.q2). "Undone exactly"
+   and "an id is never reused across an undo" cannot both hold for `nextId`;
+   DESIGN §2 decides it. The gates assert the undone `add-zone` equal to the
+   program before it in everything but `nextId` (`ignoreNextId="1"`) and
+   `nextId` itself explicitly.
+8. **A test verb §4.5 lists by another name**: `assert-sampler-program`
+   checks structural equality against a file or a CAPTURED program
+   (`capture` / `equalsCaptured` / `differsFromCaptured`), named fields, the
+   selection, and `installed="1"`, which reads a new
+   `twSamplerHostStats::installedSerial` (written by `setProgram()`): what the
+   instance HOLDS, so an edit reaching the instrument is asserted without a
+   render.
+9. **Assumptions awaiting the author** (each easily changed):
+   (a) **the selection** (`select-zones`) is model state of the
+   `SSamplerProgram`, undoable, changes no sound, and is NOT saved; it holds
+   zone ids, and a removed zone drops out of it and comes back with its undo.
+   (b) **A negative absolute value** is written with a leading `=`
+   (`pan="=-0.5"`): DESIGN §2.1 makes every signed value relative and gives no
+   absolute spelling. Text parameters (`src`, `name`) are always literal.
+   (c) **Zone ids** come from the core's `nextId` (DESIGN §2) — an `id` on
+   `add-zone` is refused; `add-zone` takes its layers as `<layer>` children.
+   (d) **How an edit reaches the engine**: every committed edit publishes one
+   new snapshot (initializer, then `applyToInstances`, §4.3), synchronously
+   on the main thread.
+10. **Not done in Q1, recorded**: `remove-plugin` + undo loses the program (the
+    inverse rebuilds a NEW slot from descriptor and blob; a model child is in
+    neither). `sampler-test-install` (Q0's test verb) bypasses the model; the
+    next model edit on the same slot replaces its initializer.
 
 
 ### Core bump to nassau-digital 5adc61a (2026-10-27)

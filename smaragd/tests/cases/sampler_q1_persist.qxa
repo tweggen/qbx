@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q1_persist">
+
+  <!-- PROPOSAL 56 Q1.2, FIRST HALF (QBX-253): THE PROGRAM IS SAVED IN THE
+       PROJECT AND RELOADS IDENTICALLY.
+
+       A program is built with the verbs (two zones, three layers, relative and
+       absolute edits, a negative value, text with every character XML has to
+       escape), CAPTURED, saved, and loaded back; the reloaded program is
+       STRUCTURALLY EQUAL to the capture under the core's own equality
+       (nd::Program::operator==: every parameter, id, layer, nextId), with no
+       nextId exception. A second save and reload of the RELOADED program must
+       give the same program again (the format is a fixed point).
+
+       Also gated here, because only a reload can show them:
+         * the reloaded program is BOUND to its slot: the live instance holds
+           the program the model published (installed="1"), so a project that
+           was saved plays its program after it is opened again;
+         * the selection is NOT saved (selected="" after the reload) - the
+           assumption proposal 56 section 11 records, awaiting the author;
+         * an edit after the reload is one undo step and restores the program
+           exactly (the reloaded object takes edits like a fresh one).
+
+       The file is written under build/, as every save-project case does. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47" rootKey="40" mode="oneshot"
+              choke="2" output="aux3" filter="hp12" cutoff="1234.5">
+      <layer src="test:kick &amp; snare &lt;1&gt; &quot;q&quot; 'a' ]]&gt; end" velHi="90"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="48" keyHi="59" rootKey="52" mode="loop">
+      <layer src="test:soft" velLo="0" velHi="63" velFade="8"/>
+      <layer src="test:hard" velLo="56" velHi="127" velFade="8" rrGroup="1"/>
+    </add-zone>
+    <set-zone trackPath="0" slotIndex="0" zone="all" tune="+3" attack="0.0125"/>
+    <set-zone trackPath="0" slotIndex="0" zone="3" pan="=-0.75" level="=-12.5"/>
+    <set-layer trackPath="0" slotIndex="0" layer="5" start="480" loopStart="960" loopEnd="48000"/>
+    <set-sampler-program trackPath="0" slotIndex="0" name="Kit &amp; one" polyphony="128"
+                         masterTune="=-0.5"/>
+    <select-zones trackPath="0" slotIndex="0" zones="3" mode="replace"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="6" selected="3"
+                            installed="1" capture="saved"/>
+
+    <save-project path="../../build/sampler_q1_persist.qxp"/>
+    <assert-file-contains path="../../build/sampler_q1_persist.qxp" text="&lt;SSamplerProgram "/>
+    <assert-file-contains path="../../build/sampler_q1_persist.qxp"
+                          text="&lt;program&gt;&lt;![CDATA[&lt;NassauDigitalProgram "/>
+
+    <load-project path="../../build/sampler_q1_persist.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1" readable="1"
+                            equalsCaptured="saved" installed="1" selected=""/>
+
+    <!-- The fixed point: save the RELOADED program and load it again. -->
+    <save-project path="../../build/sampler_q1_persist_2.qxp"/>
+    <load-project path="../../build/sampler_q1_persist_2.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saved" installed="1"/>
+
+    <!-- The reloaded object edits and undoes like a fresh one. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="+1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" differsFromCaptured="saved" installed="1"/>
+    <undo count="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saved" installed="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+</SActionScript>
