@@ -669,6 +669,8 @@ const Fixture kFixtures[] = {
     // minCount is written only when non-zero.
     { "dump-midi-capture",
       "<dump-midi-capture filename='midi_out.txt' minCount='6'/>" },
+    { "assert-mixing-options",
+      "<assert-mixing-options contains='soloScope=' soloScope='global'/>" },
     { "assert-midi-options",
       "<assert-midi-options contains='backend=capture' absent='virtual=no'"
       " outputPorts='1' inputPorts='1'/>" },

@@ -648,6 +648,38 @@ the outside sections as further clips is explicitly not in v1.
 **D8. A sub-arrangement is not summed into the master.** It is audible only
 through a placement — the requester's instruction, and the safer model (§11.5).
 
+**D8a. SOLO'S SCOPE IS A USER OPTION, AND PROJECT-WIDE IS THE DEFAULT**
+*(author, 2026-10-28; QBX-256, shipped)*. D8 says a sub-arrangement is heard
+only through a placement. It did not say what a SOLO inside one means, and the
+build had answered per-root (QBX-231/233): soloing the bass-drum lane of a
+drum loop changed what the loop contributed and left the rest of the project
+playing. Both readings are held by real users — "solo this lane of the loop"
+and "solo this lane, full stop" — so the scope is `SOpt::SoloScope`
+(`mixer/soloScope`), and `global` is the default because the workflow the
+option exists for is hitting solo to fine-tune ONE sound.
+
+In `global` the three solo terms follow the reference graph, which is how one
+root reaches another (`ssolorules.h` states the walk and its two hazards, the
+per-path guard and the depth cap — `splayhead`'s graph and `splayhead`'s
+reasons). Three consequences are decisions in their own right:
+
+- The lane that CARRIES the placement stays audible — otherwise the path to
+  the soloed lane is cut and the solo is silence — but its OWN clips are muted
+  while that is the only reason it is audible. A solo that leaked the carrier's
+  material measured 0.1333 against 0.06665 for the soloed lane alone.
+- A soloed lane that carries a placement makes the whole arrangement below it
+  audible. Without that term a project-wide "something is soloed" is true
+  inside the arrangement, where nothing is, and the asset capture renders
+  silence: you would solo the lane your loop sits on and hear nothing.
+- A solo in an arrangement that is placed NOWHERE silences the project. That
+  is the honest consequence rather than a special case, and it is the sharpest
+  argument for QBX-257's status-bar indicator: the cause is in a tab the user
+  may not be looking at.
+
+This is orthogonal to D9 and does not weaken the case for it. `global` solo
+answers "fine-tune the bass drum in context" wherever the loop IS placed and
+the locator is over it; audition answers "hear the loop at all".
+
 **D9. Local audition is v1, and it is "one root at a time, swapped at a transport
 boundary".** *(Cheaper than §11.6 feared — see §11.15 — and the metronome caveat
 is D19.)* The transport binds to the playing arrangement (§4 unchanged);

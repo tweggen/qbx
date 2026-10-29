@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SOLO'S SCOPE IS A USER OPTION, AND `global` IS THE DEFAULT (QBX-256).
+
+  THIS CASE WRITES the per-user key `mixer/soloScope` and is RUN_SERIAL for
+  that reason (smaragd/CMakeLists.txt says so beside mixer_sections, which
+  owns `mixer/sections` the same way). It restores the SOpt default, `global`,
+  at the end, so the shared smaragd.ini comes back with identical content.
+  `track_detail_meter_solo_scope.qxa` writes the key too, because QBX-233's
+  claim — which root is the rule asked about? — exists only in the per-root
+  scope; it is RUN_SERIAL and restores the default as well. Both headers and
+  the CMakeLists entry say so.
+
+  THE SHAPE, and why it is this one. Fixture test_sawtooth.wav, 4 s, amplitude
+  ramping 0 to 0.8, so sec0 of ONE copy measures RMS 0.06665 (measured, and
+  the same number arrangement_edit_audible.qxa is built on). Copies at the
+  same position are coherent, so n copies measure n x 0.06665.
+
+    master lane 0   the ONLY placement of the "Drums" arrangement, at 0
+    master lane 1   one copy of its own, at 0, at -6 dB (x0.50119)
+    Drums:0         one copy at 0          <- the "bass drum"
+    Drums:1         one copy at 0          <- the rest of the loop
+    Unused:0        one copy at 0, in an arrangement NOTHING PLACES
+
+  The -6 dB is what makes the case readable: without it "the loop alone" and
+  "the master lane alone" are both one copy and the same number, so a wrong
+  answer could pass as a right one. With it every stage below has its own
+  closed form, and no two are within 25 % of each other:
+
+    everything audible            2 + 0.50119 = 2.50119 copies   0.16671
+    Drums:0 soloed, global        1                              0.06665
+    master lane 1 soloed, global  0.50119                        0.03341
+    master lane 0 soloed, global  2 (the loop IN FULL)           0.13330
+    Drums:0 soloed, arrangement   1 + 0.50119 = 1.50119          0.10006
+    Unused:0 soloed, global       nothing                        silence
+    carrier's own clip added,
+      Drums:0 soloed, global      1 (the carrier's clip muted)   0.06665
+      the same, solo released     2.50119 + 1 = 3.50119          0.23335
+
+  THE FOUR CLAIMS, one per stage, and each is a different term of the rule:
+
+  1. `global` + a solo INSIDE an arrangement silences the master's own lanes
+     too (stage B). This is the behaviour the option exists for.
+  2. `global` + a solo on the master lane that CARRIES the arrangement plays
+     the loop IN FULL (stage D), not silence, and the lanes inside it report
+     themselves AUDIBLE (stage H). This is the trap the "inside a soloed
+     ancestor" term exists for: a project-wide anySolo is true inside the
+     arrangement as well, where nothing is soloed, so without that term every
+     lane of the loop answers inaudible.
+
+     MEASURED, AND IT IS WHY THERE ARE TWO STAGES. Removing the term alone
+     leaves stage D's number UNCHANGED at 0.13330: the asset capture is not
+     rebuilt when an arrangement's audibility changes for a reason OUTSIDE
+     that arrangement, so the placement goes on playing the mix the capture
+     already holds. In this build that is unobservable — the term's answer is
+     exactly what the capture contains — but it means no render in this
+     fixture can see the term. Stage H asks the RULE instead, through
+     describeTrackDetailDock's `audible=`, and measures 0 with the term
+     removed against 1 with it. D keeps its place as the claim that the loop
+     is not silenced; H is what makes the claim load-bearing.
+  3. `arrangement` reproduces the pre-option behaviour exactly (stage E): the
+     loop drops to its soloed lane and the master's own lane keeps playing.
+  4. A solo in an arrangement that is PLACED NOWHERE silences the project
+     (stage F). That is the honest consequence of a project-wide rule rather
+     than a special case, and it is also why QBX-257 puts an indicator in the
+     status bar: the cause is in a tab the user may not be looking at.
+  5. A solo DOES NOT LEAK through the carrier lane (stage G). The lane that
+     holds the placement must stay audible, or the path to the soloed lane is
+     cut — but the clips it holds of its OWN are not what the user soloed, and
+     before the clip-entry half of the rule they played: measured 0.1333 where
+     the soloed lane alone is 0.06665. G2 is its control, because a clip muted
+     and never unmuted would pass G.
+
+  Stage A is the control: with the option set and nothing soloed, every stage's
+  arithmetic is the same arithmetic.
+
+  WHAT EACH STAGE DISCRIMINATES AGAINST, measured rather than assumed. Against
+  the PRE-OPTION build (main, which ignores the key and is per-root), B
+  measures 0.100054 and F measures 0.166704, so those two fail there and are
+  the gate's credential. A, C, C2, D and E pass on that build as well, and
+  that is deliberate: C2/D/E are answers the two scopes SHARE, and D's claim
+  is not about the pre-option build at all. D discriminates against a GLOBAL
+  build that lost the "inside a soloed ancestor" term, where it measures 0 —
+  which is what the sabotage arm for that term shows.
+
+  `assert-mixing-options` pins the ROUND TRIP through the real Options dialog
+  (the INI value is what the page shows, so a user opening Options after this
+  case does not see a stale default and write it back). It does NOT pin
+  SOpt::def() — the case always writes the key explicitly, because a case
+  that depended on the INI's prior state would pass or fail by what ran before
+  it. The default lives in soptions.cpp beside every other one.
+-->
+<SActionScript version="1" name="solo_scope_project_wide">
+
+  <setup project="new"/>
+
+  <actions>
+    <set-option key="mixer/soloScope" value="global"/>
+    <assert-mixing-options soloScope="global"/>
+
+    <add-track index="-1"/>                 <!-- 0: carries the asset -->
+    <add-track index="-1"/>                 <!-- 1: its own copy, -6 dB -->
+    <add-sample trackPath="1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-track-volume trackPath="1" volume="-6"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-track-count arrangement="Drums" count="2"/>
+
+    <create-asset container="Drums:" startOffset="0" duration="192000"
+                  assetName="DrumsAsset"/>
+    <place-asset assetName="DrumsAsset" trackPath="0" timePos="0"/>
+
+    <!-- A: the control. -->
+    <render filename="solo_scope_A.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_A.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1617" maxRms="0.1717"/>
+
+    <!-- B: claim 1. A solo INSIDE the arrangement is in force everywhere. -->
+    <set-track-solo trackPath="Drums:0" solo="1"/>
+    <render filename="solo_scope_B.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_B.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0647" maxRms="0.0687"/>
+
+    <!-- C: released, and back to the control's own number. -->
+    <set-track-solo trackPath="Drums:0" solo="0"/>
+    <render filename="solo_scope_C.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_C.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1617" maxRms="0.1717"/>
+
+    <!-- C2: a MASTER lane soloed, the one that carries nothing of the loop.
+         The loop goes silent, which is the rule working in the other
+         direction. -->
+    <set-track-solo trackPath="1" solo="1"/>
+    <render filename="solo_scope_C2.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_C2.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0324" maxRms="0.0344"/>
+    <set-track-solo trackPath="1" solo="0"/>
+
+    <!-- D: claim 2. The CARRIER lane soloed plays the loop IN FULL. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <render filename="solo_scope_D.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_D.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1293" maxRms="0.1373"/>
+    <set-track-solo trackPath="0" solo="0"/>
+
+    <!-- E: claim 3. The other scope, the pre-option behaviour. -->
+    <set-option key="mixer/soloScope" value="arrangement"/>
+    <assert-mixing-options soloScope="arrangement"/>
+    <set-track-solo trackPath="Drums:0" solo="1"/>
+    <render filename="solo_scope_E.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_E.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0971" maxRms="0.1031"/>
+    <set-track-solo trackPath="Drums:0" solo="0"/>
+
+    <!-- F: claim 4. A solo in an arrangement nothing places. -->
+    <set-option key="mixer/soloScope" value="global"/>
+    <create-arrangement name="Unused"/>
+    <add-track arrangement="Unused" index="-1"/>
+    <add-sample trackPath="Unused:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-track-solo trackPath="Unused:0" solo="1"/>
+    <render filename="solo_scope_F.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_F.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0" maxRms="0.001"/>
+    <set-track-solo trackPath="Unused:0" solo="0"/>
+
+    <!-- G: claim 5. The CARRIER lane keeps its plug so the soloed lane can
+         be heard through it, and its OWN clip is muted while that is the only
+         reason it is audible. G2 releases the solo and proves the mute came
+         back off: a clip muted for ever would satisfy G just as well. -->
+    <add-sample trackPath="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-track-solo trackPath="Drums:0" solo="1"/>
+    <render filename="solo_scope_G.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_G.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0647" maxRms="0.0687"/>
+    <set-track-solo trackPath="Drums:0" solo="0"/>
+    <render filename="solo_scope_G2.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="solo_scope_G2.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.2264" maxRms="0.2403"/>
+
+    <!-- H: claim 2's REAL discriminator. See the header: stage D's number
+         cannot see the "inside a soloed ancestor" term, so the term is pinned
+         on the rule itself, through the one seam that reports it
+         (describeTrackDetailDock's `audible=`, which calls the same
+         meterAudible() the meter calls). Last in the case, because the tab
+         switch below changes what a view GESTURE like select-track means. -->
+    <assert-track-detail-dock contains="|rows="/>
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+    <set-track-solo trackPath="0" solo="1"/>
+    <select-track trackPath="0"/>
+    <assert-track-detail-dock contains="|path=Drums:0"/>
+    <assert-track-detail-dock contains="|audible=1"/>
+    <set-track-solo trackPath="0" solo="0"/>
+
+    <!-- The INI comes back as it was: `global` is SOpt::def(). -->
+    <set-option key="mixer/soloScope" value="global"/>
+    <assert-mixing-options soloScope="global"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

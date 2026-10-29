@@ -100,6 +100,12 @@ QVariant SOpt::def( const QString &key )
     // Every mixer section ON: 1 inserts | 2 sends | 4 meter | 8 fader. A
     // first-run pane shows everything it has, and hiding is the choice.
     if( key == MixerSections )       return 15;
+    // Solo is PROJECT-WIDE by default (QBX-256, the author's decision of
+    // 2026-10-28): you hit solo on a lane inside a drum loop in order to
+    // fine-tune that one sound, which is what the button means everywhere
+    // else. `arrangement` is for the user who reads a sub-arrangement as a
+    // closed mix, and it is exactly the behaviour qbx had before the option.
+    if( key == SoloScope )           return QStringLiteral( "global" );
     // Media browser (proposal 38 gate 2). "local" is the only source the MVP
     // registers, so remembering it is the honest default rather than an empty
     // string the combo would have to interpret. The mask is Audio (1) --

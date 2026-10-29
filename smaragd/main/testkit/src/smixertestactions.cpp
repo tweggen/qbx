@@ -5,6 +5,7 @@
 #include <QDomElement>
 
 #include "app/actions/sactionregistry.h"
+#include "app/servicesui/soptionsdialog.h"
 #include "app/shell/smainwindow.h"
 
 namespace {
@@ -463,3 +464,52 @@ static const bool s_reg_mixer_strip_menu = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "mixer-strip-menu" ),
         []{ return new SMixerStripMenuAction; } ), true );
+
+// --- assert-mixing-options (QBX-256) ---------------------------------------
+
+QStringList SAssertMixingOptionsAction::knownAttributes() const
+{
+    return { QStringLiteral( "contains" ), QStringLiteral( "soloScope" ) };
+}
+
+SApplyResult SAssertMixingOptionsAction::apply( SProject * )
+{
+    SOptionsDialog dialog( nullptr );
+    const QString desc = dialog.describeMixingPage();
+
+    QStringList problems;
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) )
+        problems << QString( "expected to contain '%1'" ).arg( contains_ );
+    if( !soloScope_.isEmpty()
+        && desc != QStringLiteral( "soloScope=" ) + soloScope_ )
+        problems << QString( "expected soloScope=%1" ).arg( soloScope_ );
+
+    if( !problems.isEmpty() ) {
+        qWarning().noquote() << "assert-mixing-options: FAILED -"
+                             << problems.join( "; " ) << "in" << desc;
+        return { false, nullptr };
+    }
+    qDebug().noquote() << "assert-mixing-options: OK" << desc;
+    return { true, nullptr };
+}
+
+void SAssertMixingOptionsAction::writeXml( QDomElement &elem ) const
+{
+    if( !contains_.isEmpty() )  elem.setAttribute( "contains", contains_ );
+    if( !soloScope_.isEmpty() ) elem.setAttribute( "soloScope", soloScope_ );
+}
+
+bool SAssertMixingOptionsAction::readXml( const QDomElement &elem, int )
+{
+    contains_  = elem.attribute( "contains", QString() );
+    soloScope_ = elem.attribute( "soloScope", QString() );
+    // One of the two, or the verb asserts nothing at all -- the
+    // assert-recorded-clip minClips lesson (an attribute nobody reads is a
+    // check that is not there).
+    return !contains_.isEmpty() || !soloScope_.isEmpty();
+}
+
+static const bool s_reg_assert_mixing_options = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-mixing-options" ),
+        []{ return new SAssertMixingOptionsAction; } ), true );

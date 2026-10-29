@@ -252,6 +252,15 @@ inline constexpr const char *ClickWhileRecording  = "metronome/clickWhileRecordi
 // per TRACK rather than per user. See `STrack::mixerStripNarrow()` for why
 // that deviates from D9, whose stated reason is stale.
 inline constexpr const char *MixerSections        = "mixer/sections";
+// WHAT SOLO IS APPLIED ACROSS (QBX-256): "global" | "arrangement".
+//
+// `global` (the default) means a solo anywhere in the project is in force
+// everywhere, so soloing a lane inside a sub-arrangement leaves that lane as
+// the only thing the project plays; `arrangement` keeps the rule inside the
+// root that holds the soloed lane. The shell pushes the value into
+// SProject::setSoloScope() -- `app/model`, where the audibility rule lives,
+// may not read SSettings. An unrecognised value reads as `global`.
+inline constexpr const char *SoloScope            = "mixer/soloScope";
 
 // MEDIA BROWSER (proposal 38 gate 2, design §B.4). Per-user and machine-local
 // for the reason every path in this table is: where this person keeps their

@@ -308,6 +308,27 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     feed and darken its meters, which are exactly the two things a monitored
     track must keep doing.
 
+17a. **`applyChildTrackAudibility()` OWNS EVERY CLIP ENTRY'S MUTE, not only a
+    nested lane's** (QBX-256). `twTrackMix::setClipMuted` has no other caller
+    anywhere, so this pass is the single writer, and since the solo scope
+    became an option it hands a plain clip entry a flag as well.
+
+    It is `false` for every clip unless ONE case holds: `Global` scope, solo in
+    force, and this lane audible ONLY because it reaches the soloed lane
+    through a placement (`ssolo::ownMaterialSoloed()` is what tells that apart
+    from "this lane is what was soloed"). Then each clip that does not itself
+    reach a soloed lane is muted, because the lane has to stay wired -- cut it
+    and the path to the soloed lane goes with it -- while the material it
+    holds of its own is not what the user soloed. Measured before the clip
+    half existed: a carrier lane with one copy of its own played 0.1333 where
+    the soloed lane alone is 0.06665, and `solo_scope_project_wide.qxa` stage
+    G pins it with G2 as the control, since a clip muted and never unmuted
+    would satisfy G too.
+
+    Outside that case every clip is handed `false`, which `setClipMuted`
+    reports as an empty range, so an ordinary project and `Arrangement` scope
+    pay one comparison per clip and change nothing.
+
 18. **`ArmedForRecording` is INERT ON LOAD.** The flag round-trips through the
     file untouched, but a track that arrived armed is not a monitoring source
     until the user arms it in THIS session (`SLiveMonitor::projectChanged()`

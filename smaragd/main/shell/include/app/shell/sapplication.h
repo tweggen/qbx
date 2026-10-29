@@ -142,6 +142,11 @@ public:
 
     SProject *getCurrentProject() const override;
     void setCurrentProject( SProject * );
+    // Push the per-user solo scope (SOpt::SoloScope) onto the current
+    // project (QBX-256). Called when the project changes and whenever the
+    // option is written; public so nothing has to fake a settings change to
+    // apply it.
+    void pushSoloScope();
     // Re-fetch the project root component's first output and connect it to
     // the speaker. Call this when the synth graph has changed (tracks
     // added, busses inserted, etc.) so that playback uses the current

@@ -56,6 +56,12 @@ public:
     // undecryptable` -- NEVER the secret itself, its length or a prefix
     // (AC 15).
     QString describeMediaPage() const;
+    // Same house pattern for the Mixing page (QBX-256): one line, the widget
+    // state only. What the option DOES is gated on rendered audio
+    // (qxa.solo_scope_project_wide), which is a stronger claim than any
+    // describe string could make; this exists so the round trip through the
+    // REAL dialog -- load, Apply, re-read -- is assertable too.
+    QString describeMixingPage() const;
     // The tree item label of the page currently showing (e.g. "Audio"), for
     // headless coverage of AC-b1's remembered-page round trip. Never parsed
     // by production code.
@@ -109,6 +115,7 @@ private:
     QWidget *buildMidiPage();
     QWidget *buildPluginsPage();
     QWidget *buildMediaPage();
+    QWidget *buildMixingPage();
     void loadMousePage();
     void loadEventEditorPage();
     void loadAudioPage();
@@ -116,12 +123,14 @@ private:
     void loadMidiPage();
     void loadPluginsPage();
     void loadMediaPage();
+    void loadMixingPage();
     void applyMousePage();
     void applyEventEditorPage();
     void applyAudioPage();
     void applyLogPage();
     void applyMidiPage();
     void applyPluginsPage();
+    void applyMixingPage();
     // Plugins page helpers.
     void addPluginDir();
     void removePluginDirs();
@@ -180,6 +189,8 @@ private:
     QComboBox *logLevel_;
     QSpinBox  *logCapacity_;
     QCheckBox *logToFile_;
+    // Mixing page (QBX-256): what solo is applied across.
+    QComboBox *soloScope_ = nullptr;
     QLabel    *logPathLabel_;
 
     // MIDI page (proposal 37 P7b). `midiVirtualBtn_` is DISABLED where the

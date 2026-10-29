@@ -436,7 +436,7 @@ std::shared_ptr<twEventMerge> STrack::eventFeed()
 
     // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( getProjectSafe() );
-    const bool anySolo = ssolo::anySoloInTree( root );
+    const bool anySolo = ssolo::anySoloInForce( root );
     for( SLink *lk : childLinks() ) {
         if( !lk ) continue;
         STrack *child = dynamic_cast<STrack *>( &lk->getSObject() );
@@ -2185,13 +2185,46 @@ void STrack::applyChildTrackAudibility()
 {
     // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
     SObject *root = splacements::rootContainer( getProjectSafe() );
-    const bool anySolo = ssolo::anySoloInTree( root );
+    const bool anySolo = ssolo::anySoloInForce( root );
+
+    // QBX-256. In Global scope a lane can be audible for ONE reason only --
+    // that it carries the soloed lane's arrangement -- and then the clips it
+    // holds of its own are not what the user soloed. Computed once per lane,
+    // and false whenever solo is not in force or the scope is per-root, so
+    // the clip loop below is then a no-op on a flag that is already right.
+    //
+    // THE THIRD TERM IS NOT DECORATION, and return_track_routing.qxa is what
+    // named it: a lane that is INAUDIBLE must keep its clip entries as they
+    // were. Its plug is nulled anyway, so its own clips change nothing it
+    // sums -- but a ROUTING dependent still taps it (a return reads its
+    // source's aux bus, which is an edge no containment walk follows), and
+    // muting the source's clips starved the return. Measured: the solo-the-
+    // return render came back SILENT where it must equal the return alone.
+    // So this is for a lane that is audible AND audible for one reason only.
+    const bool leakGuard =
+        anySolo
+        && ssolo::scopeOf( this ) == SProject::SoloScope::Global
+        && ssolo::isLaneAudible( root, this, anySolo )
+        && !ssolo::ownMaterialSoloed( this );
 
     twEditRange affected;
     for( SLink *lk : childLinks() ) {
         if( !lk ) continue;
         STrack *child = dynamic_cast<STrack*>( &lk->getSObject() );
-        if( !child ) continue;
+        if( !child ) {
+            // A CLIP entry. This pass is the only writer of a clip entry's
+            // mute flag (twTrackMix::setClipMuted has no other caller), so
+            // owning the plain clips here as well costs nothing and keeps one
+            // owner: outside the leak case every clip is handed `false`,
+            // which setClipMuted reports as an empty range.
+            if( cpTrackMix_ ) {
+                const bool clipAudible =
+                    !leakGuard || ssolo::clipReachesSoloedLane( &lk->getSObject() );
+                twEditRange r = cpTrackMix_->setClipMuted( lk, !clipAudible );
+                affected.unite( r.start, r.end );
+            }
+            continue;
+        }
         // The second, separate term (proposal 21 L1b, design D3): a NESTED
         // member of the live closure is excluded from the frozen sum through
         // its parent's twTrackMix, exactly the way an inaudible lane is - and
@@ -2353,7 +2386,7 @@ bool STrack::collectChildSumEnvelope( const SEnvelopeWindow &win,
     SEnvelopeWindow useWin = win;
     useWin.width = width;
     SChildSumWalk w{ useWin, sumMin, sumMax, root,
-                     ssolo::anySoloInTree( root ), false };
+                     ssolo::anySoloInForce( root ), false };
 
     // OUR OWN FADER IS NOT IN THE PRODUCT: each direct child starts at ITS OWN
     // gain. That is the rule the proposal adopts - the lane a waveform is drawn
