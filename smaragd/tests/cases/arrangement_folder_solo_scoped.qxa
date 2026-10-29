@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-245: A FOLDER'S OWN AUDIBILITY PASS ASKS ABOUT THE ROOT THAT HOLDS IT.
+
+  TWO SITES, ONE DEFECT. `STrack::applyChildTrackAudibility` (what you hear)
+  and `STrack::collectChildSumEnvelope` (what the folder's overlay draws) both
+  asked the MASTER for the root. They are asserted side by side at stages A
+  and B below, because a fix to one and not the other would leave the picture
+  and the sound disagreeing — which is the state proposal 39 M3's own
+  "the overlay is the exact call the painter makes" rule exists to prevent.
+
+  WHAT IS UNDER TEST. `STrack::applyChildTrackAudibility` is the pass that
+  enforces the shared mute/solo rule on a folder lane's NESTED lanes — the
+  root mixer's null-the-input-plug trick cannot reach them, so a folder mutes
+  their clip entries instead (objects/track inv. 17/17a). It asked
+  `splacements::rootContainer()` for the root, which is the MASTER, so for a
+  folder living inside an arrangement it answered about a tree that folder is
+  not in. QBX-245 makes the root a PARAMETER: the top-down driver
+  (SStdMixer::applyAudibility) is the root and passes `this`, and the
+  recursion hands the same one down.
+
+  WHY THIS NEEDED A CASE OF ITS OWN, and why the obvious fixture cannot see
+  it. Two conditions have to hold at once:
+
+    - THE SCOPE MUST BE `arrangement`. In the `global` default (QBX-256)
+      `isLaneAudible` does not consult its `root` argument at all and
+      `anySoloInForce` folds over every root, so the argument is INERT and a
+      master-rooted read answers exactly what a correct one does. Measured:
+      the sabotage that restores the master read changed nothing in any of
+      531 other tests.
+    - THE FOLDER MUST BE AUDIBLE WHILE ONE OF ITS CHILDREN IS NOT. If the
+      folder itself is inaudible the ROOT MIXER has already nulled its plug
+      and this pass's answer cannot be heard; if every child is audible there
+      is nothing to mute. The only shape that discriminates is a folder that
+      is audible BECAUSE it holds a soloed lane, with a second child that is
+      not that lane.
+
+  So: `Drums` holds ONE top-level lane, a folder, with two nested lanes of one
+  copy each of the same sawtooth. Coherent copies sum exactly, so two play at
+  0.1333 and one at 0.06665 — a clean factor of two, and the arrangement is
+  heard through an asset placed on a master lane because an arrangement root
+  is summed nowhere (proposal 09 D8).
+
+  ON THE MASTER-ROOTED READ every stage below reads 0.1333: `anySoloInForce`
+  asks the master, the master holds no solo at all, so `anySolo` is false and
+  every clip entry is handed "audible". Stages B and D are the discriminators;
+  A, C and F are the controls that stop a build from passing them by muting
+  the wrong thing, or everything.
+
+  `mixer/soloScope` IS THE KEY THIS CASE WRITES, so it is RUN_SERIAL and it
+  restores `global` (SOpt::def()) at the end — the discipline the three other
+  cases that write it already follow, and the one the one-owner-per-key rule
+  is actually protecting.
+-->
+<SActionScript version="1" name="arrangement_folder_solo_scoped">
+
+  <setup project="new"/>
+
+  <actions>
+    <set-option key="mixer/soloScope" value="arrangement"/>
+    <assert-mixing-options soloScope="arrangement"/>
+
+    <add-track index="-1"/>                 <!-- master 0: carries the asset -->
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>   <!-- becomes the folder -->
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:2" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Nest both carriers under lane 0. REPARENTED IN REVERSE ORDER: taking
+         lane 1 out first would renumber lane 2 to 1 under us, so the second
+         call would address the lane that had just moved. -->
+    <reparent-track source="Drums:2" destParent="Drums:0" destIndex="-1"/>
+    <reparent-track source="Drums:1" destParent="Drums:0" destIndex="-1"/>
+    <!-- One lane at Drums' top level now: the folder. Its two children are
+         Drums:0,0 and Drums:0,1 and each carries one copy. -->
+    <assert-track-count arrangement="Drums" count="1"/>
+    <assert-clip-window clip="Drums:0,0,0" startTime="0"/>
+    <assert-clip-window clip="Drums:0,1,0" startTime="0"/>
+
+    <create-asset container="Drums:" startOffset="0" duration="192000"
+                  assetName="DrumsAsset"/>
+    <place-asset assetName="DrumsAsset" trackPath="0" timePos="0"/>
+
+    <!-- ===== A: THE CONTROL — two coherent copies ===================== -->
+    <render filename="afs_A.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="afs_A.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1283" maxRms="0.1383"/>
+    <!-- AND THE FOLDER-SUM PREVIEW, which is a SECOND site with the same
+         defect: STrack::collectChildSumEnvelope asked the master for its root
+         too, and it is the exact call the overlay painter makes (proposal 39
+         M3). Two children, so twice one child's envelope, tolerance 0. -->
+    <assert-envelope mode="childSum" trackPath="Drums:0" start="0"
+                     length="192000" width="4" column="1" min="-50" max="50"/>
+
+    <!-- ===== B: THE DISCRIMINATOR ======================================
+         The FIRST nested lane is soloed. Its folder stays audible — it holds
+         a soloed lane — and the SECOND nested lane must go silent, which is
+         this pass's own decision and nobody else's. One copy. -->
+    <set-track-solo trackPath="Drums:0,0" solo="1"/>
+    <render filename="afs_B.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="afs_B.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0647" maxRms="0.0687"/>
+    <!-- The preview follows the ear: ONE child's envelope now, exactly half
+         of A's. A master-rooted collect reads anySolo=false and draws both. -->
+    <assert-envelope mode="childSum" trackPath="Drums:0" start="0"
+                     length="192000" width="4" column="1" min="-25" max="25"/>
+
+    <!-- ===== C: RELEASED, back to the control's own number ============= -->
+    <set-track-solo trackPath="Drums:0,0" solo="0"/>
+    <render filename="afs_C.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="afs_C.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1283" maxRms="0.1383"/>
+
+    <!-- ===== D: THE OTHER CHILD, for symmetry =========================
+         A build that muted a FIXED child would pass B and fail here. -->
+    <set-track-solo trackPath="Drums:0,1" solo="1"/>
+    <render filename="afs_D.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="afs_D.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0647" maxRms="0.0687"/>
+
+    <!-- ===== E: THE SAME SOLO UNDER `global` ==========================
+         Both scopes agree here, which is the point: this case is about WHICH
+         ROOT the pass asks about, not about the scope. In `global` the rule
+         crosses the placement edge instead and arrives at the same answer. -->
+    <set-option key="mixer/soloScope" value="global"/>
+    <render filename="afs_E.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="afs_E.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.0647" maxRms="0.0687"/>
+    <set-option key="mixer/soloScope" value="arrangement"/>
+    <set-track-solo trackPath="Drums:0,1" solo="0"/>
+
+    <!-- ===== F: THE FOLDER ITSELF SOLOED =============================
+         "Inside a soloed ancestor" — underSoloedAncestor( root, lane ), the
+         term that most needs the right root — so BOTH children are heard.
+         Two copies again. A build that darkened a soloed folder's whole
+         subtree would pass B and D and fail here. -->
+    <set-track-solo trackPath="Drums:0" solo="1"/>
+    <render filename="afs_F.wav" format="wav" quality="10" durationSec="4"/>
+    <assert-audio-energy filename="afs_F.wav"
+                         startFrame="0" frameCount="48000"
+                         minRms="0.1283" maxRms="0.1383"/>
+    <set-track-solo trackPath="Drums:0" solo="0"/>
+
+    <!-- The INI comes back as it was: `global` is SOpt::def(). -->
+    <set-option key="mixer/soloScope" value="global"/>
+    <assert-mixing-options soloScope="global"/>
+  </actions>
+</SActionScript>

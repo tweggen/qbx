@@ -130,12 +130,23 @@ int normalizeColumns( SProject &project )
             QStringLiteral( "off" ), Qt::CaseInsensitive ) == 0 )
         return 0;
 
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = project.masterRoot();
-    if( !root ) return 0;
-
+    // EVERY ROOT, not the master alone (QBX-245). This is a LOAD-TIME
+    // MIGRATION -- it collapses the legacy take shape wherever it is found --
+    // and a project's lanes live in as many trees as it has arrangements. The
+    // master-only walk left every arrangement's columns un-migrated, silently
+    // and for exactly as long as nobody looked: the un-migrated shape still
+    // renders, it just renders the legacy answer.
+    //
+    // There is no pathRoot to be handed one here and there could not be: a
+    // migration is about the whole document, so enumerating the registry IS
+    // the correct resolution rather than a stand-in for one.
     QVector<SLink *> placements;
-    collectPlacements( *root, placements );
+    // check_root_resolution: master -- enumerates EVERY root -- the master here, then project.arrangements() below
+    if( SObject *master = project.masterRoot() )
+        collectPlacements( *master, placements );
+    for( SObject *arr : project.arrangements() )
+        if( arr ) collectPlacements( *arr, placements );
+    if( placements.isEmpty() ) return 0;
 
     int collapsed = 0, refused = 0;
     for( SLink *lk : placements ) {

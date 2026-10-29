@@ -151,8 +151,14 @@ void SFeelFlowTrackBounce::start()
     // an edit) never leaks files; a track that MOVES gets a fresh path,
     // which is a harmless orphan (the same class the media cache's Cleanup…
     // dialog already exists for) rather than a wrong answer.
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *mixerRoot = splacements::rootContainer( project );
+    // THE ROOT THAT HOLDS THIS TRACK, object first (QBX-245/QBX-246). This
+    // is not a verb and has no pathRoot to be handed one: it has a track
+    // POINTER, and the question "what is this track's index path" has an
+    // answer only against the root that actually reaches it. Asking the
+    // master gave an EMPTY path for every track in an arrangement, which
+    // pathStr then spelled "root" -- so every arrangement track's bounce
+    // landed on one shared file name, overwriting the others.
+    SObject *mixerRoot = splacements::rootHolding( project, track_ );
     const QList<int> trackPath = strackpath::pathOf( mixerRoot, track_ );
     QString pathStr = trackPath.isEmpty() ? QStringLiteral( "root" )
                                           : QStringLiteral( "" );

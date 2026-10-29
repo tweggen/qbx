@@ -25,6 +25,30 @@ Invariants:
    root still validated by coincidence. `select_all_scope.qxa` (AC-a3) is the
    first case whose arrangement genuinely differs and would have failed on
    the pre-fix binary.
+
+   **AND THE QUALIFIER SURVIVES THE WRITE (QBX-245).** `writeXml` emitted
+   every path BARE through `pathToString`, so the root that `readXml` had
+   just parsed into `pathRoot_` was dropped on the way out: a re-serialized
+   script, or a replayed undo stack, addressed the master. It writes
+   `qualifiedToString( pathRoot_, path )` per path now — the exact inverse of
+   `readXml`'s `parseInto`, where the first qualifier wins — and a
+   master-rooted path still writes no qualifier, so everything written before
+   this reads and writes byte-identically. The remaining master resolution in
+   `apply()`, a bare `masterRoot()` existence GUARD, is `rootNamed(
+   pathRoot_ )` now as well: the master guard passed for a path qualified with
+   a root nobody registered, and the verb went on to validate against the
+   wrong tree. Gated by the `set-selection` fixture row in
+   `action_roundtrip_test` (the only gate that can see a write-side loss) and
+   by `arrangement_select_and_group_edit.qxa`.
+
+   **The guard change is deliberately BELT-AND-BRACES and is NOT gated**:
+   `isPathValid()` already threads `pathRoot_` and already refuses an
+   unregistered root, so the case's `paths="Nope:0,0"` rejection holds with
+   the old master guard too (measured). It is still the right line — a guard
+   that passes for a root nobody registered is a guard that guards nothing,
+   and the next reader of `root` here would inherit the master — but the
+   honest statement is that today only the refusal downstream of it is
+   witnessed.
 4. `SSelectionManager::allClipPaths(SObject *root)` (AC-a3) walks EVERY child
    — recursing into a lane (`SObject::isPathContainer()`) rather than
    counting it as a clip, indices matching `childAt()`/`indexOfChild()`

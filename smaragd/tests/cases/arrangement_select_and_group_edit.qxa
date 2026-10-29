@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-245, cluster 3 of QBX-242's census: A SCRIPT SELECTS AND EDITS INSIDE AN
+  ARRANGEMENT TAB.
+
+  WHY THIS CASE IS THE WHOLE TICKET'S POINT. About 60 verb files resolve their
+  target with `splacements::rootNamed( project, pathRoot_ )` — the root arrives
+  as a parameter. Eleven sites did not, and `set-selection` was the serious
+  one: it is the verb every .qxa uses to select something, so until it reached
+  an arrangement NO case could build a selection fixture inside one. That is
+  not one gap, it is the thing that HID the gaps in QBX-243 and QBX-244.
+
+  THE WRONG-TREE EDIT IS WHAT MAKES THIS CLASS DANGEROUS, and both halves of
+  section B are about it. An index path alone cannot say which root it
+  addresses, and index {0} usually exists in every root — so a path resolved
+  against the wrong root does not fail, it SUCCEEDS on the wrong object. Every
+  "the master is untouched" assertion below is there to catch exactly that,
+  and each one is a claim no amount of asserting the intended lane could make.
+
+  SECTION B's FIXTURE IS DELIBERATELY ASYMMETRIC. The master and `Drums` both
+  have two lanes with one clip each, and only the DRUMS pair is an edit group.
+  So:
+    - a build that resolves `expandClipPaths` against the master finds lane 0
+      UNGROUPED, broadcasts nothing, and leaves `Drums:1` with one clip;
+    - a build that fixes that but leaves the composite's children rootless
+      resolves their bare paths against the master and splits the MASTER's
+      two lanes instead — which the "master untouched" assertions see and the
+      Drums assertions see as the same single clip.
+  Two independent witnesses for two independent halves of one change.
+
+  WHAT IS NOT HERE. `learn-feel-flow`'s resolution needs a bounce and an
+  analysis to have run (see feel_flow_trained.qxa), which is minutes of
+  fixture for the same one line `set-feel-flow-mode` exercises below; its XML
+  half IS gated, by the fixture row in action_roundtrip_test. The media-drop
+  placement hook and the load-time take-column migration are the other two
+  sites with no .qxa reach — stated in the PR body rather than left to be
+  discovered.
+
+  NO AUDIO IS RENDERED. An arrangement root is summed nowhere (proposal 09
+  D8): it is audible only through a placement, so every claim here is about
+  the MODEL — which is also where the defect was.
+-->
+<SActionScript version="1" name="arrangement_select_and_group_edit">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The master: two lanes, one clip each, UNGROUPED. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Drums: two lanes, one clip each, and they ARE an edit group. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <set-edit-group trackPath="Drums:0" group="1"/>
+    <set-edit-group trackPath="Drums:1" group="1"/>
+
+    <!-- ===== A: set-selection WRITES INTO THE ROOT ITS PATHS NAME =======
+         Not into the active one, and not into the master. The two roots keep
+         independent lists (proposal 09 §3), so the master's stays empty. -->
+    <set-selection paths="Drums:0,0"/>
+    <assert-selection root="Drums" paths="Drums:0,0"/>
+    <assert-selection root="" count="0"/>
+
+    <!-- A master selection afterwards does not disturb the arrangement's. -->
+    <set-selection paths="0,0"/>
+    <assert-selection root="" paths="0,0"/>
+    <assert-selection root="Drums" paths="Drums:0,0"/>
+
+    <!-- A path qualified with a root NOBODY REGISTERED must fail closed, and
+         must not fall back to the master (D21's whole safety property). -->
+    <set-selection paths="Nope:0,0" expectReject="true"/>
+    <assert-selection root="" paths="0,0"/>
+
+    <!-- ===== B: THE EDIT-GROUP FAN-OUT HAPPENS IN THE RIGHT TREE ========
+         One split on Drums:0 must split its TWIN Drums:1 — and must leave
+         both of the master's lanes alone. -->
+    <split-clip clip="Drums:0,0" splitTime="96000"/>
+
+    <!-- The anchor split: two clips where there was one. -->
+    <assert-clip-window clip="Drums:0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="Drums:0,1" startTime="96000"/>
+    <!-- THE TWIN followed it. On a master-rooted expandClipPaths there is no
+         group to find, so this second clip does not exist. -->
+    <assert-clip-window clip="Drums:1,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="Drums:1,1" startTime="96000"/>
+
+    <!-- ...AND THE MASTER IS UNTOUCHED. This is the wrong-tree witness: a
+         composite whose children carry bare paths and no root would have
+         split these two instead, with no error anywhere. -->
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+    <assert-clip-window clip="1,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="1,1" expectReject="true"/>
+
+    <!-- ONE undo takes the whole broadcast back, in the right tree. -->
+    <undo count="1"/>
+    <assert-clip-window clip="Drums:0,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="Drums:0,1" expectReject="true"/>
+    <assert-clip-window clip="Drums:1,0" startTime="0" duration="192000"/>
+    <assert-clip-window clip="Drums:1,1" expectReject="true"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="192000"/>
+    <redo count="1"/>
+    <assert-clip-window clip="Drums:1,1" startTime="96000"/>
+
+    <!-- ===== C: A FEEL-FLOW VERB HONOURS THE QUALIFIER =================
+         set-feel-flow-mode was wrong at BOTH ends — it parsed `trackPath`
+         with stringToPath (which splits on commas, so "Drums:0" became an
+         unparsable token) and then resolved against the master — so the two
+         halves agreed and the defect was invisible. The master's lane 0 is
+         the witness: it must STAY adaptive. -->
+    <set-feel-flow-mode trackPath="Drums:0" mode="trained"/>
+    <assert-feel-flow-panel trackPath="Drums:0" contains="mode=trained"/>
+    <assert-feel-flow-panel trackPath="0" contains="mode=adaptive"/>
+
+    <!-- ...and undone, in the arrangement, leaving the master alone still. -->
+    <undo count="1"/>
+    <assert-feel-flow-panel trackPath="Drums:0" contains="mode=adaptive"/>
+    <assert-feel-flow-panel trackPath="0" contains="mode=adaptive"/>
+    <redo count="1"/>
+    <assert-feel-flow-panel trackPath="Drums:0" contains="mode=trained"/>
+  </actions>
+</SActionScript>

@@ -52,7 +52,7 @@ SApplyResult SSetFormantShiftAction::apply( SProject *project )
     // Edit-group broadcast, mirroring set-pitch / set-formant-preserve.
     if( broadcast_ ) {
         QList<QList<int>> targets =
-            seditgroups::expandClipPaths( project, clipPath_ );
+            seditgroups::expandClipPaths( project, clipPath_, pathRoot_ );
         if( targets.size() > 1 ) {
             int t = take_;
             if( t < 0 ) {
@@ -61,6 +61,9 @@ SApplyResult SSetFormantShiftAction::apply( SProject *project )
                 t = resolved;
             }
             SCompositeAction composite;
+            // The paths above are relative to pathRoot_; the composite
+            // carries it so its children resolve there too (QBX-245).
+            composite.setPathRoot( pathRoot_ );
             for( const QList<int> &p : targets ) {
                 int resolved = -1;
                 if( !formantShiftTargetCut( mixer, p, t, resolved ) ) continue;

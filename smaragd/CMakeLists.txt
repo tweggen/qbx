@@ -365,6 +365,15 @@ endif()
 if(TEST qxa.track_detail_meter_solo_scope)
     set_tests_properties(qxa.track_detail_meter_solo_scope PROPERTIES RUN_SERIAL TRUE)
 endif()
+# ...and a THIRD, for the same key and with the same discipline (QBX-245).
+# `arrangement_folder_solo_scoped` is the only case that can see
+# STrack::applyChildTrackAudibility's root argument at all: in the `global`
+# default the rule does not consult it, so the argument is inert there and a
+# master-rooted read answers exactly what a correct one does. The case
+# therefore declares `arrangement`, and restores `global` like the other two.
+if(TEST qxa.arrangement_folder_solo_scoped)
+    set_tests_properties(qxa.arrangement_folder_solo_scoped PROPERTIES RUN_SERIAL TRUE)
+endif()
 
 # --- the deferred `media:` drop (proposal 38 gate 3) --------------------------
 #

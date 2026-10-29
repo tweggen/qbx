@@ -140,17 +140,12 @@ EXEMPT = {
         "the clips= list is relative to the root already resolved from "
         "pathRoot via splacements::rootNamed(), so the entries are bare",
 
-    # The three below are REAL DEFECTS with a filed owner, carried as gaps in
-    # the idiom the smainwindow entry above established. They are not safe and
-    # they are not approved: each parses a path master-rooted AND resolves it
-    # against the master, so the two halves agree and the defect is invisible.
-    # Delete the entry when the ticket lands; do not widen it.
-    "objects/track/src/slearnfeelflowaction.cpp":
-        "GAP (QBX-245): learn-feel-flow has no pathRoot at all -- it parses "
-        "trackPath bare and resolves it against the master",
-    "objects/track/src/ssetfeelflowmodeaction.cpp":
-        "GAP (QBX-245): set-feel-flow-mode has no pathRoot at all -- it parses "
-        "trackPath bare and resolves it against the master",
+    # The two QBX-245 entries that used to be here are DELETED, which is the
+    # last step of that fix rather than an afterthought: learn-feel-flow and
+    # set-feel-flow-mode parse with parseInto() and resolve with rootNamed()
+    # now, so they have no bare parse left to exempt. An exemption left behind
+    # re-opens the hole silently for the next change -- the same reason
+    # QBX-246 gave for deleting ssidecartestactions.cpp's entry below.
 
     # ssidecartestactions.cpp's entry was DELETED by QBX-246, which is what an
     # exemption carrying a ticket is for: feelFlowTrackAt() and

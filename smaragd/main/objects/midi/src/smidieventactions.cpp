@@ -39,11 +39,15 @@ SApplyResult commitTable( const ClipRef &ref, const QList<int> &clipPath,
  */
 template <typename MakeFn>
 bool expandBroadcast( SProject *project, const QList<int> &clipPath,
-                      MakeFn make, SApplyResult &out )
+                      const QString &rootName, MakeFn make, SApplyResult &out )
 {
-    QList<QList<int>> targets = seditgroups::expandClipPaths( project, clipPath );
+    QList<QList<int>> targets =
+        seditgroups::expandClipPaths( project, clipPath, rootName );
     if( targets.size() <= 1 ) return false;
     SCompositeAction composite;
+    // The targets are relative to `rootName`; the composite carries it so its
+    // children resolve there too (QBX-245, SCompositeAction's own note).
+    composite.setPathRoot( rootName );
     for( const QList<int> &p : targets ) composite.append( make( p ) );
     out = composite.apply( project );
     return true;
@@ -114,7 +118,7 @@ SApplyResult SAddNoteAction::apply( SProject *project )
 {
     if( broadcast_ ) {
         SApplyResult out{ false, nullptr };
-        if( expandBroadcast( project, clipPath_,
+        if( expandBroadcast( project, clipPath_, pathRoot_,
                 [&]( const QList<int> &p ) -> SAction * {
                     return new SAddNoteAction( p, tick_, dur_, key_, velocity_,
                                                channel_, releaseVelocity_,
@@ -192,7 +196,7 @@ SApplyResult SRemoveNoteAction::apply( SProject *project )
 {
     if( broadcast_ ) {
         SApplyResult out{ false, nullptr };
-        if( expandBroadcast( project, clipPath_,
+        if( expandBroadcast( project, clipPath_, pathRoot_,
                 [&]( const QList<int> &p ) -> SAction * {
                     return new SRemoveNoteAction( p, tick_, key_, channel_,
                                                   take_, false );
@@ -271,7 +275,7 @@ SApplyResult SSetNotesAction::apply( SProject *project )
 {
     if( broadcast_ ) {
         SApplyResult out{ false, nullptr };
-        if( expandBroadcast( project, clipPath_,
+        if( expandBroadcast( project, clipPath_, pathRoot_,
                 [&]( const QList<int> &p ) -> SAction * {
                     return new SSetNotesAction( p, notes_, take_, false,
                                                 gesture_ );
@@ -536,7 +540,7 @@ SApplyResult SQuantizeNotesAction::apply( SProject *project )
 {
     if( broadcast_ ) {
         SApplyResult out{ false, nullptr };
-        if( expandBroadcast( project, clipPath_,
+        if( expandBroadcast( project, clipPath_, pathRoot_,
                 [&]( const QList<int> &p ) -> SAction * {
                     return new SQuantizeNotesAction( p, grid_, strength_, swing_,
                                                      take_, false );

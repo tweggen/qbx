@@ -434,8 +434,11 @@ std::shared_ptr<twEventMerge> STrack::eventFeed()
     // reaches eventClips_ and is never double-triggered.
     sources.push_back( eventClips_ );
 
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = splacements::rootContainer( getProjectSafe() );
+    // THE ROOT THAT HOLDS US (QBX-245/QBX-246), object first: all we have is
+    // our own identity, and the solo rule's `root` argument is the top of the
+    // tree it walks for a soloed ANCESTOR. Asking for the master answered
+    // about a tree we are not in whenever this track lives in an arrangement.
+    SObject *root = splacements::rootHolding( getProjectSafe(), this );
     const bool anySolo = ssolo::anySoloInForce( root );
     for( SLink *lk : childLinks() ) {
         if( !lk ) continue;
@@ -1413,8 +1416,9 @@ void STrack::trackChildWasAdded( SLink &child )
                 QObject::connect( childTrack, SIGNAL( subtreeSoloChanged() ),
                                   this, SLOT( childTrackSoloChanged() ),
                                   Qt::UniqueConnection );
-                // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-                SObject *root = splacements::rootContainer( getProjectSafe() );
+                // The root that HOLDS us (QBX-245), eventFeed's reason.
+                SObject *root =
+                    splacements::rootHolding( getProjectSafe(), this );
                 if( !ssolo::isLaneAudible( root, childTrack ) ) {
                     if( cpTrackMix_ ) {
                         twEditRange r = cpTrackMix_->setClipMuted( &child, true );
@@ -2163,7 +2167,10 @@ void STrack::onTrackMuteChanged( bool muted )
 // audibility), so re-applying our own children is enough.
 void STrack::childTrackMuteChanged( bool /*muted*/ )
 {
-    applyChildTrackAudibility();
+    // Not the top-down pass, so there is no root being handed down here: a
+    // mute gesture on one child starts and ends with us, and the root has to
+    // be looked up from our own identity (QBX-245).
+    applyChildTrackAudibility( splacements::rootHolding( getProjectSafe(), this ) );
 }
 
 // A lane at or below one of our child tracks changed its solo flag. Solo is
@@ -2181,10 +2188,16 @@ void STrack::childTrackSoloChanged()
 // recurse. A lane's clip entry is muted exactly when the lane is not audible;
 // twTrackMix::setClipMuted no-ops (and reports an empty range) when the flag is
 // already right, so this is idempotent and costs nothing when nothing changed.
-void STrack::applyChildTrackAudibility()
+void STrack::applyChildTrackAudibility( SObject *root )
 {
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = splacements::rootContainer( getProjectSafe() );
+    // THE ROOT ARRIVES AS A PARAMETER (QBX-245). This is the hot top-down
+    // pass -- SStdMixer::applyAudibility drives it on every mute and every
+    // solo change, and it recurses through every folder -- and the driver is
+    // the root itself, so there is nothing to look up. Resolving it per level
+    // instead would be a whole-tree search per folder, and resolving it as
+    // the MASTER (what this did) answered about a tree an arrangement's lanes
+    // are not in: `anySoloInForce` read the wrong tree in per-root scope and
+    // `underSoloedAncestor` never found their real folder ancestors.
     const bool anySolo = ssolo::anySoloInForce( root );
 
     // QBX-256. In Global scope a lane can be audible for ONE reason only --
@@ -2238,7 +2251,7 @@ void STrack::applyChildTrackAudibility()
                 affected.unite( r.start, r.end );
             }
         }
-        child->applyChildTrackAudibility();   // nested folders
+        child->applyChildTrackAudibility( root );   // nested folders, same root
     }
 
     // Only the lanes that actually flipped gained or lost material — and the
@@ -2378,8 +2391,9 @@ bool STrack::collectChildSumEnvelope( const SEnvelopeWindow &win,
     STrack &self = const_cast<STrack &>( *this );
     if( !self.hasChildTracks() ) return false;
 
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = splacements::rootContainer( self.getProjectSafe() );
+    // The root that HOLDS us (QBX-245), eventFeed's reason. One lookup per
+    // call: the walk below carries it down rather than re-asking.
+    SObject *root = splacements::rootHolding( self.getProjectSafe(), &self );
 
     std::vector<int32_t> sumMin( (size_t) width, 0 );
     std::vector<int32_t> sumMax( (size_t) width, 0 );

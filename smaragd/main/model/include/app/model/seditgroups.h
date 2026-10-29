@@ -81,14 +81,21 @@ inline SLink *correspondingClip( SObject *lane, offset_t startTime,
  * then one path per other member lane that has a corresponding clip
  * (members without one are skipped — "as applicable"). A clip outside any
  * group expands to just itself.
+ *
+ * `rootName` IS REQUIRED and is deliberately not defaulted (QBX-245): every
+ * caller is a verb that already holds one in `pathRoot_`, and a default would
+ * let a new caller silently keep the master — which is the exact shape of the
+ * defect this parameter fixes. The paths handed back are relative to THAT
+ * root, so a composite built from them must carry it too (SCompositeAction's
+ * own note).
  */
 inline QList<QList<int>> expandClipPaths( SProject *project,
-                                          const QList<int> &clipPath )
+                                          const QList<int> &clipPath,
+                                          const QString &rootName )
 {
     QList<QList<int>> out;
     out.append( clipPath );
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = splacements::rootContainer( project );
+    SObject *root = splacements::rootNamed( project, rootName );
     if( !root || clipPath.isEmpty() ) return out;
     QList<int> lanePath = clipPath;
     int idx = lanePath.takeLast();

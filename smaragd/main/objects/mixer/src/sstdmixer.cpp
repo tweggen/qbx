@@ -886,7 +886,10 @@ void SStdMixer::applyAudibility()
     for( SLink *lk : childLinks() ) {
         if( !lk ) continue;
         if( STrack *t = dynamic_cast<STrack *>( &lk->getSObject() ) )
-            t->applyChildTrackAudibility();
+            // WE are the root this pass is about (QBX-245): `this`, never
+            // splacements::rootContainer(), which answers the master from
+            // inside an arrangement's own mixer.
+            t->applyChildTrackAudibility( this );
     }
 }
 

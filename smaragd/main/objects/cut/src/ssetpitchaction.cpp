@@ -55,7 +55,7 @@ SApplyResult SSetPitchAction::apply( SProject *project )
     // transposed are skipped up front rather than failing the whole composite.
     if( broadcast_ ) {
         QList<QList<int>> targets =
-            seditgroups::expandClipPaths( project, clipPath_ );
+            seditgroups::expandClipPaths( project, clipPath_, pathRoot_ );
         if( targets.size() > 1 ) {
             // An active-take anchor resolves to an explicit index before
             // fanning out, so every member transposes the SAME lane.
@@ -66,6 +66,9 @@ SApplyResult SSetPitchAction::apply( SProject *project )
                 t = resolved;
             }
             SCompositeAction composite;
+            // The paths above are relative to pathRoot_; the composite
+            // carries it so its children resolve there too (QBX-245).
+            composite.setPathRoot( pathRoot_ );
             for( const QList<int> &p : targets ) {
                 int resolved = -1;
                 if( !pitchTargetCut( mixer, p, t, resolved ) ) continue;

@@ -27,12 +27,13 @@ Invariants:
    proposal 03).
 6. **THE ROOT AN ACTION'S PATHS ADDRESS LIVES IN `SAction::pathRoot_`, AND
    NOWHERE ELSE** (proposal 09 D21; enforced by `check_pathroot` job 2 since
-   QBX-249). Two funnels read that one member and nothing else:
+   QBX-249). THREE funnels read that one member and nothing else:
    `applyPropagatingRoot()` copies `a->pathRoot()` onto every inverse — the
    one place that rule lives for all 83 inverse-construction sites in the
-   tree — and `setPathRoot()` is what `stimeline::submitFor()`,
-   `SMixerStrip::submit_()` and `SEventPassVerbs::emitVerb()` stamp an action
-   with. An action that keeps its root in a member of its own is invisible to
+   tree — `SCompositeAction::apply()` copies the composite's root onto every
+   child that names none of its own (QBX-245; see below), and
+   `setPathRoot()` is what `stimeline::submitFor()`, `SMixerStrip::submit_()`
+   and `SEventPassVerbs::emitVerb()` stamp an action with. An action that keeps its root in a member of its own is invisible to
    both, **and both failures are silent**: `add-track` held an
    `arrangement_`, so the `SRemoveTrackAction` it handed back was
    master-rooted and one undo of an arrangement-side `add-track` DELETED A
@@ -43,6 +44,27 @@ Invariants:
    `pathRoot()` rather than redeclaring either — a derived `pathRoot_` or
    `pathRoot()` SHADOWS the base's non-virtual pair, which `merge-columns`
    and `set-lane-hidden` both did.
+
+   **A CHILD OF A COMPOSITE ACTS IN THE COMPOSITE'S ROOT** unless it names one
+   of its own (QBX-245). Every edit-group fan-out in the tree — twelve sites,
+   in `objects/cut`, `objects/midi` and `objects/track` — builds its children
+   with a BARE index path, because the paths came out of
+   `seditgroups::expandClipPaths()` and are relative to the root the composite
+   is about. A child left rootless resolved them against the master, and in an
+   arrangement that is the silent wrong-tree edit D21 exists to prevent: index
+   `{0}` usually exists in both trees, so the edit SUCCEEDS on the wrong clip.
+   It is done in the funnel for `applyPropagatingRoot()`'s own stated reason —
+   twelve construction sites, and a funnel cannot be forgotten — and each of
+   the twelve now also stamps its local `SCompositeAction` with `pathRoot_` so
+   there is a root to hand down.
+
+   **The limit, stated because it cannot be expressed:** an empty root means
+   both "the master" and "unset", so a child that deliberately means the
+   master inside an arrangement-rooted composite has no way to say so. No such
+   case exists — the two verbs whose paths are master-rooted by definition
+   (`extract-arrangement`, `dissolve-arrangement`) use neither a composite nor
+   a `pathRoot` — and a future one needs a third state, not a widening of
+   this.
 
 How to test: action_roundtrip_test.exe; every qxa case exercises the
 submit/apply/reject path.
