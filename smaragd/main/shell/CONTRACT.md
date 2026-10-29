@@ -2137,3 +2137,92 @@ nothing alone. Not gated: `locatorAdvanced` under real playback.
   commands use), and `restoreOpenEditors()` reopening a native editor on an
   arrangement's track (it returns at once under `--test-case`). The dock's
   METER still asks `ssolo::isLaneAudible()` against the master root.
+
+## inv. 70 — the status bar SAYS a solo is engaged and WHERE, and the badge is the command (QBX-257)
+
+- **ITS OWN PERMANENT WIDGET.** `SSoloIndicator` is added by
+  `buildStatusBar()` beside `modeLabel_` and not inside it: `modeLabel_` is
+  the mixer view's hover/drag mode line and would fight with it, while the
+  transient `showMessage()` area — "Saved %1", the skipped-lane notice — is
+  for notices that pass, not for state that persists until the user acts on
+  it. The same reasoning inv. 64's B6 note records for the skipped-lane
+  message, read in the other direction.
+- **IT NAMES WHERE, and that is the whole value.** `SOLO` when the soloed
+  lane is in the root on screen, `SOLO · Drums` when it is not,
+  `SOLO · Drums (3 lanes)` for several in one other root, `SOLO · 3 lanes`
+  when they are spread over several. In `global` scope (the QBX-256 default) a
+  solo's effect is project-wide while its cause can be off screen, and
+  "why is everything quiet?" is otherwise answered in a tab nobody is looking
+  at. The master's label is read from the TAB BAR
+  (`SViewTabs::tabNames().value( 0 )`) rather than spelled again here,
+  because the badge's job is to send the user to a tab.
+- **IT ASKS NO SOLO QUESTION OF ITS OWN.** Which lanes are soloed comes from
+  `ssolo::soloedLanesInProject()`, the scope from `SProject::soloScope()`, and
+  where a lane lives from `splacements::specOf()` / `rootHolding()` — which
+  come out of one walk in one order, so the spelling and the root cannot
+  describe different places. ssolorules.h's own header records the cost of the
+  alternative: the audibility rule was written out three times and all three
+  were wrong the same way.
+- **THREE SIGNALS, AND EACH IS LOAD-BEARING.** `attachSoloIndicator_()` wires
+  `SProject::soloSetChanged` (a flag moved, said in BOTH scopes — QBX-257
+  added it for exactly this reason, see objects/mixer inv. 30),
+  `SProject::soloTopologyChanged` (the SCOPE changed, which `setSoloScope`
+  emits) and `SViewTabs::activeRootChanged` (the root on screen decides
+  whether the badge must name where). The tabs outlive every project, so that
+  one is wired once; the project's two are re-pointed per project.
+
+  **THE TWO PROJECT SIGNALS OVERLAP IN `global` SCOPE, and that decides where
+  the gate for the second one has to live.** A flag moving in `global` emits
+  both, so the topology signal carries every update on its own there and
+  `soloSetChanged` is pure redundancy; it is the SOLE carrier only in
+  `arrangement` scope, where the topology signal is deliberately withheld.
+  Measured: deleting the `notifySoloSetChanged()` call was NOT GATED over six
+  sections of solo gestures until the case grew one that moves a flag WHILE
+  the per-root scope is in force (section F of
+  `solo_indicator_status_bar.qxa`).
+- **ATTACH ONCE, NEVER AGAIN**, `soloIndicatorAttached_`.
+  `describeStatusBar()` attaches on its first call because a scripted run
+  never reaches the attach sites, and refreshes on NO later call — if it
+  re-read the model each time, a build with none of the three signals
+  connected would describe the right badge anyway and the gate would be gating
+  nothing. `describeTrackDetailDock`'s rule, plus that reason.
+- **THE COMMAND IS THE `QAction`**, `actClearSolos_`, carried by both the Edit
+  menu ("Clear all solos") and the badge, so there is one owner of the enabled
+  state, the two cannot drift, and the clear is keyboard-reachable and
+  scriptable rather than reachable only through a mouse target that exists
+  only while a solo is engaged.
+- **THE CLEAR IS ROOTED PER LANE, NEVER PER TAB.** `clearAllSolos()` builds
+  one `set-track-solo solo="0"` per soloed lane, each stamped with the root
+  `splacements::specOf()` qualified it with. A macro rooted at the ACTIVE
+  TAB's root would resolve "1" against whatever the user happens to be
+  looking at — clearing a lane nobody asked about and leaving the soloed one
+  soloed, which is the QBX-243/244/245 defect class in one line. One
+  `SCompositeAction` means ONE undo step.
+- **SYSTEM LANES ARE PRE-FLIGHTED OUT**, not left to `SSetTrackSoloAction`'s
+  own refusal (AC5.2 / D6): `SCompositeAction::apply` rolls the WHOLE macro
+  back on the first failing child, so one such lane would turn "clear every
+  solo" into "clear none of them". None can appear today —
+  `ssolo::collectSoloedLanes` walks `childLinks()` only and a system lane is
+  deliberately not a member — so the test keeps that true rather than assumed.
+  It looks at the LAST step only: a user track nested under the master lane
+  reads `{-1,0}` and is an ordinary track the verb accepts.
+- **THE CLICK SEAM DOES ITS OWN REFUSAL.** `clickSoloIndicator()` returns
+  false when `actClearSolos_` is disabled, because `QAction::trigger()` emits
+  whatever the enabled state — a seam that merely triggered would report
+  success over a build that greys nothing, and "the badge does nothing when
+  there is no solo" would hold over it.
+- Gated by `solo_indicator_status_bar.qxa` (absent; on-screen; the off-screen
+  discriminator `soloRoots=Drums` with the master tab active; the tab switch
+  back; several over two roots; both scopes; and a flag moving INSIDE the
+  per-root scope) and `solo_indicator_clear_all.qxa` (two solos at DIFFERENT
+  indices in different roots, cleared from the master tab, one undo restoring
+  exactly those two). **Eight sabotage arms, each applied alone, all eight
+  bite**: the per-lane rooting, the active-tab read, the text that names the
+  root, the set signal, the scope wire, the click seam's own refusal, the
+  hide, and the single composite (one submission per lane instead).
+- NOT GATED: the colour (taken from `QPalette::Highlight` so it follows both
+  themes — a headless case cannot tell it from any other role) and the tooltip
+  text, whose two scope sentences are asserted only through `soloScope=`. MUTE
+  is deliberately out of scope: a mute is local and visible on its own lane,
+  and a "something is muted" badge would light nearly always and teach the
+  user to ignore that corner of the window.

@@ -483,6 +483,18 @@ what feeds it.
     -- the other roots' answers genuinely did not change, and bumping their
     chains would be invalidation nobody asked for.
 
+    **AND A SECOND SIGNAL, SAID UNCONDITIONALLY** (QBX-257).
+    `trackSoloChanged()` also calls `SProject::notifySoloSetChanged()`, before
+    the scope test and in BOTH scopes. The two are different questions and
+    answering them with one signal is what would be wrong: the topology signal
+    says "whose audibility must be recomputed", which in `Arrangement` scope
+    is nobody else's, while the set signal says "has the set of soloed lanes
+    changed", which is true in both. A consumer that merely REPORTS the solo
+    -- the status bar's indicator -- would otherwise go blind in the per-root
+    scope, and widening the topology signal to serve it would hand every other
+    root an invalidation this invariant's last paragraph says it must not get.
+    Nothing re-wires on the set signal; its only subscribers are readers.
+
 ## RETURN TRACKS (proposal 55 M2, D1/D3/D7/D8/D9)
 
 30. **A RETURN IS WIRED BY THE PASS, NEVER BESIDE IT.** `rewireReturns()` is

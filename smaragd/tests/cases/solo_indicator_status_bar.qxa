@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-257. THE STATUS BAR SAYS A SOLO IS ENGAGED, AND SAYS WHERE IT IS.
+
+  WHY THE BADGE EXISTS. Since QBX-256 the default solo scope is `global`: a
+  solo's EFFECT is project-wide while its CAUSE can be off screen — in an
+  arrangement tab the user closed, on a hidden lane, inside a collapsed
+  folder. That is silent state with a global effect, and the first encounter
+  with it is "why is everything quiet?" with the answer in a tab nobody is
+  looking at.
+
+  THE SEAM. describeTrackDetailDock's rule and its reason, plus one of its
+  own: SMainWindow::describeStatusBar() ATTACHES the indicator on the FIRST
+  call and never refreshes afterwards, so every later read reports what the
+  three signals put there. If it re-read the model each time, a build that
+  connected none of them would describe the right badge anyway and this whole
+  case would be gating nothing. The first read below is therefore before any
+  gesture, deliberately.
+
+  WHAT DISCRIMINATES. `soloRoots=` names the root that HOLDS the soloed lane.
+  A read that resolved the MASTER root instead — the mistake QBX-231, QBX-233
+  and the whole QBX-243/244/245 sweep keep finding — cannot answer "Drums"
+  for a solo the master's own tree does not contain, and cannot answer
+  "soloLanes=1" for it either. Section B is that assertion and it is the
+  reason this case exists; section A is its control, because a case that only
+  ever expected "Drums" would also pass over a badge that said "Drums" always.
+
+  THE TEXT IS ASSERTED WITHOUT TYPING THE SEPARATOR. The badge paints
+  "SOLO · Drums" with a U+00B7, which is awkward to pin from XML, so the
+  claims are made positionally instead: `soloText=SOLO|soloLanes=` says the
+  text is BARE (the next field follows immediately), and `Drums|soloLanes=`
+  says it ends with the root's name. Both read the real text() of the real
+  widget.
+
+  SCOPE. Section D switches to `arrangement` and back. In that scope a solo in
+  another root does NOT change what you hear, so the badge is informational —
+  but it must still APPEAR and still NAME the root (QBX-257 item 6), which is
+  what that section pins; the tooltip is where the two scopes say different
+  sentences. `mixer/soloScope` is the one option two other cases also write,
+  so this case is RUN_SERIAL and restores `global`, which is SOpt::def().
+-->
+<SActionScript version="1" name="solo_indicator_status_bar">
+  <actions>
+    <set-option key="mixer/soloScope" value="global"/>
+
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- ===== NOTHING IS SOLOED: NO BADGE, AND THE COMMAND IS DEAD ======
+         The first read is also the ATTACH (see the header). -->
+    <assert-status-bar contains="soloShown=0"/>
+    <assert-status-bar contains="soloLanes=0"/>
+    <assert-status-bar contains="soloRoots=|"/>
+    <assert-status-bar contains="clearSolosEnabled=0"/>
+    <!-- The seam does its own refusal: QAction::trigger() fires whatever the
+         enabled state, so without that check this would report success. -->
+    <click-solo-indicator expectReject="true"/>
+
+    <!-- ===== A: THE SOLO IS IN THE ROOT ON SCREEN ======================
+         The master tab is active, so there is nothing to send the user to and
+         the badge stays bare. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <assert-status-bar contains="soloShown=1"/>
+    <assert-status-bar contains="soloText=SOLO|soloLanes=1"/>
+    <assert-status-bar contains="soloOnScreen=1"/>
+    <assert-status-bar contains="soloList=0|"/>
+    <assert-status-bar contains="clearSolosEnabled=1"/>
+    <!-- Released: the badge goes, and so does the command. -->
+    <set-track-solo trackPath="0" solo="0"/>
+    <assert-status-bar contains="soloShown=0"/>
+    <assert-status-bar contains="clearSolosEnabled=0"/>
+
+    <!-- ===== B: THE DISCRIMINATOR — A SOLO IN A ROOT THAT IS NOT ON SCREEN
+         The master tab is still active and its own tree holds no solo at all.
+         A master-rooted read answers "nothing is soloed" here. -->
+    <set-track-solo trackPath="Drums:1" solo="1"/>
+    <assert-status-bar contains="soloShown=1"/>
+    <assert-status-bar contains="soloLanes=1"/>
+    <assert-status-bar contains="soloRoots=Drums"/>
+    <assert-status-bar contains="soloOnScreen=0"/>
+    <assert-status-bar contains="soloList=Drums:1|"/>
+    <!-- ...and the TEXT names it: not bare, and ending in the root's name. -->
+    <assert-status-bar absent="soloText=SOLO|"/>
+    <assert-status-bar contains="Drums|soloLanes=1"/>
+
+    <!-- ===== C: SWITCHING TO THAT TAB STOPS NAMING IT ==================
+         The root on screen decides whether the badge has to say WHERE, and
+         nothing else about it. This is the other direction of B: a build that
+         ignored the active tab would keep naming Drums here. -->
+    <open-arrangement-tab name="Drums"/>
+    <activate-tab name="Drums"/>
+    <assert-status-bar contains="soloOnScreen=1"/>
+    <assert-status-bar contains="soloText=SOLO|soloLanes=1"/>
+    <activate-tab name="Arrangement"/>
+    <assert-status-bar contains="soloOnScreen=0"/>
+    <assert-status-bar contains="Drums|soloLanes=1"/>
+
+    <!-- ===== D: SEVERAL, OVER TWO ROOTS ===============================
+         Both roots are listed, master first (soloedLanesInProject walks the
+         master and then the arrangements), and the count is the whole answer
+         the short text can give. -->
+    <set-track-solo trackPath="1" solo="1"/>
+    <assert-status-bar contains="soloLanes=2"/>
+    <assert-status-bar contains="soloList=1 Drums:1|"/>
+    <assert-status-bar contains="soloRoots=Arrangement;Drums"/>
+    <assert-status-bar contains="soloOnScreen=0"/>
+
+    <!-- ===== E: THE OTHER SCOPE STILL SHOWS AND STILL NAMES ===========
+         QBX-257 item 6. The scope reaching the badge at all is itself the
+         claim: setSoloScope emits soloTopologyChanged, and that is one of the
+         three wires the attach above installed. -->
+    <set-track-solo trackPath="1" solo="0"/>
+    <set-option key="mixer/soloScope" value="arrangement"/>
+    <assert-status-bar contains="soloScope=arrangement"/>
+    <assert-status-bar contains="soloShown=1"/>
+    <assert-status-bar contains="soloLanes=1"/>
+    <assert-status-bar contains="soloRoots=Drums"/>
+    <assert-status-bar contains="Drums|soloLanes=1"/>
+
+    <!-- ===== F: A FLAG MOVING WHILE THE SCOPE IS PER-ROOT =============
+         THE ONLY STAGE THAT CAN SEE `soloSetChanged`, and the reason it
+         exists. The two signals OVERLAP in `global` scope: a flag moving
+         there emits BOTH, and the badge subscribes to both, so every stage
+         above would still pass with the set signal deleted (measured: arm S4
+         came back NOT GATED before this section was added). In
+         `arrangement` scope `soloTopologyChanged` is deliberately NOT
+         emitted on a flag move — the other roots' answers genuinely did not
+         change — so here the set signal is the whole carrier. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <assert-status-bar contains="soloLanes=2"/>
+    <assert-status-bar contains="soloList=0 Drums:1|"/>
+    <assert-status-bar contains="soloRoots=Arrangement;Drums"/>
+    <set-track-solo trackPath="0" solo="0"/>
+    <assert-status-bar contains="soloLanes=1"/>
+    <assert-status-bar contains="soloList=Drums:1|"/>
+
+    <!-- The INI comes back as it was: `global` is SOpt::def(). -->
+    <set-option key="mixer/soloScope" value="global"/>
+    <assert-status-bar contains="soloScope=global"/>
+    <set-track-solo trackPath="Drums:1" solo="0"/>
+    <assert-status-bar contains="soloShown=0"/>
+  </actions>
+</SActionScript>
