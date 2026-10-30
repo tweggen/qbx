@@ -823,8 +823,17 @@ public:
      * null-the-input-plug trick cannot reach a nested track. Recurses into
      * nested folders, and range-invalidates exactly what changed. Idempotent;
      * driven top-down from SStdMixer::applyAudibility().
+     *
+     * `root` is the SUMMING ROOT that holds this track — the top of the tree
+     * the solo rule walks for a soloed ancestor — and it is a required
+     * parameter rather than something resolved here (QBX-245). The top-down
+     * driver IS that root and passes `this`; the recursion hands the same one
+     * down; a gesture that starts here (childTrackMuteChanged) looks it up
+     * with splacements::rootHolding(). Resolving it per level would be a
+     * whole-tree search per folder, and defaulting it to the master is the
+     * defect this signature removes.
      */
-    void applyChildTrackAudibility();
+    void applyChildTrackAudibility( SObject *root );
 
 public slots:
     // Set the channel width of this track's chain. Connected to

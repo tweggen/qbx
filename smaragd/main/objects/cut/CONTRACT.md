@@ -937,6 +937,17 @@ loader's class registry and `SClipWindow::registerWrapFactory` use, and for
 the same layering reason: `app/persistence` is `app_core` and may not name
 `STakeStack`.
 
+**IT WALKS EVERY ROOT (QBX-245).** It collected placements from
+`project.masterRoot()` alone, so every arrangement's columns were left
+un-migrated — silently, and for exactly as long as nobody looked, because the
+un-migrated shape still renders: it just renders the legacy answer. A
+migration is about the whole document, so enumerating the root registry IS
+the correct resolution here rather than a stand-in for a `pathRoot` it could
+never have. **NOT GATED:** a .qxa cannot reach this pass, which needs a saved
+project file carrying the legacy wrapped shape inside an arrangement; the
+sabotage that restores the master-only walk changes nothing any case
+measures, and that is recorded rather than papered over.
+
 **Composition, not deletion.** Each take's anchor becomes the content position
 the wrapper's anchor maps to THROUGH THAT TAKE'S OWN MAP
 (`timelineToSourceExact`, so a stretched or warped take lands where the wrapper

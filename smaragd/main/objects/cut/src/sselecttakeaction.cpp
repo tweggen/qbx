@@ -55,10 +55,13 @@ SApplyResult SSelectTakeAction::apply( SProject *project )
     // edit back, but "as applicable" is the spec.
     if( broadcast_ ) {
         QList<QList<int>> targets =
-            seditgroups::expandClipPaths( project, clipPath_ );
+            seditgroups::expandClipPaths( project, clipPath_, pathRoot_ );
         if( targets.size() > 1 ) {
             SObject *root = splacements::rootNamed( project, pathRoot_ );
             SCompositeAction composite;
+            // The paths above are relative to pathRoot_; the composite
+            // carries it so its children resolve there too (QBX-245).
+            composite.setPathRoot( pathRoot_ );
             for( const QList<int> &p : targets ) {
                 SLink *lk = splacements::placementAt( root, p );
                 STakeStack *st = stakes::columnOfLink( lk );

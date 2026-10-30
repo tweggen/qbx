@@ -329,6 +329,46 @@ action slice — a path-resolution service extraction is a Phase 6 candidate.
     reports as an empty range, so an ordinary project and `Arrangement` scope
     pay one comparison per clip and change nothing.
 
+17b. **`applyChildTrackAudibility( SObject *root )` TAKES ITS ROOT, and three
+    other sites in this file ask `rootHolding()` for theirs** (QBX-245).
+    The root is the top of the tree the solo rule walks for a soloed
+    ANCESTOR, and all four sites asked `splacements::rootContainer()` — the
+    MASTER — so for a track living in an arrangement they answered about a
+    tree it is not in: `anySoloInForce` read the wrong tree in per-root scope
+    and `underSoloedAncestor` never found the track's real folder ancestors.
+
+    The signature differs between them on purpose. This pass is the hot
+    top-down one — `SStdMixer::applyAudibility()` drives it on every mute and
+    every solo change and it recurses through every folder — and the driver IS
+    the root, so it passes `this` and the recursion hands the same one down;
+    resolving per level would be a whole-tree search per folder. `eventFeed`,
+    `trackChildWasAdded` and `collectChildSumEnvelope` hold only their own
+    identity, so they ask `splacements::rootHolding()`, object first, once per
+    call. `childTrackMuteChanged` is a gesture that starts here and does the
+    same. There is no default: defaulting to the master is the defect the
+    signature removes.
+
+    **GATED BY `arrangement_folder_solo_scoped.qxa`, AND ONLY IN
+    `arrangement` SCOPE.** In the `global` default `isLaneAudible` does not
+    consult `root` at all and `anySoloInForce` folds over every root, so the
+    argument is INERT there and a master-rooted read answers exactly what a
+    correct one does — measured: restoring the master read changed nothing in
+    531 other tests. The case also needs a folder that is AUDIBLE while one
+    of its children is not (audible because it holds a soloed lane, with a
+    second child that is not that lane): an inaudible folder has had its plug
+    nulled by the root mixer already, and a folder whose every child is
+    audible has nothing to mute. Two coherent copies measure 0.1333 against
+    one at 0.06665, and the same stages pin `collectChildSumEnvelope` at ±50
+    against ±25 with tolerance 0, so what is heard and what the overlay draws
+    cannot drift apart.
+
+    **NOT GATED: `eventFeed`'s root.** Witnessing it needs a folder
+    INSTRUMENT with nested MIDI lanes inside an arrangement — a plugin and
+    MIDI fixture no case has — and the sabotage that restores the master read
+    there changes nothing any case measures. Recorded rather than papered
+    over; the line itself is the same one-call `rootHolding()` the two gated
+    siblings use.
+
 18. **`ArmedForRecording` is INERT ON LOAD.** The flag round-trips through the
     file untouched, but a track that arrived armed is not a monitoring source
     until the user arms it in THIS session (`SLiveMonitor::projectChanged()`

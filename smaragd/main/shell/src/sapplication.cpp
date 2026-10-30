@@ -1101,16 +1101,27 @@ void SApplication::initMediaLayer()
         []( SObject *track, const QString &localPath, offset_t timePos ) -> bool {
             SApplication &app = SApplication::app();
             SProject *project = app.getCurrentProject();
-            // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-            SObject  *root    = splacements::rootContainer( project );
-            if( !project || !root || !track ) return false;
+            if( !project || !track ) return false;
             // RE-RESOLVED HERE, at completion, from the track's own identity --
             // never from an index-path captured at drop time (§B.5, T18). An
-            // empty path means the track is no longer in the tree, and the only
-            // safe answer to that is to place nothing.
-            const QList<int> path = strackpath::pathOf( root, track );
-            if( path.isEmpty() ) return false;
-            app.submitAction( new SAddSampleAction( path, localPath, timePos ) );
+            // empty spelling means the track is no longer in ANY tree, and the
+            // only safe answer to that is to place nothing.
+            //
+            // specOf(), not pathOf( rootContainer() ) (QBX-245/QBX-231): the
+            // master answers only for its own tracks, so a drop onto an
+            // arrangement's lane came back with an empty path and the drop was
+            // silently discarded. The spelling carries the root, and the
+            // action is STAMPED with it -- a bare path plus no pathRoot would
+            // resolve against the master, which is the same index in a
+            // different tree and so an edit that SUCCEEDS on the wrong lane.
+            const QString spec = splacements::specOf( project, track );
+            if( spec.isEmpty() ) return false;
+            const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+            if( q.idx.isEmpty() ) return false;
+            SAddSampleAction *add =
+                new SAddSampleAction( q.idx, localPath, timePos );
+            add->setPathRoot( q.root );
+            app.submitAction( add );
             return true;
         } );
 }

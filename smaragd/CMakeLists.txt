@@ -351,17 +351,25 @@ if(TEST qxa.mixer_sections)
     set_tests_properties(qxa.mixer_sections PROPERTIES RUN_SERIAL TRUE)
 endif()
 
-# `mixer/soloScope` (QBX-256) is the one key THREE cases write, and the reason
+# `mixer/soloScope` (QBX-256) is the one key FOUR cases write, and the reason
 # is in the semantics rather than in convenience: `solo_scope_project_wide`
 # compares both scopes against rendered audio,
 # `track_detail_meter_solo_scope` (QBX-233) asks WHICH ROOT the rule is asked
 # about -- a question that exists only in the per-root scope, where that case
-# therefore has to put the option -- and `solo_indicator_status_bar` (QBX-257)
+# therefore has to put the option -- `solo_indicator_status_bar` (QBX-257)
 # pins that the status-bar badge appears and names the root in BOTH scopes,
-# which it cannot say without visiting both. All three are RUN_SERIAL, all
-# three restore the SOpt default (`global`), and each says so in its header;
+# which it cannot say without visiting both -- and
+# `arrangement_folder_solo_scoped` (QBX-245) needs the per-root scope for the
+# reason spelled out beside it below. All four are RUN_SERIAL, all four
+# restore the SOpt default (`global`), and each says so in its header;
 # serialisation plus the restore is what the one-owner-per-key rule is
 # actually protecting.
+#
+# THE COUNT IN THE FIRST LINE IS LOAD-BEARING, and it is what made the QBX-245
+# / QBX-257 merge conflict non-obvious: two branches each appended one case and
+# each rewrote this paragraph to name its own total, so a "take both" that
+# merges the if() blocks correctly still leaves the prose claiming three. If
+# you add a fifth, say five here.
 #
 # `solo_indicator_clear_all` is deliberately NOT here: the clear is gated at
 # the default scope, so that case writes no option and needs no serialisation.
@@ -373,6 +381,15 @@ if(TEST qxa.track_detail_meter_solo_scope)
 endif()
 if(TEST qxa.solo_indicator_status_bar)
     set_tests_properties(qxa.solo_indicator_status_bar PROPERTIES RUN_SERIAL TRUE)
+endif()
+# The fourth, for the same key and with the same discipline (QBX-245).
+# `arrangement_folder_solo_scoped` is the only case that can see
+# STrack::applyChildTrackAudibility's root argument at all: in the `global`
+# default the rule does not consult it, so the argument is inert there and a
+# master-rooted read answers exactly what a correct one does. The case
+# therefore declares `arrangement`, and restores `global` like the other three.
+if(TEST qxa.arrangement_folder_solo_scoped)
+    set_tests_properties(qxa.arrangement_folder_solo_scoped PROPERTIES RUN_SERIAL TRUE)
 endif()
 
 # --- the deferred `media:` drop (proposal 38 gate 3) --------------------------

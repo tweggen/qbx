@@ -57,8 +57,8 @@ SLearnFeelFlowAction *inverseFrom( const QList<int> &trackPath,
 SApplyResult SLearnFeelFlowAction::apply( SProject *project )
 {
     if( !project ) return { false, nullptr };
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = splacements::rootContainer( project );
+    // The root arrives as a parameter, like the other ~60 verbs (QBX-245).
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( root, trackPath_ );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) {
@@ -187,7 +187,7 @@ QStringList SLearnFeelFlowAction::knownAttributes() const
 
 void SLearnFeelFlowAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     if( restoreIsSet_ ) {
         elem.setAttribute( "restore", "1" );
         if( restoreHadPrior_ ) {
@@ -201,7 +201,9 @@ void SLearnFeelFlowAction::writeXml( QDomElement &elem ) const
 
 bool SLearnFeelFlowAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath", "0" ) );
+    // parseInto, NOT stringToPath -- set-feel-flow-mode's reason, verbatim
+    // (QBX-245): this file too was wrong at both ends.
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath", "0" ) );
     restoreIsSet_ = elem.attribute( "restore", "0" ) == "1";
     if( restoreIsSet_ ) {
         const QString dataAttr = elem.attribute( "data" );

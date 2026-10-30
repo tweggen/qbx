@@ -12,8 +12,8 @@ using namespace strackpath;
 
 SApplyResult SSetFeelFlowModeAction::apply( SProject *project )
 {
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = splacements::rootContainer( project );
+    // The root arrives as a parameter, like the other ~60 verbs (QBX-245).
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     SObject *lane = splacements::laneAt( root, trackPath_ );
     STrack *track = dynamic_cast<STrack *>( lane );
     if( !track ) {
@@ -29,13 +29,18 @@ SApplyResult SSetFeelFlowModeAction::apply( SProject *project )
 
 void SSetFeelFlowModeAction::writeXml( QDomElement &elem ) const
 {
-    elem.setAttribute( "trackPath", pathToString( trackPath_ ) );
+    elem.setAttribute( "trackPath", qualifiedToString( pathRoot_, trackPath_ ) );
     elem.setAttribute( "mode", STrack::feelFlowModeToString( mode_ ) );
 }
 
 bool SSetFeelFlowModeAction::readXml( const QDomElement &elem, int /*version*/ )
 {
-    trackPath_ = stringToPath( elem.attribute( "trackPath", "0" ) );
+    // parseInto, NOT stringToPath (QBX-245): stringToPath splits on commas
+    // and silently yields a MASTER-rooted path from a qualified one, and this
+    // file was wrong at BOTH ends -- it parsed master-rooted and then resolved
+    // against the master, so the two halves agreed and the defect was
+    // invisible. Its check_pathroot exemption is deleted in the same change.
+    trackPath_ = parseInto( pathRoot_, elem.attribute( "trackPath", "0" ) );
     mode_ = STrack::feelFlowModeFromString( elem.attribute( "mode", "adaptive" ) );
     return true;
 }

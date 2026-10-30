@@ -56,6 +56,16 @@ const Fixture kFixtures[] = {
     // replayed an isolate as an extent-aware click.
     { "select-take",
       "<select-take clip='0,1' take='2' broadcast='0' whole='1'/>" },
+    // --- QBX-245: THE ROOT QUALIFIER HAS TO SURVIVE THE WRITE. Each of
+    // these three verbs read a qualified path and then wrote it back BARE,
+    // so a replay of the undo stack, or a re-serialized script, addressed
+    // the master. The fixtures carry a `Drums:` qualifier precisely because
+    // point 2 of this file's header is what catches that: every attribute a
+    // fixture declares is compared against what writeXml produced.
+    { "set-selection", "<set-selection paths='Drums:0,0'/>" },
+    { "set-feel-flow-mode",
+      "<set-feel-flow-mode trackPath='Drums:0' mode='trained'/>" },
+    { "learn-feel-flow", "<learn-feel-flow trackPath='Drums:0'/>" },
     // --- verbs whose readXml validates required attributes -------------------
     // Proposal 56 Q0: refuses a missing filePath or a non-positive layer.
     { "sampler-test-install",

@@ -1009,8 +1009,19 @@ that `app/media` is **app_core**:
    takes a lambda that re-resolves the target track's index-path FROM THE
    TRACK'S OWN IDENTITY at completion — never from a path captured at drop time
    (trap T18) — and submits the same `add-sample` the `file:` branch does. An
-   empty path means the track is no longer in the tree, and the only safe answer
-   to that is to place nothing.
+   empty spelling means the track is no longer in ANY tree, and the only safe
+   answer to that is to place nothing.
+
+   **IT ASKS `splacements::specOf()`, NOT `pathOf( rootContainer() )`**
+   (QBX-245, QBX-231's idiom). The master answers only for its own tracks, so
+   a deferred drop onto an ARRANGEMENT's lane came back with an empty path and
+   was silently discarded. The spelling carries the root; the action is then
+   STAMPED with it (`setPathRoot`), because a bare path with no `pathRoot`
+   would resolve against the master — the same index in a different tree, so
+   an edit that SUCCEEDS on the wrong lane rather than failing. **NOT GATED:**
+   the deferred branch needs `SMARAGD_MEDIA_TEST_SOURCE` and a drop gesture
+   onto an arrangement tab's arranger, which no case drives today; the
+   sabotage that empties the spelling changes nothing any case measures.
 
 **THE DESIGN'S OWN SKETCH OF THIS CALL COULD NEVER HAVE COMPILED**, and it is
 worth knowing why rather than rediscovering it. Proposal 38 §B.5 printed the

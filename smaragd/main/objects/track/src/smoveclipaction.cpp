@@ -39,9 +39,12 @@ SApplyResult SMoveClipAction::apply(SProject *project)
         srcLane.removeLast();
         if (srcLane == destTrackPath_) {
             QList<QList<int>> targets =
-                seditgroups::expandClipPaths(project, clipPath_);
+                seditgroups::expandClipPaths(project, clipPath_, pathRoot_);
             if (targets.size() > 1) {
                 SCompositeAction composite;
+                // The paths above are relative to pathRoot_; the composite
+                // carries it so its children resolve there too (QBX-245).
+                composite.setPathRoot( pathRoot_ );
                 for (const QList<int> &p : targets) {
                     QList<int> lane = p;
                     lane.removeLast();

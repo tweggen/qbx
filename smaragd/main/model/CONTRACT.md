@@ -38,6 +38,17 @@ and its children path-resolved) that is emphatically not a lane (no fader,
 no inserts, no instrument, no solo, no arm) — see `plan/proposed/
 41_LANE_FRAGMENTS.md` D3.
 
+**`seditgroups::expandClipPaths()` TAKES ITS ROOT NAME, REQUIRED** (QBX-245).
+It resolved `splacements::rootContainer()` — the master — so a grouped clip
+edit made inside an arrangement found the master's lane at that index,
+read ITS edit group (usually 0, ungrouped), and broadcast to nobody: the twin
+lane simply did not follow. The parameter is deliberately not defaulted,
+because every caller is a verb already holding one in `pathRoot_` and a
+default would let a new caller silently keep the master, which is the exact
+shape of the defect. The paths it hands back are relative to THAT root, so a
+composite built from them must carry the root too — see `actions/CONTRACT.md`
+invariant 6, which is where that half lives.
+
 **SOLO'S SCOPE IS A USER OPTION, AND THE RULE STAYS ONE RULE (QBX-256).**
 `SProject::soloScope()` says what `ssolorules.h` applies solo ACROSS:
 `Global` (the default — a solo anywhere is in force everywhere) or

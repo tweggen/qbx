@@ -1,6 +1,7 @@
 #include "app/selection/ssetselectionaction.h"
 #include "app/model/sappcontext.h"
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
 #include "app/selection/sselectionmanager.h"
 #include "app/actions/sactionregistry.h"
 #include "app/model/sobjectpath.h"
@@ -20,9 +21,13 @@ SApplyResult SSetSelectionAction::apply(SProject *project)
     // Snapshot current selection for inverse
     QList<QList<int>> priorPaths = app.getCurrentSelectionPathsFor( pathRoot_ );
 
-    // Validate all paths before applying
-    // check_root_resolution: suspect QBX-245 -- a verb takes its root as a parameter (rootNamed + pathRoot_); ~60 others do
-    SObject *root = project->masterRoot();
+    // THE ROOT ARRIVES AS A PARAMETER, like the other ~60 verbs (QBX-245).
+    // It is only a GUARD here -- isPathValid() below resolves pathRoot_ for
+    // itself -- but a master guard is the wrong guard: it passes for a path
+    // qualified with a root nobody registered, and the verb then went on to
+    // validate and set a selection in the MASTER. rootNamed() fails closed on
+    // an unknown name, which is the refusal proposal 09 D21 exists to buy.
+    SObject *root = splacements::rootNamed( project, pathRoot_ );
     if (!root) return {false, nullptr};
 
     // pathRoot_ names WHICH root (master, or a named arrangement) the paths
@@ -48,9 +53,15 @@ SApplyResult SSetSelectionAction::apply(SProject *project)
 
 void SSetSelectionAction::writeXml(QDomElement &elem) const
 {
+    // QUALIFIED, one qualifier per path (QBX-245). readXml parses each entry
+    // with parseInto(), where the FIRST qualifier wins, so writing it on every
+    // path is the exact inverse of the read and matches assert-selection's own
+    // spelling. A master-rooted path still writes NO qualifier
+    // (qualifiedToString's rule), so every .qxa and every history entry
+    // written before this reads and writes byte-identically.
     QStringList pathStrs;
     for (const QList<int> &path : paths_) {
-        pathStrs << strackpath::pathToString(path);
+        pathStrs << strackpath::qualifiedToString(pathRoot_, path);
     }
     elem.setAttribute("paths", pathStrs.join("|"));
 }
