@@ -332,6 +332,28 @@ public:
      */
     void notifySoloTopologyChanged() { emit soloTopologyChanged(); }
 
+    /**
+     * A SOLO FLAG MOVED, IN ANY ROOT, UNDER EITHER SCOPE (QBX-257).
+     *
+     * This is NOT a second spelling of notifySoloTopologyChanged(), and the
+     * difference is the whole reason it exists. That one answers "whose
+     * AUDIBILITY must be recomputed", which in Arrangement scope is nobody
+     * else's business — so it is deliberately not emitted there, and a
+     * consumer that only has to SAY something about solo would hear nothing
+     * in that scope at all.
+     *
+     * This one answers "has the set of soloed lanes changed", which is true
+     * in both scopes and is what the status bar's indicator is about. It
+     * invalidates nothing and re-wires nothing; the only consumers are
+     * readers.
+     *
+     * The SCOPE changing also changes what such a reader says, and that
+     * arrives as soloTopologyChanged() (setSoloScope emits it). A reader
+     * therefore connects to BOTH, which is honest: one signal means the set
+     * moved, the other that the rule applied to it did.
+     */
+    void notifySoloSetChanged() { emit soloSetChanged(); }
+
     // Fire arrangementChanged(). Called from the action chokepoint after every
     // applied action so cached renders (asset captures) invalidate transparently
     // on any edit. Coarse by design (every action, not just arrangement edits);
@@ -448,6 +470,9 @@ signals:
     // every root re-applies the audibility rule and drops the pages it froze
     // under the old answer (QBX-256, see notifySoloTopologyChanged()).
     void soloTopologyChanged();
+    // A solo flag moved, in any root, under EITHER scope — see
+    // notifySoloSetChanged(). Readers only; nothing re-wires on this.
+    void soloSetChanged();
     // Any applied action; consumers that cache rendered audio drop their cache.
     void arrangementChanged();
     // An async capture revalidation landed (preview/metadata fresh); views

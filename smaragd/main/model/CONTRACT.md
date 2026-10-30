@@ -66,6 +66,19 @@ what a reader gets wrong:
    cap. `isLane()` is still what carries solo, so a fragment still cannot
    darken anything (proposal 41 D3 is untouched); what changed is which
    containers the walk may pass THROUGH on the way to a lane.
+4. **TWO SIGNALS CARRY A SOLO CHANGE, and they answer different questions**
+   (QBX-257). `soloTopologyChanged()` means "whose AUDIBILITY must be
+   recomputed": `setSoloScope()` emits it always, and a root emits it after a
+   flag moved only in `Global` scope, because in `Arrangement` the other
+   roots' answers genuinely did not change and bumping their chains would be
+   invalidation nobody asked for. `soloSetChanged()` means "has the SET of
+   soloed lanes changed", which is true in both scopes; it invalidates
+   nothing and re-wires nothing, and its only subscribers are readers — the
+   status bar's indicator, which would otherwise go blind in the per-root
+   scope. Widening the first signal to serve the second would hand every root
+   that unwanted invalidation back, which is why there are two. A reader that
+   has to follow BOTH the set and the rule applied to it connects to both,
+   and the names say which is which.
 
 **`containerAt()` and the M2b widening of `placementAt()`.** `splacements.h`
 also has `containerAt()` — `isPathContainer()`, the strictly WIDER predicate
