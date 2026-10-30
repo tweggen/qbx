@@ -495,6 +495,7 @@ set(APP_UI_FILES
     shell/include/app/shell/smidirecorder.h
     shell/include/app/shell/splayheadclock.h
     shell/include/app/shell/sviewtabs.h
+    shell/include/app/shell/ssoloindicator.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssecretstore.h
     shell/include/app/shell/srecordmodeseed.h
@@ -514,6 +515,7 @@ set(APP_UI_FILES
     shell/src/smidioutpump.cpp
     shell/src/smidirecorder.cpp
     shell/src/sviewtabs.cpp
+    shell/src/ssoloindicator.cpp
     shell/src/smainwindow.cpp
     shell/src/ssecretstore.cpp
     shell/src/ssecretstorebackend.h
@@ -571,6 +573,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/stabtestactions.h
     testkit/include/app/testkit/strackselectionactions.h
     testkit/include/app/testkit/stransporttestactions.h
+    testkit/include/app/testkit/sstatusbartestactions.h
     testkit/include/app/testkit/sassertunsavedchangesaction.h
     testkit/include/app/testkit/ssavewindowlayoutaction.h
     testkit/include/app/testkit/sassertmasterinputsaction.h
@@ -637,6 +640,7 @@ set(APP_UI_FILES
     testkit/src/sarrangementtestactions.cpp
     testkit/src/strackselectionactions.cpp
     testkit/src/stransporttestactions.cpp
+    testkit/src/sstatusbartestactions.cpp
     testkit/src/sassertunsavedchangesaction.cpp
     testkit/src/ssavewindowlayoutaction.cpp
     testkit/src/sassertmasterinputsaction.cpp

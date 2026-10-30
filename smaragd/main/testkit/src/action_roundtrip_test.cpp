@@ -476,6 +476,9 @@ const Fixture kFixtures[] = {
       "<drag-range from='192000' to='384000' phase='press-move'/>" },
     { "assert-transport-readout",
       "<assert-transport-readout contains='mode=bars' absent='mode=time'/>" },
+    { "assert-status-bar",
+      "<assert-status-bar contains='soloRoots=Drums' absent='soloShown=0'/>" },
+    { "click-solo-indicator", "<click-solo-indicator/>" },
     { "event-editor-key",
       "<event-editor-key clip='1,0' key='right' repeat='3'/>" },
     // `tick` and `key` are non-default (0 and 60) for the same reason.

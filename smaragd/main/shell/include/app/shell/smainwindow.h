@@ -612,6 +612,19 @@ public:
     //   dragRange             — a REAL drag in the active arranger's ruler
     //                           band, from `from` to `to` (frames).
     QString describeTransportReadout();
+    //   describeStatusBar     — the status bar's permanent widgets as they
+    //                           are shown: the mode label, then the solo
+    //                           indicator's own describe() (QBX-257). Fields
+    //                           are APPENDED, never inserted.
+    //   clickSoloIndicator    — a REAL click on the solo indicator, through
+    //                           the same QAction the menu item triggers. It
+    //                           REFUSES when that action is disabled, because
+    //                           QAction::trigger() fires whatever the enabled
+    //                           state and a seam that did not check could not
+    //                           tell "the badge does nothing when there is no
+    //                           solo" from a build that greys nothing.
+    QString describeStatusBar();
+    bool clickSoloIndicator();
     bool dragRange( offset_t from, offset_t to, int phase );
     bool grabEventEditor( const QString &path, int w, int h );
     bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
@@ -886,6 +899,9 @@ protected slots:
     // Plan 53 B6 (QBX-164): armed lanes that did not take the pass.
     void onRecordingLanesSkipped( int count, const QString &firstWhy );
     void onTakesLanded( int takeCount, int trackCount, bool expanded );
+    // QBX-257: the status bar's solo indicator, and the command it carries.
+    void refreshSoloIndicator();
+    void clearAllSolos();
 
 private:
     // Where the project dialogs start on a machine that has never saved one.
@@ -900,6 +916,12 @@ private:
     void installMasterEditor_();
     // Build the status bar and its permanent widgets (mode indicator, …).
     void buildStatusBar();
+    // Point the solo indicator at the CURRENT project and the active tab's
+    // root, (re)wiring the three things that change what it says. Idempotent,
+    // and called from the describe seam as well: a scripted run never reaches
+    // the attach sites (the project is adopted by SApplication, not by
+    // openProjectFile), so that first call is where it starts following.
+    void attachSoloIndicator_();
     void newProject();
     void closeProject();
     void buildPaletteToolbar();
@@ -1152,6 +1174,29 @@ private:
 
     // Permanent mode indicator on the right of the status bar.
     QLabel *modeLabel_;
+
+    // --- the solo indicator (QBX-257) -------------------------------------
+    //
+    // ITS OWN PERMANENT WIDGET, beside modeLabel_ and deliberately not inside
+    // it: modeLabel_ is the mixer view's hover/drag mode line (see
+    // buildStatusBar) and would fight with it, while the transient
+    // showMessage() area -- "Saved %1", the skipped-lane notice -- is wrong
+    // for state that PERSISTS until the user does something about it.
+    //
+    // THE COMMAND IS THE QAction, not the button: the same object carries the
+    // menu entry, so the menu item and the badge cannot drift apart, there is
+    // one owner of the enabled state, and the clear is scriptable.
+    class SSoloIndicator *soloIndicator_ = nullptr;
+    QAction *actClearSolos_ = nullptr;
+    QMetaObject::Connection soloSetConn_;     // a solo flag moved (any scope)
+    QMetaObject::Connection soloScopeConn_;   // the scope changed
+    QMetaObject::Connection soloTabsConn_;    // the active tab's root changed
+    // ATTACH ONCE, NEVER AGAIN -- describeTrackDetailDock's rule and its
+    // reason, plus one of its own: if the describe seam re-read the model on
+    // every call, a build whose three signals were never connected would
+    // still describe the right badge, and the gate for "the indicator FOLLOWS
+    // a solo" would be gating nothing.
+    bool soloIndicatorAttached_ = false;
 
     // --- window-layout persistence (proposal 46 M1/M2) --------------------
     //

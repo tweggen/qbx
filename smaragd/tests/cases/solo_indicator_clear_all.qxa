@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-257. CLICKING THE BADGE RELEASES EVERY SOLO IN THE PROJECT, IN EVERY
+  ROOT, AS ONE UNDO STEP.
+
+  WHY A BUTTON AND NOT A LAMP. An indicator that only informs leaves the user
+  to hunt for the soloed lane, and the hunt IS the problem the badge exists to
+  solve. So the badge is the command.
+
+  WHAT THIS GATES, AND WHY THE MASTER TAB IS ACTIVE THROUGHOUT. The clear is a
+  macro of one `set-track-solo solo="0"` per soloed lane, each rooted at the
+  root that HOLDS that lane — never at the ACTIVE TAB's root. With the master
+  tab active and a solo inside `Drums`, a macro rooted per tab would resolve
+  the path "1" against the master and clear a lane nobody asked about while
+  leaving `Drums:1` soloed. That is the root-sweep defect in one line, and
+  this case is where it would show: the master lane soloed here is index 0 and
+  the arrangement one is index 1, deliberately different, so a wrong-root
+  write cannot land on the right flag by accident.
+
+  ONE UNDO STEP. `undo count="1"` puts BOTH flags back, which only holds if
+  the two writes were one composite; two separate submissions would need two.
+  The redo after it re-applies the clear, which is also what balances the
+  counts — `verify-undo` compares undo and redo counts, so a case that undoes
+  explicitly must redo as many times before it.
+
+  `verify-undo` ITSELF ONLY CHECKS TRACK COUNTS PER ROOT, not solo flags (see
+  SActionRunner::verifyUndo_), so it is NOT the claim about what the undo
+  restored — the `soloList=` assertions are. It is here because a macro that
+  rolled back badly would disturb the structure, and that it cannot is worth
+  one line.
+
+  NO OPTION IS WRITTEN. The scope stays at SOpt::def() (`global`), so unlike
+  solo_indicator_status_bar.qxa this case needs no serialization.
+-->
+<SActionScript version="1" name="solo_indicator_clear_all">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- The FIRST read ATTACHES the indicator: a scripted run never reaches
+         the attach sites, so it has to come before the gestures it follows. -->
+    <assert-status-bar contains="soloShown=0"/>
+
+    <!-- TWO SOLOS AT DIFFERENT INDICES IN DIFFERENT ROOTS. `set-track-solo`
+         reads its path with parseInto, so a BARE path is MASTER-rooted
+         whatever tab is active, and the arrangement lane is named
+         "Drums:1" explicitly. -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <set-track-solo trackPath="Drums:1" solo="1"/>
+    <assert-status-bar contains="soloLanes=2"/>
+    <assert-status-bar contains="soloList=0 Drums:1|"/>
+    <assert-status-bar contains="clearSolosEnabled=1"/>
+
+    <!-- THE CLICK. The master tab is active and has never been left. -->
+    <click-solo-indicator/>
+    <assert-status-bar contains="soloLanes=0"/>
+    <assert-status-bar contains="soloShown=0"/>
+    <assert-status-bar contains="soloList=|"/>
+    <assert-status-bar contains="clearSolosEnabled=0"/>
+    <!-- ...and the badge is dead again, by its own refusal. -->
+    <click-solo-indicator expectReject="true"/>
+
+    <!-- ONE UNDO RESTORES EXACTLY THE TWO FLAGS THAT WERE SET. Not one of
+         them, not a third, and not a lane at the same index in the other
+         root: the list is the whole answer. -->
+    <undo count="1"/>
+    <assert-status-bar contains="soloLanes=2"/>
+    <assert-status-bar contains="soloList=0 Drums:1|"/>
+    <assert-status-bar absent="soloLanes=3"/>
+    <assert-status-bar contains="soloRoots=Arrangement;Drums"/>
+
+    <!-- Redo clears them again, and balances the counts for verify-undo. -->
+    <redo count="1"/>
+    <assert-status-bar contains="soloLanes=0"/>
+    <assert-status-bar contains="soloShown=0"/>
+  </actions>
+
+  <verify-undo/>
+</SActionScript>

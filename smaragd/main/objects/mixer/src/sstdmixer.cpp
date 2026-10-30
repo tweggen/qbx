@@ -928,7 +928,14 @@ void SStdMixer::trackSoloChanged()
 {
     trackMuteSoloChanged();
     SProject *project = getProjectSafe();
-    if( project && project->soloScope() == SProject::SoloScope::Global )
+    if( !project ) return;
+    // SAID UNCONDITIONALLY, unlike the audibility fan-out below: a reader
+    // that only reports WHERE the solo is (the status-bar indicator,
+    // QBX-257) is right to be told in Arrangement scope too, where nothing
+    // else's audibility changed. See SProject::notifySoloSetChanged() for
+    // why these are two signals and not one.
+    project->notifySoloSetChanged();
+    if( project->soloScope() == SProject::SoloScope::Global )
         project->notifySoloTopologyChanged();
 }
 

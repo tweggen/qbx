@@ -49,6 +49,7 @@
 #include "app/shell/smainwindow.h"
 #include "app/shell/stransportreadout.h"
 #include "app/shell/sviewtabs.h"
+#include "app/shell/ssoloindicator.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
 #include "app/model/sclipcolors.h"
@@ -57,6 +58,9 @@
 #include "app/media/smediadrop.h"
 #include "app/objects/midi/smidiclipactions.h"
 #include "app/model/splacements.h"
+#include "app/model/ssolorules.h"
+#include "app/actions/scompositeaction.h"
+#include "app/objects/track/ssettracksoloaction.h"
 #include "app/model/sobjectpath.h"
 #include "app/selection/sselectionmanager.h"
 #include "app/selection/sclearselectionaction.h"
@@ -1096,6 +1100,7 @@ void SMainWindow::fileNew()
     attachClipProperties();
     attachEventEditor();
     attachTransportReadout();
+    attachSoloIndicator_();
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
@@ -1169,6 +1174,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     attachClipProperties();
     attachEventEditor();
     attachTransportReadout();
+    attachSoloIndicator_();
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
@@ -2216,6 +2222,15 @@ SMainWindow::SMainWindow()
     editMenu->addAction( "Clean up &takes...", this,
                          SLOT( cleanupTakesFromMenu() ) );
     editMenu->addSeparator();
+    // THE SOLO INDICATOR'S COMMAND (QBX-257). On the menu as well as on the
+    // status-bar badge: the badge is a mouse target that only exists while a
+    // solo is engaged, and a command reachable only there is neither
+    // keyboard-reachable nor scriptable. Disabled until a solo is in force --
+    // refreshSoloIndicator() owns that, from the one predicate.
+    actClearSolos_ = editMenu->addAction( tr( "Clear all &solos" ), this,
+                                          SLOT( clearAllSolos() ) );
+    actClearSolos_->setEnabled( false );
+    editMenu->addSeparator();
     editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
                          this, SLOT( showOptionsDialog() ) );
     menuBar()->addMenu( editMenu );
@@ -2648,6 +2663,144 @@ void SMainWindow::buildStatusBar()
     QObject::connect( &SApplication::app(),
                       SIGNAL( takesLanded( int, int, bool ) ),
                       this, SLOT( onTakesLanded( int, int, bool ) ) );
+
+    // THE SOLO INDICATOR (QBX-257), its own permanent widget for the reasons
+    // the two notes above give: modeLabel_ belongs to the mixer view's
+    // hover/drag mode and the message area is for notices that pass.
+    //
+    // The BADGE and the MENU ITEM trigger the same QAction, so there is one
+    // owner of the enabled state and the two cannot drift. The menus are
+    // built before this (see the ctor), so actClearSolos_ already exists.
+    soloIndicator_ = new SSoloIndicator( this );
+    statusBar()->addPermanentWidget( soloIndicator_ );
+    QObject::connect( soloIndicator_, &QToolButton::clicked, this,
+                      [this] {
+                          if( actClearSolos_ ) actClearSolos_->trigger();
+                      } );
+}
+
+// Point the indicator at the current project. THREE things change what it
+// says and each has to be heard: a solo flag moving in any root
+// (soloSetChanged -- said in BOTH scopes, which is why QBX-257 added it), the
+// SCOPE changing (soloTopologyChanged, which setSoloScope emits), and the
+// user switching tabs, since the root ON SCREEN is what decides whether the
+// badge has to name where the solo is.
+void SMainWindow::attachSoloIndicator_()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+
+    QObject::disconnect( soloSetConn_ );
+    soloSetConn_ = QMetaObject::Connection();
+    QObject::disconnect( soloScopeConn_ );
+    soloScopeConn_ = QMetaObject::Connection();
+    if( proj ) {
+        soloSetConn_ = connect( proj, &SProject::soloSetChanged,
+                                this, &SMainWindow::refreshSoloIndicator );
+        soloScopeConn_ = connect( proj, &SProject::soloTopologyChanged,
+                                  this, &SMainWindow::refreshSoloIndicator );
+    }
+    // The tabs outlive every project, so this one is wired once.
+    if( viewTabs_ && !soloTabsConn_ )
+        soloTabsConn_ = connect( viewTabs_, &SViewTabs::activeRootChanged, this,
+                                 [this]( SObject * ) { refreshSoloIndicator(); } );
+
+    soloIndicatorAttached_ = ( proj != nullptr );
+    refreshSoloIndicator();
+}
+
+void SMainWindow::refreshSoloIndicator()
+{
+    if( !soloIndicator_ ) return;
+    // THE APP's project, not currentProject_: a scripted run sets the project
+    // on SApplication directly and never through this window.
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *activeRoot = viewTabs_ ? viewTabs_->activeRoot() : nullptr;
+    // The master's label is read from the TAB BAR rather than spelled again
+    // here, because the badge's job is to send the user to a tab: the two
+    // words have to be the same word. installMasterEditor_ puts it there.
+    QString masterLabel = viewTabs_ ? viewTabs_->tabNames().value( 0 )
+                                    : QString();
+    if( masterLabel.isEmpty() ) masterLabel = tr( "Arrangement" );
+    soloIndicator_->refresh( proj, activeRoot, masterLabel );
+    if( actClearSolos_ ) actClearSolos_->setEnabled( soloIndicator_->inForce() );
+}
+
+/**
+ * RELEASE EVERY SOLO IN THE PROJECT, as ONE undo step.
+ *
+ * ONE set-track-solo PER SOLOED LANE, each rooted at the root that actually
+ * HOLDS the lane -- never at the active tab's. That distinction is the whole
+ * root sweep (QBX-243/244/245) in one line: a macro rooted per tab would
+ * resolve "0" against whatever the user happens to be looking at and clear a
+ * lane nobody asked about, while leaving the soloed one soloed. The root
+ * comes out of splacements::specOf(), which answers for whichever root
+ * reaches the object.
+ *
+ * SYSTEM LANES ARE SKIPPED HERE, not left to the verb's own refusal.
+ * SSetTrackSoloAction refuses them (AC5.2 / D6) and SCompositeAction rolls the
+ * WHOLE macro back on the first child that fails, so one such lane in the
+ * list would turn "clear every solo" into "clear none of them". Today none can
+ * appear -- ssolo::collectSoloedLanes walks childLinks() only, and a system
+ * lane is deliberately not a member (SStdMixer::masterLane() says why) -- so
+ * this is the pre-flight that keeps that true rather than assumed. The test is
+ * the LAST step: a user track nested under the master lane reads {-1,0} and is
+ * an ordinary track, which the verb accepts.
+ */
+void SMainWindow::clearAllSolos()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
+
+    SCompositeAction *macro = new SCompositeAction();
+    for( SObject *lane : ssolo::soloedLanesInProject( proj ) ) {
+        if( !lane ) continue;
+        const QString spec = splacements::specOf( proj, lane );
+        if( spec.isEmpty() ) continue;          // left the project
+        const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+        if( q.idx.isEmpty() ) continue;         // the root itself carries none
+        if( strackpath::spathIsSystemStep( q.idx.last() ) ) continue;
+        SSetTrackSoloAction *a = new SSetTrackSoloAction( q.idx, false );
+        a->setPathRoot( q.root );
+        macro->append( a );
+    }
+    if( macro->count() == 0 ) { delete macro; return; }
+    SApplication::app().submitAction( macro );
+}
+
+QString SMainWindow::describeStatusBar()
+{
+    // The FIRST read attaches, and only the first: see
+    // soloIndicatorAttached_. Everything after it reports what the signals
+    // put there.
+    if( !soloIndicatorAttached_ ) {
+        ensureArranger_();
+        attachSoloIndicator_();
+    }
+    const QString mode = modeLabel_ ? modeLabel_->text() : QString();
+    QString d = QStringLiteral( "mode=%1" ).arg( mode );
+    if( soloIndicator_ ) d += QStringLiteral( "|" ) + soloIndicator_->describe();
+    // APPENDED LAST, deliberately -- assert-status-bar matches SUBSTRINGS, so
+    // a field inserted between two existing ones breaks every assertion that
+    // spans the seam.
+    d += QStringLiteral( "|clearSolosEnabled=%1" )
+             .arg( actClearSolos_ && actClearSolos_->isEnabled() ? 1 : 0 );
+    return d;
+}
+
+bool SMainWindow::clickSoloIndicator()
+{
+    if( !soloIndicatorAttached_ ) {
+        ensureArranger_();
+        attachSoloIndicator_();
+    }
+    if( !actClearSolos_ ) return false;
+    // THE SEAM DOES THE REFUSAL ITSELF. QAction::trigger() emits whatever the
+    // enabled state, so a seam that merely triggered would report success for
+    // a build that greys nothing -- and the assertion "the badge does nothing
+    // when there is no solo" would hold over a broken one.
+    if( !actClearSolos_->isEnabled() ) return false;
+    actClearSolos_->trigger();
+    return true;
 }
 
 void SMainWindow::onTakesLanded( int takeCount, int trackCount, bool expanded )
@@ -3510,6 +3663,7 @@ void SMainWindow::adoptCurrentProject()
     attachClipProperties();
     attachEventEditor();
     attachTransportReadout();
+    attachSoloIndicator_();
 
     // A script that itself did `load-project` already stamped this via
     // SLoadProjectAction::apply() -> SProject::setProjectFilePath(); a
