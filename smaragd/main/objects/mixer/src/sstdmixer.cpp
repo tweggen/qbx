@@ -273,6 +273,8 @@ void SStdMixer::reconnectTracksToMixer()
     // idempotent under repetition, which is what "survives a rewire" means.
     const QList<STrack *> sends = sendLanes_;
 
+    QString q258Nulled, q258Wired;   // [Q258-DIAG]
+
     // For all busses.
     for( int bus=0; bus<nBusses_; bus++ ) {
         std::shared_ptr<twMixer> mix = cpMixers_[bus];
@@ -302,6 +304,14 @@ void SStdMixer::reconnectTracksToMixer()
                 audible = ssolo::isLaneAudible( this, &so, solo );
                 if( STrack *t = dynamic_cast<STrack *>( &so ) )
                     liveOwned = t->isLiveOwnedLane();
+            }
+            // [Q258-DIAG] bus 0 only: the other busses repeat this decision.
+            if( bus == 0 && lk ) {
+                const QString nm = lk->getSObject().getSName();
+                if( !audible || liveOwned )
+                    q258Nulled += nm + ( liveOwned ? "(live) " : " " );
+                else
+                    q258Wired += nm + " ";
             }
             if( !lk || !audible || liveOwned ) {
                 mix->setInput( channel, NULL );
@@ -346,6 +356,20 @@ void SStdMixer::reconnectTracksToMixer()
             // the routing milestone, not to this one.
         }
     }
+
+    // [Q258-DIAG] Temporary. What the ROOT MIXER decided about its own
+    // top-level lanes -- the half of the silencing that applyChildTrackAudibility
+    // never sees. A lane under nulled= is not pulled at all; one under wired=
+    // is summed. Remove with `git checkout --` (see the PR).
+    if( !q258Nulled.isEmpty() || !q258Wired.isEmpty() )
+        TW_LOGW( "model", "[Q258] mixer root='%s' scope=%s anySolo=%d "
+                          "nulled=[%s] wired=[%s]",
+                 getSName().toUtf8().constData(),
+                 ssolo::scopeOf( this ) == SProject::SoloScope::Global
+                     ? "global" : "arrangement",
+                 (int) solo,
+                 q258Nulled.trimmed().toUtf8().constData(),
+                 q258Wired.trimmed().toUtf8().constData() );
 
     // ...and the send BUSES, in the same pass and from nowhere else (47 D4).
     rewireSendBuses();

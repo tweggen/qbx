@@ -119,6 +119,17 @@ void SCut::ensureReader()
             }
             return;
         }
+        // [Q258-DIAG] Temporary. The shipped WARN fires only once the bound is
+        // reached (three consecutive stale observations of the SAME cut); this
+        // one fires on every single stale observation, so a solo that costs one
+        // rebuild is distinguishable from a solo that costs none.
+        TW_LOGW( "cut", "[Q258] capture '%s' STALE, rebuild %d of %d "
+                        "(stamp %llu, content %llu)",
+                 getSName().toUtf8().constData(),
+                 captureRebuildAttempts_.load() + 1,
+                 kMaxCaptureRebuildAttempts,
+                 (unsigned long long) captureContentEpoch_.load(),
+                 (unsigned long long) now );
         const int attempts = captureRebuildAttempts_.load() + 1;
         invalidateCapture();       // clears capture_, pages and readerTried_
         captureRebuildAttempts_.store( attempts );   // survives its own reset
