@@ -123,8 +123,9 @@ void SCut::ensureReader()
         // reached (three consecutive stale observations of the SAME cut); this
         // one fires on every single stale observation, so a solo that costs one
         // rebuild is distinguishable from a solo that costs none.
-        TW_LOGW( "cut", "[Q258] capture '%s' STALE, rebuild %d of %d "
+        TW_LOGW( "cut", "[Q258] cut=%p capture '%s' STALE, rebuild %d of %d "
                         "(stamp %llu, content %llu)",
+                 (void*) this,
                  getSName().toUtf8().constData(),
                  captureRebuildAttempts_.load() + 1,
                  kMaxCaptureRebuildAttempts,
@@ -397,6 +398,8 @@ void SCut::buildCapture_()
 
     SObject &c = content_->getSObject();
     uint64_t pendingCaptureEpoch = 0;   // see captureContentEpoch_
+    // [Q258-DIAG]
+    const auto q258T0 = std::chrono::steady_clock::now();
     // Blocking: a capture built from a stale window would be stamped valid with
     // wrong extents (same stale try-lock class; the worker holds no object lock
     // here — dispatchRecomputation runs outside CS1 — so no self-deadlock).
@@ -668,8 +671,16 @@ void SCut::buildCapture_()
                               * sizeof( sample_t ) ) );
         auto newCapture = std::make_shared<twCapturingSource>(
             std::move( buf ), captureLen, captureChannels, env.getSRate() );
+        // [Q258-DIAG]
+        const long long q258Ms = (long long) std::chrono::duration_cast<
+            std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - q258T0 ).count();
         std::lock_guard<std::mutex> lock( mutex() );
         if( captureGen_.load() != genAtEntry ) {
+            TW_LOGW( "cut", "[Q258] cut=%p capture '%s' DROPPED after %lld ms "
+                            "(%lld frames): an invalidateCapture() beat it",
+                     (void*) this, getSName().toUtf8().constData(),
+                     q258Ms, (long long) captureLen );
             // An invalidateCapture() landed while this build was reading the
             // content: what we just rendered describes a model that no longer
             // exists. DROP it -- ensureReader()/the revalidator rebuild from
@@ -679,6 +690,21 @@ void SCut::buildCapture_()
         }
         capture_ = newCapture;
         captureContentEpoch_.store( pendingCaptureEpoch );
+        // [Q258-DIAG] stamped == now is the dangerous case: this capture is
+        // believed CURRENT, so if its audio is wrong it stays wrong until a
+        // real edit. stamped < now is the self-healing case.
+        {
+            const uint64_t q258Now = contentEpochForCapture_();
+            TW_LOGW( "cut", "[Q258] cut=%p capture '%s' PUBLISHED after %lld ms "
+                            "(%lld frames) stamped=%llu now=%llu -> %s",
+                     (void*) this, getSName().toUtf8().constData(),
+                     q258Ms, (long long) captureLen,
+                     (unsigned long long) pendingCaptureEpoch,
+                     (unsigned long long) q258Now,
+                     q258Now == pendingCaptureEpoch
+                         ? "believed CURRENT"
+                         : "already a miss, will rebuild" );
+        }
     }
     // Arms onArrangementChanged() (the connect itself lives in the ctor: this
     // function runs on the revalidator worker, where Qt calls are banned).
