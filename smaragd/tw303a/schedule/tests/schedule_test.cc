@@ -638,6 +638,51 @@ int main()
               "100 randomized interleavings: the not-produced count stays in range");
     }
 
+    // ---- Test 11: a prep RETRY is silent; a STUCK object reports once -----
+    //
+    // QBX-259. revalPrepPreview() returning false is the designed retry, and
+    // logging it at ERROR made the ordinary first-touch transient look like a
+    // failure while the case that IS a defect -- a preview source that never
+    // materializes, i.e. a clip permanently drawn as a grey box -- produced
+    // the identical line. The policy that tells them apart is asserted HERE
+    // rather than by scraping the log, because the log line is the symptom and
+    // the counter is the rule: a test over the text would pass on a build that
+    // counted wrongly and happened to print once anyway.
+    //
+    // SlowReval::revalPrepPreview() always returns false, so it IS the stuck
+    // object, which is why this stub needs no new variant.
+    {
+        SlowReval stuck;
+        int reports = 0;
+        for (int i = 1; i < IRevalidatable::kMaxPrepAttempts; ++i)
+            if (stuck.notePrepRetry()) ++reports;
+        CHECK(reports == 0,
+              "a prep retry below the bound says nothing at all");
+        CHECK(stuck.prepAttempts() == IRevalidatable::kMaxPrepAttempts - 1,
+              "the streak counts every attempt below the bound");
+
+        CHECK(stuck.notePrepRetry(),
+              "the attempt that REACHES the bound reports");
+        for (int i = 0; i < 50; ++i)
+            if (stuck.notePrepRetry()) ++reports;
+        CHECK(reports == 0,
+              "and it reports exactly ONCE, not once per attempt thereafter");
+
+        // Converging forgets the streak, which is what keeps this a streak
+        // rather than a lifetime total: an object that blips once per project
+        // load must never accumulate its way to the stuck report.
+        stuck.notePrepConverged();
+        CHECK(stuck.prepAttempts() == 0,
+              "converging resets the streak");
+        int second = 0;
+        for (int i = 1; i < IRevalidatable::kMaxPrepAttempts; ++i)
+            if (stuck.notePrepRetry()) ++second;
+        CHECK(second == 0,
+              "after a convergence the next retries are silent again");
+        CHECK(stuck.notePrepRetry(),
+              "a SECOND stuck streak reports again (the flag was reset too)");
+    }
+
     if (failures == 0) { printf("all schedule tests passed\n"); return 0; }
     printf("%d schedule test(s) FAILED\n", failures);
     return 1;

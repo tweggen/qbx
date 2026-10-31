@@ -1698,3 +1698,95 @@ entry, which is what keeps it rendering byte for byte.
 auto-fade's in `refreshClipGainCurves`: a fade is audio-only (inv. 4) and an
 event take's edges are note-offs rather than steps in a waveform. Its volume,
 pan and envelope still travel.
+
+## N placements of ONE container share ONE capture-validity stamp (QBX-258)
+
+`SCut::contentEpochForCapture_()` reads **the content's** root-component epoch:
+
+```cpp
+SObject &c = content_->getSObject();
+if( c.getRandomSource() ) return 0;      // leaf sample: no container epoch
+std::shared_ptr<twComponent> rootComp = c.getRootComponent();
+return rootComp ? (uint64_t) rootComp->contentEpochNow() : 0;
+```
+
+For an arrangement that is placed, the content is that arrangement's root and
+`SStdMixer::getRootComponent()` returns its `cpRewire_`. So **every placement of
+one arrangement stamps against the same number**, while
+`captureRebuildAttempts_` and `captureStaleReported_` are **per-SCut**.
+
+That asymmetry has a consequence worth stating outright, because the code reads
+as if each capture were independent and it is not. `buildCapture_()` freezes the
+container's pages, and `scut.h` already records that doing so *"can perturb the
+very epoch it stamps against"*. With one placement that is a self-race the
+rebuild bound exists to stop. **With N placements it is also a race between
+them:** placement A's build bumps the shared epoch, which stales placement B's
+stamp, whose rebuild bumps it again. The pressure on
+`kMaxCaptureRebuildAttempts` therefore grows with the number of placements, and
+because the counters are per-SCut, **one placement can converge while another
+gives up** and serves its stale snapshot "until the next edit".
+
+MEASURED, AND THE MEASUREMENT IS THE POINT: that is a *race*, not a rule, so it
+does not show up on demand. Four configurations — one asset placed twice and two
+distinct arrangements, each through `<render>` and through live playback with the
+solo flipped mid-transport — all produced the CORRECT audio (QBX-258's log entry
+has the numbers). So this section is not describing a reproduced defect; it is
+describing the mechanism that makes one possible, so the next reader does not
+have to re-derive it from two comment blocks in two files.
+
+**Do not "fix" this by giving each placement its own epoch.** The stamp has to
+be the content's, or a capture could not notice that the content changed, which
+is the whole job. If convergence has to be guaranteed, the value stamped against
+must be one `buildCapture_()` cannot move — a model-level content epoch rather
+than a page-freeze epoch — and that is a change to what "stale" means, not a
+tweak to this function.
+
+### Three independent invalidations already cover a solo, measured by sabotage
+
+A natural reading of QBX-258's report is "some invalidation is missing". It is
+worth recording that this was tested and is an unlikely explanation: a solo
+reaches the page cache through THREE independent invalidations, and **two of
+them can each be removed with no measured effect at all** on the two-placement
+fixture. Only the third — the folder's own range invalidation — is load-bearing
+there.
+
+| sabotage | `solo_live_…` (live, two passes) | `arrangement_folder_solo_scoped` (render) | `solo_scope_project_wide` (render) |
+|---|---|---|---|
+| `onSoloTopologyChanged()`'s `bumpRenderChainEpoch()` removed | passed | — | — |
+| `trackMuteSoloChanged()`'s `invalidateRenderPath()` removed | passed | passed | **FAILED** |
+| `applyChildTrackAudibility()`'s `invalidateRenderPathRange()` removed | **FAILED** | **FAILED** | — |
+
+So a missing bump is an unlikely cause of a solo heard late or partly: two of
+the three go entirely unnoticed here, which also means a regression in either
+of those two is invisible to the whole suite — worth knowing before trusting a
+green run on a change in that area. What that leaves is the capture
+convergence race above, which is a different cache with a different stamp and
+its own deliberate give-up.
+
+### `<render>` IS SUBJECT TO STALENESS TOO — it does not recompute
+
+Stated because the opposite is the intuitive reading and it is wrong, and
+because a whole investigation was built on the wrong version before the
+sabotage table above corrected it. `solo_scope_project_wide.qxa` contains **no
+transport verb at all** — nine `<render>` calls and nothing else — and it
+**failed** when `trackMuteSoloChanged()`'s `invalidateRenderPath()` was removed.
+A render that recomputed from scratch could not possibly care whether an
+invalidation ran.
+
+`<render>` therefore shares the frozen page cache with playback, and a
+render-based gate CAN witness a page-staleness defect. The useful distinction
+between the two paths is **not** cache-versus-no-cache:
+
+* both read frozen pages, so both see page staleness;
+* playback additionally depends on READAHEAD having frozen the right thing
+  ahead of the playhead, and on a second pass over a position re-reading what
+  the first pass froze.
+
+A live-path case therefore earns its place only when it targets that second
+clause. One was built for QBX-258 and **deliberately not kept**: under all
+three sabotages above it failed exactly where an existing render case already
+failed, so it duplicated coverage at the cost of ~20 s of transport time per CI
+run. If a capture-staleness defect is reproduced, the case to write is one
+whose SECOND pass reads a position the FIRST pass froze — that shape is in
+QBX-258's log chain — and it has to be watched failing on something no render
+case catches.

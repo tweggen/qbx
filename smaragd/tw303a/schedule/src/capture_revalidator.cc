@@ -819,10 +819,27 @@ uint32_t CaptureRevalidator::dispatchRecomputation(IRevalidatable* object, uint3
         // Let the object materialize its preview source first (e.g. a container
         // cut's offline capture). On failure the Preview aspect stays stale so
         // the next getCapture() retries once the source becomes available.
+        //
+        // THAT RETRY IS THE DESIGN, NOT A FAILURE (QBX-259), so it is counted
+        // rather than logged: see IRevalidatable::notePrepRetry() for what the
+        // ERROR line cost, measured. Silent while this is a retry; once, at
+        // WARN, for an object that has stopped converging -- which is the one
+        // case a reader has to act on, because it means a clip that stays a
+        // grey box.
         if (!object->revalPrepPreview()) {
-            TW_LOGE( "schedule", "[PREVIEW] prep failed for obj=%p; preview stays stale for retry",
-                    (void*)object );
+            if (object->notePrepRetry()) {
+                TW_LOGW( "schedule",
+                         "[PREVIEW] obj=%p has not materialized its preview "
+                         "source in %d attempts; it stays blank until the "
+                         "content becomes available",
+                         (void*)object, IRevalidatable::kMaxPrepAttempts );
+            }
             aspects &= ~Preview;
+        } else {
+            // Converged. Dropping the streak here is what keeps the counter a
+            // streak: an object that blips once per project load must never
+            // accumulate its way to the stuck report over a session.
+            object->notePrepConverged();
         }
     }
 
