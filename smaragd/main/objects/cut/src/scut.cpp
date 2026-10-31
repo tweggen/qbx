@@ -675,6 +675,13 @@ void SCut::buildCapture_()
         const long long q258Ms = (long long) std::chrono::duration_cast<
             std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - q258T0 ).count();
+        // READ BEFORE THE LOCK. contentEpochForCapture_() reaches
+        // getRootComponent(), a non-const model method that can rewire the
+        // component graph, and this runs on a revalidator worker -- calling it
+        // under mutex() is a lock-order inversion that the diagnostic has no
+        // business introducing. Microseconds earlier than the publish is
+        // close enough for what the line is for.
+        const uint64_t q258Now = contentEpochForCapture_();
         std::lock_guard<std::mutex> lock( mutex() );
         if( captureGen_.load() != genAtEntry ) {
             TW_LOGW( "cut", "[Q258] cut=%p capture '%s' DROPPED after %lld ms "
@@ -694,7 +701,6 @@ void SCut::buildCapture_()
         // believed CURRENT, so if its audio is wrong it stays wrong until a
         // real edit. stamped < now is the self-healing case.
         {
-            const uint64_t q258Now = contentEpochForCapture_();
             TW_LOGW( "cut", "[Q258] cut=%p capture '%s' PUBLISHED after %lld ms "
                             "(%lld frames) stamped=%llu now=%llu -> %s",
                      (void*) this, getSName().toUtf8().constData(),
