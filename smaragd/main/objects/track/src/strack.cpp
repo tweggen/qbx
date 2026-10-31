@@ -2220,6 +2220,8 @@ void STrack::applyChildTrackAudibility( SObject *root )
         && ssolo::isLaneAudible( root, this, anySolo )
         && !ssolo::ownMaterialSoloed( this );
 
+    QString q258Muted, q258Audible;   // [Q258-DIAG]
+
     twEditRange affected;
     for( SLink *lk : childLinks() ) {
         if( !lk ) continue;
@@ -2245,6 +2247,8 @@ void STrack::applyChildTrackAudibility( SObject *root )
         // NOT a mute: the child keeps feeding events upward and keeps metering.
         const bool audible = ssolo::isLaneAudible( root, child, anySolo )
                              && !child->isLiveOwnedLane();
+        // [Q258-DIAG]
+        ( audible ? q258Audible : q258Muted ) += child->getSName() + " ";
         {
             if( cpTrackMix_ ) {
                 twEditRange r = cpTrackMix_->setClipMuted( lk, !audible );
@@ -2253,6 +2257,21 @@ void STrack::applyChildTrackAudibility( SObject *root )
         }
         child->applyChildTrackAudibility( root );   // nested folders, same root
     }
+
+    // [Q258-DIAG] Temporary. What this pass DECIDED, before anything is
+    // rendered: if a lane the ear still hears is listed under muted=, the
+    // decision was right and the staleness is downstream; if it is listed
+    // under audible=, the rule itself kept it, and `root` plus anySolo say why.
+    if( !q258Muted.isEmpty() || !q258Audible.isEmpty() )
+        TW_LOGW( "model", "[Q258] audibility lane='%s' root='%s' scope=%s "
+                          "anySolo=%d leakGuard=%d muted=[%s] audible=[%s]",
+                 getSName().toUtf8().constData(),
+                 root ? root->getSName().toUtf8().constData() : "(null)",
+                 ssolo::scopeOf( this ) == SProject::SoloScope::Global
+                     ? "global" : "arrangement",
+                 (int) anySolo, (int) leakGuard,
+                 q258Muted.trimmed().toUtf8().constData(),
+                 q258Audible.trimmed().toUtf8().constData() );
 
     // Only the lanes that actually flipped gained or lost material — and the
     // chain above us has to be staled the same way, or the summed pages we
