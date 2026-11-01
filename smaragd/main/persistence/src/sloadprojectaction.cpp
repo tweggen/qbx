@@ -52,6 +52,8 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         // tree has to be dropped explicitly or it is inherited by the document
         // being opened (proposal 09 M1).
         project->clearArrangements();
+        // ...and the asset names, for the same reason (QBX-266).
+        project->clearAssets();
 
         project->disableInvalidation();
 

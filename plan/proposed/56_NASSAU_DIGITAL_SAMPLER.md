@@ -413,7 +413,7 @@ string the core never interprets. qbx writes:
 |---|---|---|
 | A file | `file:<portable path>` | the project's extern-file machinery (`app/model/sfilepathref.h`), so relocation and "collect files" treat it like any sample |
 | A recording made in the instrument | `file:<path under the project's recordings folder>` | as a file; see Q-4 |
-| A qbx asset | `link:<layer id>` | the `SLink` child carrying that layer id, targeting the asset body (B4) |
+| A qbx asset | `link:<layer id>` | the `SLink` child carrying that layer id, targeting the asset body (B4) *(as built: `link:<link id>`, an id of the program's own, never reused — §11 Q3 item 1)* |
 
 **Layering (B5) — superseded by the Q-6 answer, 2026-10-27.** The author
 kept DESIGN §9.2's rank: `objects/sampler` sits at the rank of
@@ -548,7 +548,9 @@ so "current at note-on" is well defined.
   root component's `contentEpochNow()` (`twcomponent.h:490`) with the epoch its
   current generation was bounced from. Only a moved epoch schedules a bounce,
   debounced (the interval is a measured choice, recorded in the CONTRACT), so
-  an unrelated edit costs one integer compare per linked layer.
+  an unrelated edit costs one integer compare per linked layer. *(Built:
+  the compare is of a key — component, epoch, window, rate — and the
+  interval is 150 ms; §11 Q3 item 3.)*
 * **The bounce (B9).** A worker bounces the asset body's root component over
   its extent through the page scheduler, as `SFeelFlowTrackBounce` bounces a
   track (`sfeelflowbounce.cpp:200`): a `RenderSession` with a scheduler, a
@@ -557,6 +559,8 @@ so "current at note-on" is well defined.
   `tw/render` via `setWriterFactory` (`render_session.h:112`). The result is a
   `twSamplerSample` at the project rate with the next generation number. A
   render counter per layer (`assert-sampler-layer renders=`) is what Q3.2 reads.
+  *(Built without a RenderSession: the generation job's worker freezes the
+  content component's pages, as `SCut::buildCapture_` does — §11 Q3 item 2.)*
 * **While it runs**, the layer is marked rendering (DESIGN §6.2) and the old
   generation keeps playing.
 * **Self-reference is refused when the link is made.** `set-layer
@@ -573,7 +577,9 @@ so "current at note-on" is well defined.
   the file (B4), so a rename changes nothing the link holds. But there is no
   rename verb today (§2), and GATES Q3.4 needs one; Q3 adds `rename-asset`
   (`assetName`, `newName`; refuses a name in use; inverse is itself) as a
-  generic verb in `objects/mixer`, beside `create-asset`.
+  generic verb in `objects/mixer`, beside `create-asset`. *(Built as written;
+  a reload also needed `load-project` to drop the asset names — §11 Q3 item
+  6.)*
 
 ### 4.8 Tempo modes (DESIGN §5)
 
@@ -1313,3 +1319,108 @@ not built: Q2.q2. Where the text above did not survive the build:
    the settle refuses only a job that is still running at the bound;
    (d) a `src` that is not `file:` (`test:…`, empty) REMOVES the layer's
    buffer, installed as a change like any generation.
+
+
+### Q3 as built (QBX-266, 2026-11-01)
+
+Built: asset links in `SSamplerProgram` (the link records, the key compare on
+`arrangementChanged`, the debounce, the bounce as a generation job, the
+persistence), the cycle walk (`ssampler::assetReachesTrack` + a shell hook),
+`set-layer src="asset:<name>"`, the verb `rename-asset`, two
+`assert-sampler-layer` checks (`renders`, `asset`), three cases. Gated: Q3.1,
+Q3.2, Q3.3, Q3.4, Q3.q1, Q3.q2. Where the text above did not survive the
+build:
+
+1. **`link:<n>` names a LINK, not a layer** (§4.4's table: `link:<layer
+   id>`, "the SLink child carrying that layer id"). A layer re-linked from X
+   to Y keeps the same layer id, so `link:<layer id>` is the same TEXT before
+   and after, and the text-based inverses (`restore-sampler-values`, the
+   core's layer XML in `reinsert-layer`) could not tell X from Y: the undo
+   would leave the layer on Y. So `<n>` is an id of the program's own, minted
+   from `nextLinkId` and never reused, whose record is the `SLink` to the
+   body; the src text alone then says which body a layer plays and every
+   inverse carries a link exactly as it carries a file. The redo of a
+   `set-layer` names the link its first apply minted (the add verbs' rule,
+   §11 Q1 item 6). The file: `<SSamplerProgram assetLinks='<n>=<objectId>;…'
+   nextLinkId='…'>` with one `<SLink>` child per link a layer names; neither
+   is written when no layer names a link, so every Q1/Q2 file is
+   byte-unchanged. Invariant 9 holds as stated.
+2. **The bounce is not a `RenderSession`** (§4.7 "The bounce (B9)"). It is
+   Q2's generation job with a different body: the worker freezes the asset
+   CONTENT's root component (`windowStep(0)` on the body gives the content and
+   the window's start; `getDurationBlocking()` its length) page by page —
+   exactly `SCut::buildCapture_`, which does this on a revalidator worker —
+   into a `twSamplerSample` at the project rate (the first two channels). No
+   scheduler, prune scope, writer factory or position callback is needed for
+   a bounce whose result stays in memory, and install, pin, cancel and settle
+   are Q2's unchanged. It renders the content rather than the body's own
+   reader, which plays a capture rebuilt asynchronously that may be stale.
+   `objects/sampler` gained `pages`, not `render`/`schedule`. Measured: a
+   1 s asset bounces in 1–11 ms on the dev box.
+3. **The compare is a KEY, and the debounce is 150 ms** (§4.7 "Trigger"). The
+   key is the content component (identity), its `contentEpochNow()`, the
+   window (start, length) and the rate: a window edit moves no epoch. It is
+   compared with the key of the layer's newest generation, installed or on its
+   way, so a bounce in flight is superseded (cancelled between pages) only by
+   a further move. 150 ms, trailing (`SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS`
+   overrides it): a gesture's burst costs one bounce. A NEW link bounces at
+   once, without it; a link read from a file is DUE at bind, because a load
+   keeps invalidating after it binds (measured: two bounces per load
+   otherwise). `rendering` is a job outstanding OR a bounce due.
+4. **The offline render starts a due bounce itself** (§4.6's settle, extended):
+   `settle()` and `settleBeforeRender()` first call `flushDueBounces()`, so a
+   render right after an asset edit waits for that edit's bounce and logs the
+   barrier's line; the debounce never starts a bounce while a render runs.
+5. **A link no layer names is held WEAKLY** (not in §4.7). The first build
+   kept every link pinned so that an undo could name it again; a link a layer
+   had let go of then kept a refcount cycle alive (asset → arrangement →
+   track → chain → slot → program → asset), and `~SProject`'s survivor pass,
+   which cannot order a cycle, freed objects with live references: a teardown
+   SEGFAULT after a passing case (measured, `sampler_q3_link_cycle`). Only a
+   link a layer names is pinned (an `SLink` child, saved); the rest keep a
+   `QPointer` to the body and are re-pinned when an undo names them again.
+   A render cycle built AFTER the link is a refcount cycle too, and is not
+   refused (DESIGN §6.2 refuses at link time) — recorded in the CONTRACT.
+6. **`load-project` had to drop the asset names** (not in §4.7; Q3.4's
+   reload). `SLoadProjectAction` loads INTO the live project and dropped the
+   arrangements (proposal 09 M1) but not the asset names, and `SCut`
+   re-registers a loaded asset body only under a FREE name, so the reloaded
+   body came back UNNAMED while the old one still held the name: the link
+   read back fine and named no asset. `SProject::clearAssets()` now runs
+   beside `clearArrangements()`. The GUI's open builds a fresh project and
+   never met it.
+7. **Assumptions awaiting the author** (each easily changed):
+   (a) `asset:` is accepted by `set-layer` only; `add-zone` / `add-layer`
+   refuse it (link the layer once it exists), and every forward verb refuses
+   a literal `link:`;
+   (b) a link names the asset at the moment it is made and then follows the
+   BODY: `remove-asset` + undo brings back a new body, which an old link
+   does not name (the layer plays nothing, announced);
+   (c) a stretched, warped or looped asset window is bounced as start +
+   length of its content, unstretched (no qbx verb makes such an asset
+   window today);
+   (d) the bounce is the asset's own output, before any placement's clip
+   gain or fade — what the asset IS, not how one placement plays it.
+8. **Gates and the sabotages that bite** (each watched failing, the harness
+   restoring every file from its own saved bytes and touching it):
+   `qxa.sampler_q3_asset_link` (Q3.1, Q3.2, Q3.4, a superseded bounce),
+   `qxa.sampler_q3_link_cycle` (Q3.3, Q3.q1), `qxa.rename_asset` (Q3.q2).
+   Bounce on every action, ignoring the key (Q3.2's `renders`); the
+   `arrangementChanged` trigger dropped (the debounce leg); the render
+   barrier not starting a due bounce (Q3.1's immediate render: its barrier
+   line, generation, level); a key without the epoch (no bounce on an edit);
+   no cycle refusal (and a teardown SEGFAULT: the accepted cycle is a refcount
+   cycle); the cycle walk not following sampler links (Q3.q1 only); asset
+   links not saved, and `load-project` keeping the old asset names (Q3.4
+   after the reload); unnamed links kept pinned (teardown SEGFAULT); a link
+   read from a file bounced at bind (two bounces per load); a redo minting a
+   new link (`link:2` after the redo); a bounce in flight never superseded
+   (the held generation 3 is never replaced); `rename-asset` not checking
+   the name in use; `rename-asset` dropping the old pin before taking the new
+   one (bites only through `SObject::event`'s "resurrected" warning, which
+   the case asserts absent: that guard makes the order otherwise harmless).
+9. **Not gated**: a cycle built after the link (item 5); a bounce during
+   playback (it stales the track, invariant 14, but no case plays); the
+   cancellation of a superseded bounce BETWEEN PAGES (a held bounce is
+   superseded before its first page; no case can land an edit inside a
+   1–11 ms bounce deterministically).

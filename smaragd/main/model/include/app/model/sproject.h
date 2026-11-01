@@ -245,6 +245,13 @@ public:
     // asset" (undo re-places it, keeping identity) from "this clip is a copy
     // that merely windows the same container" (undo rebuilds a cut).
     QString assetNameOf( const SObject *body ) const;
+    // Drop every asset name, releasing the registry's pins. Called before a
+    // LOAD for clearArrangements()'s reason: SLoadProjectAction loads INTO
+    // this SProject, so without it the previous document's names survive and
+    // a loaded body whose name is already taken (SCut re-registers itself
+    // only under a FREE name) comes back UNNAMED -- measured, QBX-266: a
+    // sampler's asset link read back fine but named no asset.
+    void clearAssets();
 
     // --- Arrangement registry (proposal 09 D3) ---------------------------
     // An ARRANGEMENT is a named summing root that is NOT the project's master

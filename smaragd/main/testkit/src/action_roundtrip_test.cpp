@@ -107,7 +107,7 @@ const Fixture kFixtures[] = {
     { "assert-sampler-layer",
       "<assert-sampler-layer trackPath='0' slotIndex='0' layer='2' generation='2'"
       " rendering='0' pending='0' installs='2' src='file:../test_stereo.wav'"
-      " captureTrackEpoch='e1' trackEpochAdvancedSince='e0'/>" },
+      " captureTrackEpoch='e1' trackEpochAdvancedSince='e0' renders='3' asset='Src asset'/>" },
     { "wait-sampler-generations",
       "<wait-sampler-generations trackPath='0' slotIndex='0' timeoutMs='5000'/>" },
     { "assert-audio-energy",
@@ -613,6 +613,9 @@ const Fixture kFixtures[] = {
       " assetName='Section'/>" },
     { "place-asset",
       "<place-asset assetName='Section' trackPath='Drums:0' timePos='0'/>" },
+    // Proposal 56 Q3 (QBX-266): rename-asset, its own inverse.
+    { "rename-asset",
+      "<rename-asset assetName='Section' newName='Verse'/>" },
     // Proposal 41 M2: pack-clips/unpack-clips/duplicate-asset-here. `clips`
     // carries a single leading root qualifier over a semicolon list -- the
     // fixture pins that only ONE ':' appears, not one per token.

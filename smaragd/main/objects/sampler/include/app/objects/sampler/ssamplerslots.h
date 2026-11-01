@@ -18,10 +18,12 @@
 // Without a resolver (a unit test that never installed one) every lookup fails
 // with a reason that says so.
 
+#include <QList>
 #include <QString>
 
 #include <functional>
 
+class SObject;
 class SProject;
 class SSamplerProgram;
 
@@ -41,6 +43,25 @@ bool hasResolver();
 
 SSamplerProgram *programAt( SProject *project, const QString &pathRoot, const QString &trackPath,
                             int slotIndex, bool create, QString *why );
+
+// --- the asset-link cycle walk (proposal 56 §4.7, Q3; DESIGN §6.2) ----------------
+//
+// A layer may not link an asset that reaches the sampler's own track: the
+// bounce would render the instrument into its own sample. sarrangements::
+// reaches() follows childLinks() only, and a plugin chain is deliberately NOT
+// a child link, so it cannot see a cycle that runs THROUGH ANOTHER SAMPLER (A's
+// layer links asset X, X holds track B, B's sampler links asset Y, Y holds A).
+// The walk below therefore also follows, for every LANE it passes, the asset
+// links of the NassauDigital programs on that lane's slots. Which programs sit
+// on a lane is objects/track's knowledge, so it is another shell hook
+// (ssamplerwiring installs it); without one the walk follows child links only.
+using LanePrograms = std::function<QList<SSamplerProgram *>( SObject *lane )>;
+void setLaneProgramsHook( LanePrograms hook );
+
+// True when `track` is reachable from `body` through child links, content
+// links and sampler asset links. `via`, when given, names the sampler hops the
+// path took ("" when it took none), for the refusal's message. Main thread.
+bool assetReachesTrack( SObject *body, const SObject *track, QString *via = nullptr );
 
 }  // namespace ssampler
 
