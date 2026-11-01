@@ -90,6 +90,26 @@ public:
     // fixed BAR_THICKNESS among the lanes. See the class comment.
     void setGrowWithLanes( bool grow );
 
+    // PIN THE LONG AXIS to `px`; -1 (the default) lets the layout decide.
+    //
+    // A MOUNT THAT WANTS A FIXED-LENGTH BAR MUST COME THROUGH HERE and must
+    // not call setMinimumWidth()/setMaximumWidth() itself.
+    // applySizeConstraints_() sets BOTH axes every time it runs -- it has to,
+    // or flipping the orientation would leave the previous axis pinned -- and
+    // it runs on every lane-count change. A pin applied from outside is
+    // therefore DISCARDED by the next setLanes(), silently and once, which is
+    // the worst shape a layout bug has: measured in the transport toolbar,
+    // where the master meter's 96 px became `min 24 / max QWIDGETSIZE_MAX` on
+    // the first metering tick after Play, collapsing the bar to 24 px, moving
+    // the latency readout 72 px left and sliding every toolbar sharing that
+    // row with the transport toolbar's own width. The Track Detail dock's
+    // 72 px went the same way.
+    //
+    // The SHORT axis stays thickness()' business: that is what Grow mode is,
+    // and a mount pinning it would be overriding the lane count it asked for.
+    void setPinnedLength( int px );
+    int  pinnedLength() const { return pinnedLength_; }
+
     // First line of the tooltip. The lane explanation is appended to it, so a
     // mount that wants to name itself ("Master level") does not have to
     // re-state — or silently drop — the reason it shows two of six lanes.
@@ -159,6 +179,7 @@ private:
     std::vector<twMeterBallistics> ballistics_;   // one per lane, never empty
     QString           label_;                     // tooltip's first line
     int               available_   = 1;           // the project's channel count
+    int               pinnedLength_ = -1;         // long axis, px; -1 = unpinned
     bool              grow_        = false;
     Qt::Orientation   orientation_ = Qt::Vertical;
 

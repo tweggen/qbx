@@ -2092,8 +2092,11 @@ SMainWindow::SMainWindow()
     // the track heads use, so master and tracks are mutually consistent.
     qMasterMeter_ = new SLevelMeter( this );
     qMasterMeter_->setOrientation( Qt::Horizontal );
-    qMasterMeter_->setMinimumWidth( 96 );
-    qMasterMeter_->setMaximumWidth( 96 );
+    // 96 px THROUGH THE WIDGET, not through its min/max: setLanes() runs on
+    // every meterTick and re-applies the meter's own size constraints, which
+    // used to drop a pin set from here. See SLevelMeter::setPinnedLength() --
+    // this toolbar is where that was measured.
+    qMasterMeter_->setPinnedLength( 96 );
     qMasterMeter_->setMeterLabel( QStringLiteral( "Master level" ) );
     qTBTransport_->addWidget( qMasterMeter_ );
     QObject::connect( &SApplication::app(), &SApplication::meterTick, this,

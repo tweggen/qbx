@@ -2142,6 +2142,22 @@ bar.beat.tick, 1-based, a length 0-based; time as m:ss.mmm). It only formats;
 - **The project is `SApplication`'s**, not `currentProject_`: a scripted run
   never goes through the attach sites, and the readout must show what the
   engine plays.
+- **THE WIDTH DOES NOT FOLLOW THE POSITION**, and fixed-width digits are only
+  half of that. **Correction, 2026-11-01:** this invariant said "fixed-width
+  digits, so the toolbar does not twitch" and that was not enough. Equal-width
+  glyphs keep the digits from shuffling; they do not keep the LABEL from
+  resizing, and `9.4.959` is nine characters where `10.1.000` is ten — so the
+  hint grew the moment the playhead crossed bar 10 and the tempo box, the
+  master meter, the latency readout and every toolbar sharing the row moved
+  with it. Measured through `describe()` in the running app: 65 px up to bar 9,
+  73 px from bar 10, +7 px per further digit. The position label therefore
+  RESERVES the width of the longest reading it can show (four bar digits) as a
+  MINIMUM — not a fixed width, which would elide the bar number past the
+  reservation instead of moving once. The selection label deliberately does
+  not: it changes only when the user changes the selection, never with the
+  playhead. `describe()` appends `posPinned=<0|1>`, and
+  `transport_readout_width_is_stable.qxa` asserts it at all four bar-digit
+  counts — one position cannot tell a reserved width from a measured one.
 
 Gated by `transport_readout.qxa` through `assert-transport-readout` (no forced
 refresh: it re-targets and reads the labels; `selFrames=` carries the raw

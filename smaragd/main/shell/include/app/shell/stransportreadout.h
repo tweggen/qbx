@@ -21,6 +21,12 @@ class twTempoMap;
  * widget only formats, and only touches a label whose text changed: the
  * playhead moves it thirty times a second.
  *
+ * THE WIDTH DOES NOT FOLLOW THE POSITION. The digits are fixed-width AND the
+ * position label reserves the width of the longest reading it can show, because
+ * the first alone does not stop the LABEL from resizing when the bar number
+ * gains a digit -- which slid the tempo box, the master meter, the latency
+ * readout and every toolbar sharing the row. See the constructor.
+ *
  * Positions are formatted the way the ruler shows them: "bars" mode as
  * bar.beat.tick (1-based bar and beat, ticks within the beat), "time" mode as
  * m:ss.mmm. A length is the same in 0-based form ("4.0.000" is four bars).
@@ -43,7 +49,9 @@ public:
      *  from the labels' own text, so what is asserted is what is shown;
      *  then `|selFrames=<start>-<end>` (or `-`), the range's raw frames as
      *  last shown, which no label can carry and an exactness claim needs
-     *  (QBX-212). */
+     *  (QBX-212); then `|posPinned=<0|1>`, true while the position's own hint
+     *  fits the reserved width -- i.e. while the playhead cannot move anything
+     *  right of the readout. Fields are APPENDED, never inserted. */
     QString describe() const;
 
     // The formatting, exposed for setState() and for anyone else that must

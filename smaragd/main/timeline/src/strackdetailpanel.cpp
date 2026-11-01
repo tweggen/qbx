@@ -150,8 +150,10 @@ STrackDetailPanel::STrackDetailPanel(QWidget *parent)
     // channel at a readable thickness rather than dividing 8 px among six lanes.
     meter_->setGrowWithLanes(true);
     meter_->setOrientation(Qt::Horizontal);
-    meter_->setMinimumWidth(72);
-    meter_->setMaximumWidth(72);
+    // Through the widget, for the reason SLevelMeter::setPinnedLength() gives:
+    // this mount changes its lane count whenever the project's width changes,
+    // and that is exactly what used to discard a pin set from out here.
+    meter_->setPinnedLength(72);
     volLayout->addWidget(meter_);
     // OUTSIDE the scroll area: the fader and the meter are the two things a
     // user watches while the transport runs, so scrolling the FX chain must

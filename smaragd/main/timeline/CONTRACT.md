@@ -151,6 +151,23 @@ Invariants:
    The width comes from the TAP's `getOutputChannels()`, not from `SProject`, so
    the meter and the audio read one number — the same number §4.5's
    width-mismatch rule compares a cached page against.
+
+11c. **A mount that wants a FIXED-LENGTH bar pins it with
+   `SLevelMeter::setPinnedLength()`, never with its own
+   `setMinimumWidth`/`setMaximumWidth`.** `applySizeConstraints_()` sets BOTH
+   axes every time it runs — it has to, or flipping the orientation would leave
+   the previous axis pinned — and it runs on every lane-count change, so a pin
+   applied from outside is DISCARDED by the next `setLanes()`. Silently, and
+   once, which is the hardest shape to report. Measured: the transport
+   toolbar's master meter went from a pinned 96 px to `min 24 / max
+   QWIDGETSIZE_MAX` on the first metering tick after Play, collapsing the bar
+   to 24 px, moving the latency readout 72 px left and sliding every toolbar
+   sharing that row with the transport toolbar's own width; the Track Detail
+   dock's 72 px went the same way whenever the project's channel count changed.
+   The SHORT axis stays `thickness()`' business — that is what Grow mode is.
+   Gated by `levelmeter_ticks_test`'s `testPinnedLength()`, which reads the
+   size CONSTRAINTS (what a layout reads, and readable on a widget that was
+   never shown) rather than pixels.
 12. **A track-level gesture acts on the SELECTION when it is aimed into it,
    and on the clicked track alone otherwise.** That is the single rule behind
    multi-track mute/solo/arm, the structural operations (remove / indent /
