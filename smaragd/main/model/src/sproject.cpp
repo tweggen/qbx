@@ -504,6 +504,12 @@ QString SProject::assetNameOf( const SObject *body ) const
     return QString();
 }
 
+void SProject::clearAssets()
+{
+    const QList<QString> names = assetDict_.keys();
+    for( const QString &n : names ) unregisterAsset( n );
+}
+
 QList<QString> SProject::assetNames() const
 {
     return assetDict_.keys();

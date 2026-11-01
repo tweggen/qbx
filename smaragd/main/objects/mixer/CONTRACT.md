@@ -2,7 +2,7 @@
 
 Purpose: the root container object (SStdMixer: ordered tracks, asset
 management) and SPluginChain (per-track plugin hosting model), with asset
-actions (create/place/remove-asset, remove-asset-placement) and plugin
+actions (create/place/remove/rename-asset, remove-asset-placement) and plugin
 actions (insert/remove-plugin).
 
 Public headers: app/objects/mixer/*.h
@@ -15,6 +15,11 @@ Invariants:
    reduces it — assertions in tests rely on this).
 2. Assets are objects owned by the project and placed via links; removing
    the last placement does not delete the asset (remove-asset does).
+   `rename-asset` (QBX-266) moves only the registry's NAME: the body keeps its
+   identity, so every placement and every sampler asset link (an SLink to the
+   body) is untouched; the new entry is registered before the old one is
+   dropped, so the body's refcount never passes through zero. Gated by
+   `rename_asset.qxa` and `sampler_q3_asset_link.qxa`.
 3. SPluginChain mirrors its model into tw/plugins chain components; wiring
    rebuilds go through rebuildWiring() after input changes.
 4. Track selection is a SET with one distinguished PRIMARY, and both are

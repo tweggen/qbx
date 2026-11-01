@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q3_asset_link">
+
+  <!-- PROPOSAL 56 Q3 (QBX-266): A LAYER LINKED TO A QBX ASSET.
+
+       Q3.1  An edit of the asset produces a new generation, and the next
+             render hears the edit.
+       Q3.2  An action that does not touch the asset produces no re-render of
+             it (assert-sampler-layer renders=, the number of bounces started,
+             is unchanged).
+       Q3.4  Renaming the asset leaves the link intact, across a save and a
+             reload (rename-asset; the link holds the asset's BODY).
+
+       ======================================================= the fixture
+
+       Master lane 0 holds the sampler: a NassauDigital slot with ONE zone over
+       every key, root 60, one-shot, and ONE layer (id 2). A MIDI clip plays
+       key 60 at tick 40 = frame 1000, velocity 127: the layer at unity.
+
+       "Src" is a detached arrangement (summed into nothing, so the render
+       carries the sampler alone) with one lane holding ../test_stereo.wav at
+       0. The asset "Src asset" windows the Src ROOT over [0, 48000). The
+       layer's bounce is the arrangement's output, so the note plays
+       test_stereo.wav: ch0 rms 0.49999, ch1 0.24999 (a sine). A -6.0206 dB
+       clip trim inside Src halves both: 0.25 / 0.125.
+
+       "Other" is a second detached arrangement nothing links: an edit there
+       is the unrelated action of Q3.2, beside two master-side ones.
+
+       Every level is checked as a TWO-SIDED band over frames 1000..2023 of
+       channel 0. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+
+    <create-arrangement name="Src"/>
+    <add-track arrangement="Src" index="-1"/>
+    <add-sample trackPath="Src:0" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="Src:" startOffset="0" duration="48000" assetName="Src asset"/>
+
+    <create-arrangement name="Other"/>
+    <add-track arrangement="Other" index="-1"/>
+    <add-sample trackPath="Other:0" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <!-- ============================================================ the link -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Src asset"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="link:1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" renders="1" src="link:1"
+                          asset="Src asset"/>
+    <render filename="sq3_1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq3_1.wav" startFrame="0" frameCount="1000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <assert-audio-energy filename="sq3_1.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+
+    <!-- ===================================== Q3.2: actions that miss the asset -->
+    <add-track index="-1"/>
+    <add-note clip="0,0" tick="1000" dur="240" key="60" velocity="1" channel="0"/>
+    <set-clip-volume clip="Other:0,0" volumeDb="-3"/>
+    <wait-ms ms="500"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" renders="1"/>
+    <!-- ...and the settle, which starts every DUE bounce at once, finds none. -->
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1" renders="1"/>
+
+    <!-- ============== Q3.1 (a): an edit of the asset, heard after the debounce -->
+    <set-clip-volume clip="Src:0,0" volumeDb="-6.0206"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="1" renders="1"/>
+    <wait-ms ms="500"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" renders="2"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="2" renders="2"/>
+    <render filename="sq3_2.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+    <assert-audio-energy filename="sq3_2.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.22" maxRms="0.28"/>
+
+    <!-- ===== Q3.1 (b): an edit rendered AT ONCE: the barrier starts the bounce -->
+    <set-clip-volume clip="Src:0,0" volumeDb="0"/>
+    <render filename="sq3_3.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="for 1 sampler generation(s) on track 0" minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          rendering="0" installs="3" renders="3"/>
+    <assert-audio-energy filename="sq3_3.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+
+    <!-- ====================================================== Q3.4: rename -->
+    <rename-asset assetName="Src asset" newName="Renamed"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          renders="3" asset="Renamed"/>
+    <save-project path="../../build/sampler_q3_asset_link.qxp"/>
+    <load-project path="../../build/sampler_q3_asset_link.qxp"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <!-- A fresh program object: its first generation, bounced from the asset
+         the reloaded link names. -->
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" renders="1" src="link:1" asset="Renamed"/>
+    <render filename="sq3_4.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq3_4.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+    <!-- ...and still LIVE: an edit of the renamed asset after the reload is
+         a new generation the render hears. -->
+    <set-clip-volume clip="Src:0,0" volumeDb="-6.0206"/>
+    <render filename="sq3_5.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2" renders="2"
+                          asset="Renamed"/>
+    <assert-audio-energy filename="sq3_5.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.22" maxRms="0.28"/>
+  </actions>
+
+</SActionScript>

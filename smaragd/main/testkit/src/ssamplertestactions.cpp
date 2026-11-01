@@ -2,6 +2,7 @@
 
 #include "app/actions/sactionregistry.h"
 #include "app/model/splacements.h"
+#include "app/model/sproject.h"
 #include "app/objects/track/spluginactionsupport.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/shell/sapplication.h"
@@ -478,7 +479,9 @@ const QStringList &layerCheckNames()
     static const QStringList n = { QStringLiteral( "generation" ), QStringLiteral( "rendering" ),
                                    QStringLiteral( "pending" ),    QStringLiteral( "installs" ),
                                    QStringLiteral( "src" ),        QStringLiteral( "captureTrackEpoch" ),
-                                   QStringLiteral( "trackEpochAdvancedSince" ) };
+                                   QStringLiteral( "trackEpochAdvancedSince" ),
+                                   // Q3 (QBX-266)
+                                   QStringLiteral( "renders" ),    QStringLiteral( "asset" ) };
     return n;
 }
 
@@ -510,12 +513,27 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
         return { false, nullptr };
     }
     const SSamplerProgram::LayerState st = prog->layerState( (std::uint32_t)layer_ );
-    const QString got = QStringLiteral( "generation=%1 rendering=%2 pending=%3 installs=%4 src=%5" )
+    // The asset the layer's link targets NOW, by the registry's current name
+    // (Q3.4: a rename moves the name, never the link).
+    QString assetNow;
+    {
+        std::string src;
+        if( prog->model().value( audio::twSamplerScope::Layer, (std::uint32_t)layer_, "src", &src ) &&
+            src.compare( 0, 5, "link:" ) == 0 ) {
+            SObject *body = prog->linkTarget( (std::uint32_t)QString::fromStdString( src.substr( 5 ) )
+                                                  .toULongLong() );
+            assetNow = body ? project->assetNameOf( body ) : QStringLiteral( "<no link>" );
+        }
+    }
+    const QString got = QStringLiteral( "generation=%1 rendering=%2 pending=%3 installs=%4 src=%5 "
+                                        "renders=%6 asset=%7" )
                             .arg( (qulonglong)st.installedGeneration )
                             .arg( st.rendering() ? 1 : 0 )
                             .arg( (qulonglong)st.pendingGeneration )
                             .arg( st.installs )
-                            .arg( st.installedSrc );
+                            .arg( st.installedSrc )
+                            .arg( st.renders )
+                            .arg( assetNow );
     QStringList fails;
     auto num = [&]( const char *k, qulonglong have ) {
         if( checks_.contains( QLatin1String( k ) ) &&
@@ -527,6 +545,9 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
     num( "rendering", st.rendering() ? 1 : 0 );
     num( "pending", st.pendingGeneration );
     num( "installs", (qulonglong)st.installs );
+    num( "renders", (qulonglong)st.renders );
+    if( checks_.contains( QStringLiteral( "asset" ) ) && checks_.value( "asset" ) != assetNow )
+        fails << QStringLiteral( "asset: want \"%1\"" ).arg( checks_.value( "asset" ) );
     if( checks_.contains( QStringLiteral( "src" ) ) && checks_.value( "src" ) != st.installedSrc )
         fails << QStringLiteral( "src: want \"%1\"" ).arg( checks_.value( "src" ) );
     if( checks_.contains( QStringLiteral( "captureTrackEpoch" ) ) ||

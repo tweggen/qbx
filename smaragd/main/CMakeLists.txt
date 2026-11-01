@@ -333,6 +333,7 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/splaceassetaction.h
     objects/mixer/include/app/objects/mixer/sremovearrangementaction.h
     objects/mixer/include/app/objects/mixer/sremoveassetaction.h
+    objects/mixer/include/app/objects/mixer/srenameassetaction.h
     objects/mixer/include/app/objects/mixer/sremoveassetplacementaction.h
     objects/mixer/include/app/objects/mixer/sremovetrackaction.h
     objects/mixer/include/app/objects/mixer/sreparenttrackaction.h
@@ -360,6 +361,7 @@ set(APP_OBJECTS_FILES
     objects/mixer/src/splaceassetaction.cpp
     objects/mixer/src/sremovearrangementaction.cpp
     objects/mixer/src/sremoveassetaction.cpp
+    objects/mixer/src/srenameassetaction.cpp
     objects/mixer/src/sremoveassetplacementaction.cpp
     objects/mixer/src/sremovetrackaction.cpp
     objects/mixer/include/app/objects/mixer/ssendlaneactions.h

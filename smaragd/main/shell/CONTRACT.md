@@ -1016,6 +1016,10 @@ installs the two hooks that join them, and nothing else:
   initializers: `future` (program + every current generation) becomes the
   slot's instance initializer, `now` (only what changed) is applied to the
   live instances.
+- `ssampler::setLaneProgramsHook` (Q3, QBX-266) — the asset-link cycle walk
+  asks which NassauDigital programs sit on a lane it passes (the chain's
+  slots), so it can follow THEIR asset links: a cycle through a second
+  sampler is refused (`qxa.sampler_q3_link_cycle`).
 
 **An offline render settles the sampler first (Q2, QBX-263; proposal 56 B8,
 invariant 7).** `startRender()` calls `ssamplerwiring::settleBeforeRender()`
@@ -1037,7 +1041,10 @@ render — `SMARAGD_SAMPLER_SETTLE_MS`, default 30000, or the test override
 inside it REFUSES the render with the reason (`startRender`'s `error`, logged
 `run barrier: REFUSED: …`, QBX-145's discipline): never a render of the older
 generation pretending to be current. Before `beginRun()`, so the barrier's
-invalidation covers what the settle installed. PLAYBACK does not settle: a
+invalidation covers what the settle installed. Since Q3 (QBX-266) it first calls each program's `flushDueBounces()`,
+so an asset bounce the debounce still holds back is started and waited for
+like any outstanding generation: the render after an asset edit hears it
+(`qxa.sampler_q3_asset_link`). PLAYBACK does not settle: a
 playback run plays whatever generation is installed, and a later install
 stales the track as any edit does (DESIGN §6.1 asks byte identity of renders,
 not of playback).

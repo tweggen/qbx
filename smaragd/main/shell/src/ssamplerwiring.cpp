@@ -89,6 +89,22 @@ namespace ssamplerwiring {
 void install()
 {
     ssampler::setResolver( resolve );
+    // The asset-link cycle walk (proposal 56 §4.7, Q3.q1) follows the sampler
+    // links of every lane it passes; which programs sit on a lane is the
+    // track's knowledge, so it is asked here.
+    ssampler::setLaneProgramsHook( []( SObject *lane ) {
+        QList<SSamplerProgram *> out;
+        STrack *track = dynamic_cast<STrack *>( lane );
+        SPluginChain *chain = track ? track->getPluginChain() : nullptr;
+        if( !chain ) return out;
+        for( int i = 0; i < chain->getSlotCount(); ++i ) {
+            SPluginSlot *slot = chain->getSlotAt( i );
+            if( !slot || !hostsNassauDigital( *slot ) ) continue;
+            SSamplerProgram *p = programChild( *slot );
+            if( p && !out.contains( p ) ) out.append( p );
+        }
+        return out;
+    } );
     SPluginSlot::setChildAdoptedHook( []( SPluginSlot &slot, SObject &child ) {
         SSamplerProgram *prog = qobject_cast<SSamplerProgram *>( &child );
         if( !prog ) return;
@@ -146,7 +162,11 @@ bool settleBeforeRender( SProject *project, QString *why )
         SPluginSlot *slot = tr->instrumentSlot();
         if( !slot || !hostsNassauDigital( *slot ) ) continue;
         SSamplerProgram *prog = programChild( *slot );
-        if( !prog || prog->outstandingGenerations() == 0 ) continue;
+        if( !prog ) continue;
+        // An asset bounce the debounce still holds back (Q3) is outstanding
+        // too: start it now, so this render hears the asset as it is.
+        prog->flushDueBounces();
+        if( prog->outstandingGenerations() == 0 ) continue;
         // ONE bound for the whole render, not one per track.
         const int left = std::max<qint64>(
             0, bound - std::chrono::duration_cast<std::chrono::milliseconds>( clock::now() - t0 )

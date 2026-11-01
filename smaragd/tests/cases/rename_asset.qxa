@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="rename_asset">
+
+  <!-- rename-asset (QBX-266, proposal 56 Q3.q2): a registered asset gets a new
+       name and keeps its identity.
+
+       The fixture: "Src", a detached arrangement holding ../test_stereo.wav
+       at 0, windowed by the asset "Lead" over [0, 48000) and PLACED once on
+       master lane 0, so the render carries the asset alone (ch0 rms 0.5 over
+       the first second). A second asset "Pad" windows the same root.
+
+       Asserted:
+         - a rename to a name in use, to the same name, from an unknown name
+           and to an empty name is refused, each with the line only that
+           refusal writes, and changes nothing (the old name still places);
+         - after a rename the NEW name places and the OLD one is refused
+           (place-asset resolves the registry by name), and the placement made
+           before the rename still plays;
+         - one undo restores the old name (old places, new refused) and the
+           placement still plays; the redo renames again;
+         - renaming an asset only the registry holds keeps the body alive. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <create-arrangement name="Src"/>
+    <add-track arrangement="Src" index="-1"/>
+    <add-sample trackPath="Src:0" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="Src:" startOffset="0" duration="48000" assetName="Lead"/>
+    <create-asset container="Src:" startOffset="0" duration="48000" assetName="Pad"/>
+    <place-asset assetName="Lead" trackPath="0" timePos="0"/>
+
+    <!-- ============================================================ refusals -->
+    <rename-asset assetName="Lead" newName="Pad" expectReject="true"/>
+    <assert-log contains="the name &quot;Pad&quot; is in use" minCount="1" maxCount="1"/>
+    <rename-asset assetName="Lead" newName="Lead" expectReject="true"/>
+    <assert-log contains="the asset already has that name" minCount="1" maxCount="1"/>
+    <rename-asset assetName="Nope" newName="Other" expectReject="true"/>
+    <assert-log contains="there is no asset &quot;Nope&quot;" minCount="1" maxCount="1"/>
+    <rename-asset assetName="Lead" newName="" expectReject="true"/>
+    <assert-log contains="both assetName and newName are required" minCount="1" maxCount="1"/>
+    <place-asset assetName="Lead" trackPath="1" timePos="96000"/>
+
+    <!-- ============================================================= rename -->
+    <rename-asset assetName="Lead" newName="Hook"/>
+    <place-asset assetName="Lead" trackPath="2" timePos="0" expectReject="true"/>
+    <place-asset assetName="Hook" trackPath="2" timePos="144000"/>
+    <render filename="ra_1.wav" format="wav" quality="10" durationSec="1"/>
+    <assert-audio-energy filename="ra_1.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+
+    <!-- ======================================================= undo / redo
+         The undo takes back the place-asset of "Hook" first, then the rename.
+         The probes in between are REFUSED placements, which put nothing on
+         the stack, so the two redos that follow are the rename and the
+         placement again. -->
+    <undo/>
+    <undo/>
+    <!-- assert-log reads what the action before it wrote. -->
+    <assert-log contains="rename-asset: &quot;Hook&quot; -&gt; &quot;Lead&quot;" minCount="1" maxCount="1"/>
+    <render filename="ra_2.wav" format="wav" quality="10" durationSec="1"/>
+    <assert-audio-energy filename="ra_2.wav" startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+    <place-asset assetName="Hook" trackPath="2" timePos="0" expectReject="true"/>
+    <redo/>
+    <assert-log contains="rename-asset: &quot;Lead&quot; -&gt; &quot;Hook&quot;" minCount="1" maxCount="1"/>
+    <redo/>
+    <place-asset assetName="Lead" trackPath="2" timePos="0" expectReject="true"/>
+    <place-asset assetName="Hook" trackPath="2" timePos="0"/>
+
+    <!-- =================================== an asset NOTHING places or links
+         "Pad" is held by the registry's pin alone. The rename registers the
+         new name BEFORE it drops the old one, so the pin count never passes
+         through zero; the other order frees the body (deleteLater), which a
+         test-case run delivers only at drain-pending-deletes, and the new
+         name then names freed memory. -->
+    <rename-asset assetName="Pad" newName="Pad 2"/>
+    <drain-pending-deletes/>
+    <place-asset assetName="Pad 2" trackPath="2" timePos="48000"/>
+    <render filename="ra_3.wav" format="wav" quality="10" durationSec="2"/>
+    <assert-audio-energy filename="ra_3.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+  </actions>
+
+</SActionScript>

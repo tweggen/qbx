@@ -413,7 +413,7 @@ string the core never interprets. qbx writes:
 |---|---|---|
 | A file | `file:<portable path>` | the project's extern-file machinery (`app/model/sfilepathref.h`), so relocation and "collect files" treat it like any sample |
 | A recording made in the instrument | `file:<path under the project's recordings folder>` | as a file; see Q-4 |
-| A qbx asset | `link:<layer id>` | the `SLink` child carrying that layer id, targeting the asset body (B4) |
+| A qbx asset | `link:<layer id>` | the `SLink` child carrying that layer id, targeting the asset body (B4) *(as built: `link:<link id>`, an id of the program's own, never reused — §11 Q3 item 1)* |
 
 **Layering (B5) — superseded by the Q-6 answer, 2026-10-27.** The author
 kept DESIGN §9.2's rank: `objects/sampler` sits at the rank of
@@ -548,7 +548,9 @@ so "current at note-on" is well defined.
   root component's `contentEpochNow()` (`twcomponent.h:490`) with the epoch its
   current generation was bounced from. Only a moved epoch schedules a bounce,
   debounced (the interval is a measured choice, recorded in the CONTRACT), so
-  an unrelated edit costs one integer compare per linked layer.
+  an unrelated edit costs one integer compare per linked layer. *(Built:
+  the compare is of a key — component, epoch, window, rate — and the
+  interval is 150 ms; §11 Q3 item 3.)*
 * **The bounce (B9).** A worker bounces the asset body's root component over
   its extent through the page scheduler, as `SFeelFlowTrackBounce` bounces a
   track (`sfeelflowbounce.cpp:200`): a `RenderSession` with a scheduler, a
@@ -557,6 +559,8 @@ so "current at note-on" is well defined.
   `tw/render` via `setWriterFactory` (`render_session.h:112`). The result is a
   `twSamplerSample` at the project rate with the next generation number. A
   render counter per layer (`assert-sampler-layer renders=`) is what Q3.2 reads.
+  *(Built without a RenderSession: the generation job's worker freezes the
+  content component's pages, as `SCut::buildCapture_` does — §11 Q3 item 2.)*
 * **While it runs**, the layer is marked rendering (DESIGN §6.2) and the old
   generation keeps playing.
 * **Self-reference is refused when the link is made.** `set-layer
@@ -573,7 +577,9 @@ so "current at note-on" is well defined.
   the file (B4), so a rename changes nothing the link holds. But there is no
   rename verb today (§2), and GATES Q3.4 needs one; Q3 adds `rename-asset`
   (`assetName`, `newName`; refuses a name in use; inverse is itself) as a
-  generic verb in `objects/mixer`, beside `create-asset`.
+  generic verb in `objects/mixer`, beside `create-asset`. *(Built as written;
+  a reload also needed `load-project` to drop the asset names — §11 Q3 item
+  6.)*
 
 ### 4.8 Tempo modes (DESIGN §5)
 

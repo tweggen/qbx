@@ -199,6 +199,14 @@ private:
 
 // set-zone / set-layer / set-sampler-program: ONE class, three spellings; the
 // scope is fixed by the registered name (the comp-map verbs' shape).
+//
+// set-layer src="asset:<name>" LINKS the layer to a registered qbx asset
+// (proposal 56 §4.7, Q3): the asset is resolved by name NOW, the link is
+// refused when the asset reaches the sampler's own track (also through other
+// samplers' links, ssampler::assetReachesTrack), and the core is handed
+// `link:<n>`, <n> the SSamplerProgram's link to the asset body. A literal
+// `link:` src is refused on every forward verb: only an inverse (restore,
+// reinsert) writes one back, and it names a link the program still holds.
 //   set-zone            `zone` = an id | "all", or `zones` = "3;7;12" | "all"
 //   set-layer           `layer` = an id, or `layers` = "18;19"
 //   set-sampler-program no selector
@@ -217,6 +225,9 @@ private:
     QString          selectorAttr_;   // "zone" | "zones" | "layer" | "layers" | ""
     QString          selector_;
     SSamplerAttrList values_;
+    // set-layer src="asset:<name>" (Q3): the link the FIRST apply minted, so a
+    // redo names the same one. Not serialized, like add-zone's created ids.
+    std::uint32_t    linkId_ = 0;
 };
 
 // restore-sampler-values: `scope` = program | zone | layer, and one
