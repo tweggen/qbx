@@ -40,6 +40,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sautofade.h
     model/include/app/model/srecordingfiles.h
     model/include/app/model/sprojectprops.h
+    model/include/app/model/sarmcensus.h
     model/include/app/model/ssolorules.h
     model/include/app/model/sroutinggraph.h
     model/include/app/model/ssortedobjlist.h
@@ -495,7 +496,9 @@ set(APP_UI_FILES
     shell/include/app/shell/smidirecorder.h
     shell/include/app/shell/splayheadclock.h
     shell/include/app/shell/sviewtabs.h
+    shell/include/app/shell/slanebadge.h
     shell/include/app/shell/ssoloindicator.h
+    shell/include/app/shell/sarmindicator.h
     shell/include/app/shell/smainwindow.h
     shell/include/app/shell/ssecretstore.h
     shell/include/app/shell/srecordmodeseed.h
@@ -515,7 +518,9 @@ set(APP_UI_FILES
     shell/src/smidioutpump.cpp
     shell/src/smidirecorder.cpp
     shell/src/sviewtabs.cpp
+    shell/src/slanebadge.cpp
     shell/src/ssoloindicator.cpp
+    shell/src/sarmindicator.cpp
     shell/src/smainwindow.cpp
     shell/src/ssecretstore.cpp
     shell/src/ssecretstorebackend.h

@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE STATUS BAR'S RECORD-ARM INDICATOR: IT SEES AN ARM IN A ROOT NOBODY IS
+  LOOKING AT, IT NAMES WHERE, AND CLICKING IT DISARMS EVERYTHING AS ONE UNDO
+  STEP.
+
+  Asked for by the author beside QBX-257's solo badge: "the same display for at
+  least one track is armed would also come handy". It is the same display, and
+  this case is solo_indicator_clear_all.qxa's shape one flag over, because the
+  two badges share their mechanism (SLaneBadge) and must therefore share their
+  gate's shape or the shared part would be gated once and trusted twice.
+
+  WHY AN ARM IS WORTH A BADGE AT ALL. Since QBX-260 the arm is what puts a lane
+  in the live set: an armed track with monitoring on has its input open and its
+  instrument live. "Which tracks are armed" stopped being a question only the
+  Record button cares about, and an armed lane can sit in an arrangement tab
+  nobody has open.
+
+  THE MASTER TAB IS ACTIVE THROUGHOUT, which is what makes two of the
+  assertions mean anything:
+    * armRoots=Arrangement;Drums names the root HOLDING each armed lane. A
+      master-rooted read — the mistake the QBX-231/233/243/244/245 sweep keeps
+      finding — could not answer "Drums" for a lane the master's tree does not
+      contain.
+    * armOnScreen=0 says not every armed lane is in the root on screen, which
+      is the whole reason the badge names a root at all.
+
+  THE INDICES ARE DELIBERATELY DIFFERENT (master 0, arrangement 1). The disarm
+  is a macro of one arm-track per armed lane, each rooted at the root that
+  holds it; a macro rooted per TAB would resolve "1" against the master and
+  disarm a lane nobody asked about while leaving Drums:1 armed. With equal
+  indices a wrong-root write would land on the right flag by accident.
+
+  ONE UNDO STEP. undo count="1" puts BOTH flags back, which only holds if the
+  two writes were one composite. The redo after it re-applies the disarm and
+  balances the counts, since verify-undo compares undo and redo counts.
+  verify-undo itself only checks track counts per root, so it is not the claim
+  about what the undo restored — the armList= assertions are.
+
+  WATCHED FAILING, each arm alone. Dropping the macro's per-lane root (so the
+  disarm resolves against the active tab) fails eight assertions, four of them
+  the post-click ones: Drums:1 stays armed while a master lane nobody asked
+  about is written. Walking only the master root in sarm::armedLanesInProject
+  fails the count, the list, the roots and the on-screen field.
+
+  NO INPUT IS SET ANYWHERE. An arm needs none: it is a model flag, and what it
+  then does to the live set is QBX-260's business, gated by
+  monitor_needs_arm.qxa. This case is about the badge.
+-->
+<SActionScript version="1" name="arm_indicator_status_bar">
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+
+    <!-- The FIRST read ATTACHES both indicators: a scripted run never reaches
+         the attach sites, so it has to come before the gestures it follows.
+         It also states the resting state — no arm, no badge. -->
+    <assert-status-bar contains="armShown=0"/>
+    <assert-status-bar contains="armLanes=0"/>
+    <assert-status-bar contains="disarmAllEnabled=0"/>
+
+    <!-- TWO ARMS AT DIFFERENT INDICES IN DIFFERENT ROOTS. arm-track reads its
+         path with parseInto, so a BARE path is MASTER-rooted whatever tab is
+         active, and the arrangement lane is named "Drums:1" explicitly. -->
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="Drums:1" armed="1"/>
+
+    <assert-status-bar contains="armShown=1"/>
+    <assert-status-bar contains="armLanes=2"/>
+    <assert-status-bar contains="armList=0 Drums:1|"/>
+    <assert-status-bar contains="armRoots=Arrangement;Drums"/>
+    <assert-status-bar contains="armOnScreen=0"/>
+    <assert-status-bar contains="disarmAllEnabled=1"/>
+    <!-- ...and what is PAINTED, not just what was counted: two lanes over two
+         roots cannot be named one root, so the badge says how many. -->
+    <assert-status-bar contains="armText=ARM · 2 lanes"/>
+
+    <!-- The solo badge is untouched by any of it: the two are siblings, not
+         the same widget, and a shared base that leaked state between them
+         would show up here. -->
+    <assert-status-bar contains="soloShown=0"/>
+    <assert-status-bar contains="soloLanes=0"/>
+
+    <!-- THE CLICK. The master tab is active and has never been left. -->
+    <click-arm-indicator/>
+    <assert-status-bar contains="armLanes=0"/>
+    <assert-status-bar contains="armShown=0"/>
+    <assert-status-bar contains="armList=|"/>
+    <assert-status-bar contains="disarmAllEnabled=0"/>
+    <!-- ...and the badge is dead again, by its own refusal. -->
+    <click-arm-indicator expectReject="true"/>
+
+    <!-- ONE UNDO RESTORES EXACTLY THE TWO FLAGS THAT WERE SET. Not one of
+         them, not a third, and not a lane at the same index in the other
+         root: the list is the whole answer. -->
+    <undo count="1"/>
+    <assert-status-bar contains="armLanes=2"/>
+    <assert-status-bar contains="armList=0 Drums:1|"/>
+    <assert-status-bar absent="armLanes=3"/>
+    <assert-status-bar contains="armRoots=Arrangement;Drums"/>
+
+    <!-- Redo disarms them again, and balances the counts for verify-undo. -->
+    <redo count="1"/>
+    <assert-status-bar contains="armLanes=0"/>
+    <assert-status-bar contains="armShown=0"/>
+  </actions>
+
+  <verify-undo/>
+</SActionScript>

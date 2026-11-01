@@ -1,8 +1,7 @@
 #ifndef SSOLOINDICATOR_H
 #define SSOLOINDICATOR_H
 
-#include <QStringList>
-#include <QToolButton>
+#include "app/shell/slanebadge.h"
 
 class SObject;
 class SProject;
@@ -30,16 +29,16 @@ class SProject;
  * IT ASKS NO QUESTION OF ITS OWN. Which lanes are soloed comes from
  * `ssolo::soloedLanesInProject()` and the scope from `SProject::soloScope()`;
  * where a lane lives comes from `splacements::specOf()` /
- * `splacements::rootHolding()`. ssolorules.h's own header records why that
- * matters: the audibility rule was written out three times and all three were
- * wrong in the same way.
+ * `splacements::rootHolding()`, in `SLaneBadge`. ssolorules.h's own header
+ * records why that matters: the audibility rule was written out three times
+ * and all three were wrong in the same way.
  *
- * NOT COLOUR ALONE. The word `SOLO` carries the state; the colour is
- * decoration, and it is taken from the palette's Highlight role rather than
- * written as a hex literal, so it follows the light and the dark theme
- * instead of being legible in one of them.
+ * THE MECHANISM IS `SLaneBadge`'s, shared with the record-arm badge: the
+ * counting, the root naming, the on-screen question, the hiding, the palette
+ * and the describe() shape. What is here is what is SOLO about it — the lane
+ * set, the word, the scope, and the two sentences the scope makes true.
  */
-class SSoloIndicator : public QToolButton {
+class SSoloIndicator : public SLaneBadge {
     Q_OBJECT
 
 public:
@@ -56,37 +55,27 @@ public:
     void refresh( SProject *project, SObject *activeRoot,
                   const QString &masterLabel );
 
-    /** True while at least one lane in the project carries solo. */
-    bool inForce() const { return lanes_ > 0; }
-
     /**
      * The test seam, one line, fields APPENDED and never inserted (the house
      * rule: assert-status-bar matches substrings, so a field put between two
-     * existing ones breaks every assertion spanning the seam).
+     * existing ones breaks every assertion spanning the seam). SLaneBadge's
+     * five fields with the `solo` prefix —
      *
-     *   soloShown=<0|1>      !isHidden() — the WIDGET's own state, not our
-     *                        intent, so a build that computes the label and
-     *                        forgets to hide the badge cannot pass
+     *   soloShown=<0|1>      !isHidden() — the WIDGET's own state
      *   soloText=<text>      text(), i.e. exactly what is painted
      *   soloLanes=<n>        how many lanes carry solo, whole project
-     *   soloRoots=<a;b>      the roots holding them, display labels, in root
-     *                        order, deduped, ';'-joined (a name containing
-     *                        ';' is written as is — this field is for gates)
+     *   soloRoots=<a;b>      the roots holding them, display labels
      *   soloOnScreen=<0|1>   every soloed lane is in the root on screen
+     *
+     * — then this badge's own tail:
+     *
      *   soloScope=<global|arrangement>
-     *   soloList=<spec ...>  the qualified paths the tooltip lists,
-     *                        space-joined
+     *   soloList=<spec ...>  the qualified paths the tooltip lists
      */
     QString describe() const;
 
 private:
-    void apply_( const QString &text, const QString &tip );
-
-    int         lanes_ = 0;
-    QStringList roots_;
-    QStringList specs_;
-    QString     scope_;
-    bool        onScreen_ = true;
+    QString scope_ = QStringLiteral( "global" );
 };
 
 #endif  // SSOLOINDICATOR_H

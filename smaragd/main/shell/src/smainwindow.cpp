@@ -49,6 +49,7 @@
 #include "app/shell/smainwindow.h"
 #include "app/shell/stransportreadout.h"
 #include "app/shell/sviewtabs.h"
+#include "app/shell/sarmindicator.h"
 #include "app/shell/ssoloindicator.h"
 #include "app/model/sobject.h"
 #include "app/model/sproject.h"
@@ -57,9 +58,11 @@
 #include "app/model/sexternfile.h"
 #include "app/media/smediadrop.h"
 #include "app/objects/midi/smidiclipactions.h"
+#include "app/model/sarmcensus.h"
 #include "app/model/splacements.h"
 #include "app/model/ssolorules.h"
 #include "app/actions/scompositeaction.h"
+#include "app/objects/track/sliveinputactions.h"
 #include "app/objects/track/ssettracksoloaction.h"
 #include "app/model/sobjectpath.h"
 #include "app/selection/sselectionmanager.h"
@@ -1100,7 +1103,7 @@ void SMainWindow::fileNew()
     attachClipProperties();
     attachEventEditor();
     attachTransportReadout();
-    attachSoloIndicator_();
+    attachStatusIndicators_();
 
     currentFilePath_.clear();   // fresh project is untitled until saved
     updateWindowTitle();
@@ -1174,7 +1177,7 @@ bool SMainWindow::openProjectFile( const QString &fileName )
     attachClipProperties();
     attachEventEditor();
     attachTransportReadout();
-    attachSoloIndicator_();
+    attachStatusIndicators_();
 
     currentFilePath_ = fileName;   // remember where we loaded from
     updateWindowTitle();
@@ -2230,6 +2233,13 @@ SMainWindow::SMainWindow()
     actClearSolos_ = editMenu->addAction( tr( "Clear all &solos" ), this,
                                           SLOT( clearAllSolos() ) );
     actClearSolos_->setEnabled( false );
+    // ...and the record-arm badge's command, for the same reasons one flag
+    // over. Since QBX-260 an arm is also what opens an input and takes an
+    // instrument live, so "disarm everything" is the one gesture that puts a
+    // project back to silence without hunting for the lanes.
+    actDisarmAll_ = editMenu->addAction( tr( "&Disarm all tracks" ), this,
+                                         SLOT( disarmAllTracks() ) );
+    actDisarmAll_->setEnabled( false );
     editMenu->addSeparator();
     editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
                          this, SLOT( showOptionsDialog() ) );
@@ -2677,6 +2687,16 @@ void SMainWindow::buildStatusBar()
                       [this] {
                           if( actClearSolos_ ) actClearSolos_->trigger();
                       } );
+
+    // THE RECORD-ARM BADGE, asked for beside the solo one. Added AFTER it, so
+    // the permanent-widget order on screen is solo then arm and the describe
+    // seam's field order matches what the user sees.
+    armIndicator_ = new SArmIndicator( this );
+    statusBar()->addPermanentWidget( armIndicator_ );
+    QObject::connect( armIndicator_, &QToolButton::clicked, this,
+                      [this] {
+                          if( actDisarmAll_ ) actDisarmAll_->trigger();
+                      } );
 }
 
 // Point the indicator at the current project. THREE things change what it
@@ -2685,7 +2705,7 @@ void SMainWindow::buildStatusBar()
 // SCOPE changing (soloTopologyChanged, which setSoloScope emits), and the
 // user switching tabs, since the root ON SCREEN is what decides whether the
 // badge has to name where the solo is.
-void SMainWindow::attachSoloIndicator_()
+void SMainWindow::attachStatusIndicators_()
 {
     SProject *proj = SApplication::app().getCurrentProject();
 
@@ -2699,13 +2719,28 @@ void SMainWindow::attachSoloIndicator_()
         soloScopeConn_ = connect( proj, &SProject::soloTopologyChanged,
                                   this, &SMainWindow::refreshSoloIndicator );
     }
-    // The tabs outlive every project, so this one is wired once.
+    // The tabs outlive every project, so this one is wired once -- and it
+    // moves BOTH badges, because the root on screen is what decides whether
+    // either of them has to name where.
     if( viewTabs_ && !soloTabsConn_ )
         soloTabsConn_ = connect( viewTabs_, &SViewTabs::activeRootChanged, this,
-                                 [this]( SObject * ) { refreshSoloIndicator(); } );
+                                 [this]( SObject * ) {
+                                     refreshSoloIndicator();
+                                     refreshArmIndicator();
+                                 } );
 
-    soloIndicatorAttached_ = ( proj != nullptr );
+    // THE ARM SET MOVES THROUGH ONE CHOKEPOINT and SApplication outlives every
+    // project, so this is wired once too and needs no per-project re-wiring:
+    // `arm-track` is the only writer of the flag and it ends in
+    // liveLanesChanged(). See the header for why the signal says "may".
+    if( !armSetConn_ )
+        armSetConn_ = connect( &SApplication::app(),
+                               &SApplication::liveLanesMayHaveChanged,
+                               this, &SMainWindow::refreshArmIndicator );
+
+    statusIndicatorsAttached_ = ( proj != nullptr );
     refreshSoloIndicator();
+    refreshArmIndicator();
 }
 
 void SMainWindow::refreshSoloIndicator()
@@ -2723,6 +2758,22 @@ void SMainWindow::refreshSoloIndicator()
     if( masterLabel.isEmpty() ) masterLabel = tr( "Arrangement" );
     soloIndicator_->refresh( proj, activeRoot, masterLabel );
     if( actClearSolos_ ) actClearSolos_->setEnabled( soloIndicator_->inForce() );
+}
+
+void SMainWindow::refreshArmIndicator()
+{
+    if( !armIndicator_ ) return;
+    // Read the same three things from the same places as the solo badge: a
+    // second spelling of "which project, which root, what is the master
+    // called" is a second chance for the two badges to disagree about where a
+    // lane lives.
+    SProject *proj = SApplication::app().getCurrentProject();
+    SObject *activeRoot = viewTabs_ ? viewTabs_->activeRoot() : nullptr;
+    QString masterLabel = viewTabs_ ? viewTabs_->tabNames().value( 0 )
+                                    : QString();
+    if( masterLabel.isEmpty() ) masterLabel = tr( "Arrangement" );
+    armIndicator_->refresh( proj, activeRoot, masterLabel );
+    if( actDisarmAll_ ) actDisarmAll_->setEnabled( armIndicator_->inForce() );
 }
 
 /**
@@ -2767,14 +2818,50 @@ void SMainWindow::clearAllSolos()
     SApplication::app().submitAction( macro );
 }
 
+/**
+ * DISARM EVERY TRACK IN THE PROJECT, as ONE undo step.
+ *
+ * clearAllSolos()' shape exactly, one flag over, and for the same three
+ * reasons: one `arm-track armed="0"` per armed lane, each ROOTED AT THE ROOT
+ * THAT HOLDS THE LANE (`splacements::specOf()`), never at the active tab's --
+ * a macro rooted per tab would resolve "0" against whatever the user happens
+ * to be looking at, disarm a lane nobody asked about and leave the armed one
+ * armed; and SYSTEM LANES ARE SKIPPED HERE rather than left to the verb's own
+ * refusal, because SCompositeAction::apply rolls the WHOLE macro back on the
+ * first child that fails, so one such lane would turn "disarm everything" into
+ * "disarm nothing". `sarm::armedLanesInProject` walks childLinks() only and a
+ * system lane is not a member, so today none can appear -- this is the
+ * pre-flight that keeps that true rather than assumed.
+ */
+void SMainWindow::disarmAllTracks()
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    if( !proj ) return;
+
+    SCompositeAction *macro = new SCompositeAction();
+    for( SObject *lane : sarm::armedLanesInProject( proj ) ) {
+        if( !lane ) continue;
+        const QString spec = splacements::specOf( proj, lane );
+        if( spec.isEmpty() ) continue;          // left the project
+        const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+        if( q.idx.isEmpty() ) continue;         // the root itself carries none
+        if( strackpath::spathIsSystemStep( q.idx.last() ) ) continue;
+        SArmTrackAction *a = new SArmTrackAction( q.idx, false );
+        a->setPathRoot( q.root );
+        macro->append( a );
+    }
+    if( macro->count() == 0 ) { delete macro; return; }
+    SApplication::app().submitAction( macro );
+}
+
 QString SMainWindow::describeStatusBar()
 {
     // The FIRST read attaches, and only the first: see
-    // soloIndicatorAttached_. Everything after it reports what the signals
+    // statusIndicatorsAttached_. Everything after it reports what the signals
     // put there.
-    if( !soloIndicatorAttached_ ) {
+    if( !statusIndicatorsAttached_ ) {
         ensureArranger_();
-        attachSoloIndicator_();
+        attachStatusIndicators_();
     }
     const QString mode = modeLabel_ ? modeLabel_->text() : QString();
     QString d = QStringLiteral( "mode=%1" ).arg( mode );
@@ -2784,14 +2871,19 @@ QString SMainWindow::describeStatusBar()
     // spans the seam.
     d += QStringLiteral( "|clearSolosEnabled=%1" )
              .arg( actClearSolos_ && actClearSolos_->isEnabled() ? 1 : 0 );
+    // The record-arm badge's fields, APPENDED after all of the solo badge's
+    // for the same reason they were appended after the mode label's.
+    if( armIndicator_ ) d += QStringLiteral( "|" ) + armIndicator_->describe();
+    d += QStringLiteral( "|disarmAllEnabled=%1" )
+             .arg( actDisarmAll_ && actDisarmAll_->isEnabled() ? 1 : 0 );
     return d;
 }
 
 bool SMainWindow::clickSoloIndicator()
 {
-    if( !soloIndicatorAttached_ ) {
+    if( !statusIndicatorsAttached_ ) {
         ensureArranger_();
-        attachSoloIndicator_();
+        attachStatusIndicators_();
     }
     if( !actClearSolos_ ) return false;
     // THE SEAM DOES THE REFUSAL ITSELF. QAction::trigger() emits whatever the
@@ -2800,6 +2892,20 @@ bool SMainWindow::clickSoloIndicator()
     // when there is no solo" would hold over a broken one.
     if( !actClearSolos_->isEnabled() ) return false;
     actClearSolos_->trigger();
+    return true;
+}
+
+bool SMainWindow::clickArmIndicator()
+{
+    if( !statusIndicatorsAttached_ ) {
+        ensureArranger_();
+        attachStatusIndicators_();
+    }
+    if( !actDisarmAll_ ) return false;
+    // The seam does the refusal itself, for the reason clickSoloIndicator()
+    // gives: QAction::trigger() emits whatever the enabled state.
+    if( !actDisarmAll_->isEnabled() ) return false;
+    actDisarmAll_->trigger();
     return true;
 }
 
@@ -3663,7 +3769,7 @@ void SMainWindow::adoptCurrentProject()
     attachClipProperties();
     attachEventEditor();
     attachTransportReadout();
-    attachSoloIndicator_();
+    attachStatusIndicators_();
 
     // A script that itself did `load-project` already stamped this via
     // SLoadProjectAction::apply() -> SProject::setProjectFilePath(); a

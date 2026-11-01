@@ -614,8 +614,9 @@ public:
     QString describeTransportReadout();
     //   describeStatusBar     — the status bar's permanent widgets as they
     //                           are shown: the mode label, then the solo
-    //                           indicator's own describe() (QBX-257). Fields
-    //                           are APPENDED, never inserted.
+    //                           indicator's own describe() (QBX-257), then
+    //                           the record-arm indicator's. Fields are
+    //                           APPENDED, never inserted.
     //   clickSoloIndicator    — a REAL click on the solo indicator, through
     //                           the same QAction the menu item triggers. It
     //                           REFUSES when that action is disabled, because
@@ -623,8 +624,11 @@ public:
     //                           state and a seam that did not check could not
     //                           tell "the badge does nothing when there is no
     //                           solo" from a build that greys nothing.
+    //   clickArmIndicator     — the same, for the record-arm indicator and
+    //                           the Disarm-all command it carries.
     QString describeStatusBar();
     bool clickSoloIndicator();
+    bool clickArmIndicator();
     bool dragRange( offset_t from, offset_t to, int phase );
     bool grabEventEditor( const QString &path, int w, int h );
     bool dragNote( const QString &clipPath, qint64 tick, int key, int channel,
@@ -902,6 +906,9 @@ protected slots:
     // QBX-257: the status bar's solo indicator, and the command it carries.
     void refreshSoloIndicator();
     void clearAllSolos();
+    // ...and the record-arm indicator beside it, with the same shape.
+    void refreshArmIndicator();
+    void disarmAllTracks();
 
 private:
     // Where the project dialogs start on a machine that has never saved one.
@@ -916,12 +923,13 @@ private:
     void installMasterEditor_();
     // Build the status bar and its permanent widgets (mode indicator, …).
     void buildStatusBar();
-    // Point the solo indicator at the CURRENT project and the active tab's
-    // root, (re)wiring the three things that change what it says. Idempotent,
-    // and called from the describe seam as well: a scripted run never reaches
-    // the attach sites (the project is adopted by SApplication, not by
-    // openProjectFile), so that first call is where it starts following.
-    void attachSoloIndicator_();
+    // Point the STATUS-BAR INDICATORS (solo, record-arm) at the CURRENT
+    // project and the active tab's root, (re)wiring everything that changes
+    // what they say. Idempotent, and called from the describe seams as well:
+    // a scripted run never reaches the attach sites (the project is adopted
+    // by SApplication, not by openProjectFile), so that first call is where
+    // they start following.
+    void attachStatusIndicators_();
     void newProject();
     void closeProject();
     void buildPaletteToolbar();
@@ -1191,12 +1199,26 @@ private:
     QMetaObject::Connection soloSetConn_;     // a solo flag moved (any scope)
     QMetaObject::Connection soloScopeConn_;   // the scope changed
     QMetaObject::Connection soloTabsConn_;    // the active tab's root changed
+
+    // --- the record-arm indicator, the same widget one flag over -----------
+    //
+    // WHAT TELLS IT. Not a per-lane signal: an arm is set by `arm-track` and
+    // by nothing else (every button and every script goes through the verb),
+    // and the verb ends in SAppContext::liveLanesChanged(). That is the one
+    // chokepoint, so SApplication raises `liveLanesMayHaveChanged()` there and
+    // this badge recomputes -- a SUPERSET, since the same call carries an
+    // input or monitor change, which is why the name says "may". The walk is
+    // one pass over the lane trees and the badge repaints only when its text
+    // actually moves.
+    class SArmIndicator *armIndicator_ = nullptr;
+    QAction *actDisarmAll_ = nullptr;
+    QMetaObject::Connection armSetConn_;      // the live set may have moved
     // ATTACH ONCE, NEVER AGAIN -- describeTrackDetailDock's rule and its
     // reason, plus one of its own: if the describe seam re-read the model on
     // every call, a build whose three signals were never connected would
     // still describe the right badge, and the gate for "the indicator FOLLOWS
     // a solo" would be gating nothing.
-    bool soloIndicatorAttached_ = false;
+    bool statusIndicatorsAttached_ = false;
 
     // --- window-layout persistence (proposal 46 M1/M2) --------------------
     //

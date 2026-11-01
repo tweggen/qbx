@@ -503,6 +503,21 @@ signals:
     // scrolls the view.
     void locatorAdvanced( offset_t newPos, offset_t oldPos );
     void statusModeChanged( const QString &mode );
+    /**
+     * THE LIVE SET MAY HAVE MOVED, raised at the end of liveLanesChanged().
+     *
+     * That function is the one chokepoint every arm, input and monitor verb
+     * already calls (SAppContext::liveLanesChanged, see sliveinputactions.h),
+     * plus the metronome property and the options dialog -- so this is the
+     * only signal a reader can use to hear an ARM, and it is deliberately a
+     * SUPERSET of "the arm set changed": hence "may". A consumer recomputes
+     * and must assume nothing moved.
+     *
+     * It invalidates nothing and re-wires nothing -- SLiveMonitor::refresh()
+     * has already done that work by the time this is emitted. The only
+     * consumers are readers, the status bar's record-arm badge first.
+     */
+    void liveLanesMayHaveChanged();
     // Emitted from the MAIN thread once a background plugin scan has finished
     // (see pumpPluginScan). The scan thread must never emit this itself: a Qt
     // signal from a worker thread makes Qt adopt it, and the adopted thread's
