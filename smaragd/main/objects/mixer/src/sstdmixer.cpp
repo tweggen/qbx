@@ -362,9 +362,11 @@ void SStdMixer::reconnectTracksToMixer()
     // never sees. A lane under nulled= is not pulled at all; one under wired=
     // is summed. Remove with `git checkout --` (see the PR).
     if( !q258Nulled.isEmpty() || !q258Wired.isEmpty() )
-        TW_LOGW( "model", "[Q258] mixer root='%s' scope=%s anySolo=%d "
-                          "nulled=[%s] wired=[%s]",
+        TW_LOGW( "model", "[Q258] mixer=%p root='%s' nTracks=%d scope=%s "
+                          "anySolo=%d nulled=[%s] wired=[%s]",
+                 (void*) this,
                  getSName().toUtf8().constData(),
+                 nTracks,
                  ssolo::scopeOf( this ) == SProject::SoloScope::Global
                      ? "global" : "arrangement",
                  (int) solo,
