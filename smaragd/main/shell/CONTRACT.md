@@ -1012,7 +1012,35 @@ installs the two hooks that join them, and nothing else:
   slot has no processor yet, as on the load path). Gated by
   `assert-sampler-program installed="1"` in `qxa.sampler_q1_verbs` (after
   every kind of edit and across a 2 -> 1 channel rebuild) and
-  `qxa.sampler_q1_persist` (after a reload).
+  `qxa.sampler_q1_persist` (after a reload). Since Q2 the installer takes TWO
+  initializers: `future` (program + every current generation) becomes the
+  slot's instance initializer, `now` (only what changed) is applied to the
+  live instances.
+
+**An offline render settles the sampler first (Q2, QBX-263; proposal 56 B8,
+invariant 7).** `startRender()` calls `ssamplerwiring::settleBeforeRender()`
+after the live lanes are suspended and BEFORE `beginRun()`: for every
+NassauDigital instrument the barrier's own walk finds
+(`collectInstrumentTracks` under the master — the walk-not-registry rule of
+`objects/track` inv. 14), it waits SYNCHRONOUSLY on the main thread for each
+outstanding generation job and installs the results, then logs, per track
+that had any,
+
+    run barrier: waited <ms> ms for <n> sampler generation(s) on track <spec>
+
+(`qxa.sampler_q2_barrier` asserts it, and asserts it ABSENT from renders that
+had nothing to wait for). The wait cannot use the event loop: the `render`
+verb sleeps on the main thread (`srenderaction.cpp`), so anything needing a
+queued call would deadlock every scripted render. One bound covers the whole
+render — `SMARAGD_SAMPLER_SETTLE_MS`, default 30000, or the test override
+`set-sampler-render-gate settleBoundMs=` — and a job that does not finish
+inside it REFUSES the render with the reason (`startRender`'s `error`, logged
+`run barrier: REFUSED: …`, QBX-145's discipline): never a render of the older
+generation pretending to be current. Before `beginRun()`, so the barrier's
+invalidation covers what the settle installed. PLAYBACK does not settle: a
+playback run plays whatever generation is installed, and a later install
+stales the track as any edit does (DESIGN §6.1 asks byte identity of renders,
+not of playback).
 
 ## The media layer's two hooks (proposal 38 gate 3)
 

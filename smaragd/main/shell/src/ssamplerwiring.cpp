@@ -6,14 +6,21 @@
 #include "app/objects/sampler/ssamplerprogram.h"
 #include "app/objects/sampler/ssamplerslots.h"
 #include "app/objects/track/spluginchain.h"
+#include "app/objects/track/sinstrumenttracks.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strack.h"
+
+#include "tw/core/twlog.h"
 
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/sampler/twsamplerregistry.h"
 
 #include <QDebug>
 #include <QPointer>
+
+#include <algorithm>
+#include <chrono>
+#include <vector>
 
 namespace {
 
@@ -33,15 +40,16 @@ SSamplerProgram *programChild( const SPluginSlot &slot )
 void bind( SPluginSlot &slot, SSamplerProgram &prog )
 {
     QPointer<SPluginSlot> sp( &slot );
-    prog.setInstaller( [sp]( const SSamplerProgram::InstanceInitializer &init ) {
+    prog.setInstaller( [sp]( const SSamplerProgram::InstanceInitializer &future,
+                             const SSamplerProgram::InstanceInitializer &now ) {
         if( !sp ) return;
         // Future instances first, then the ones that exist: a rebuild between
         // the two calls would otherwise build from the previous initializer.
-        sp->setInstanceInitializer( init );
+        sp->setInstanceInitializer( future );
         // A slot with no processor yet (the load path, before the track
         // declares its width) has no instances: the initializer above is all
         // it needs, and nothing above it has rendered to be staled.
-        if( sp->getProcessor() ) sp->applyToInstances( init );
+        if( sp->getProcessor() ) sp->applyToInstances( now );
     } );
 }
 
@@ -94,6 +102,75 @@ void install()
         }
         bind( slot, *prog );
     } );
+}
+
+}  // namespace ssamplerwiring
+
+namespace ssamplerwiring {
+
+int settleBoundMs()
+{
+    int bound = 30000;
+    const QByteArray env = qgetenv( "SMARAGD_SAMPLER_SETTLE_MS" );
+    bool ok = false;
+    const int v = env.toInt( &ok );
+    if( ok && v >= 0 ) bound = v;
+    return bound;
+}
+
+namespace {
+int g_boundOverrideMs = -1;
+}
+
+void setSettleBoundOverrideMs( int ms )
+{
+    g_boundOverrideMs = ms;
+}
+
+bool settleBeforeRender( SProject *project, QString *why )
+{
+    if( !project ) return true;
+    // check_root_resolution: master -- the same walk as SApplication::beginRun: an offline render renders the master
+    SObject *root = project->masterRoot();
+    if( !root ) return true;
+
+    // THE SAME WALK AS THE BARRIER (objects/track inv. 14): the instrument
+    // tracks under the master, never a registry.
+    std::vector<STrack *> tracks;
+    sinstruments::collectInstrumentTracks( root, tracks );
+
+    const int bound = g_boundOverrideMs >= 0 ? g_boundOverrideMs : settleBoundMs();
+    using clock = std::chrono::steady_clock;
+    const clock::time_point t0 = clock::now();
+    for( STrack *tr : tracks ) {
+        SPluginSlot *slot = tr->instrumentSlot();
+        if( !slot || !hostsNassauDigital( *slot ) ) continue;
+        SSamplerProgram *prog = programChild( *slot );
+        if( !prog || prog->outstandingGenerations() == 0 ) continue;
+        // ONE bound for the whole render, not one per track.
+        const int left = std::max<qint64>(
+            0, bound - std::chrono::duration_cast<std::chrono::milliseconds>( clock::now() - t0 )
+                           .count() );
+        int     n  = 0;
+        qint64  ms = 0;
+        QString late;
+        const bool ok = prog->settle( left, &n, &ms, &late );
+        const QString spec = splacements::specOf( project, tr );
+        if( !ok ) {
+            const QString w = QStringLiteral( "NassauDigital on track %1: %2 (bound %3 ms, "
+                                              "SMARAGD_SAMPLER_SETTLE_MS)" )
+                                  .arg( spec, late ).arg( bound );
+            TW_LOGW( "app", "run barrier: REFUSED: %s", qPrintable( w ) );
+            if( why ) *why = w;
+            return false;
+        }
+        // GATES Q2.3 asserts this line; it is written only when a generation
+        // WAS outstanding, so a render that had nothing to wait for cannot
+        // produce it.
+        TW_LOGI( "app", "run barrier: waited %lld ms for %d sampler generation(s) on track %s",
+                 (long long)ms, n, qPrintable( spec ) );
+    }
+    return true;
 }
 
 }  // namespace ssamplerwiring

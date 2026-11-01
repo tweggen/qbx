@@ -27,9 +27,32 @@
 // registerNassauDigital(); a test that builds slots without an SApplication
 // calls it itself. Idempotent.
 
+class QString;
+class SProject;
+
 namespace ssamplerwiring {
 
 void install();
+
+// THE OFFLINE RENDER'S SETTLE (proposal 56 B8, §4.6; DESIGN §6.1 rule 3).
+// Called by SApplication::startRender() on the MAIN thread, before the run
+// barrier and before the render worker exists. For every NassauDigital
+// instrument the barrier's walk finds, it waits SYNCHRONOUSLY for each
+// outstanding generation job and installs the results — the render verb
+// sleeps on the main thread, so a wait that needed the event loop would
+// deadlock — and logs, per track that had any,
+//
+//     run barrier: waited <ms> ms for <n> sampler generation(s) on track <spec>
+//
+// One bound covers the whole render: SMARAGD_SAMPLER_SETTLE_MS (default
+// 30000), or the test override below. False with `why` when a job did not
+// finish inside it: the render must not start (invariant 7, QBX-145's
+// discipline). Playback does NOT call this: a playback run plays whatever
+// generation is installed.
+bool settleBeforeRender( SProject *project, QString *why );
+int  settleBoundMs();
+// TEST SEAM (set-sampler-render-gate settleBoundMs=): < 0 restores the default.
+void setSettleBoundOverrideMs( int ms );
 
 }  // namespace ssamplerwiring
 

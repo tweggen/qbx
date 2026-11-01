@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
+#include <vector>
 
 #include "app/model/sobject.h"
 #include "tw/sampler/twsamplerprogrammodel.h"
@@ -16,11 +18,13 @@ class QTextStream;
 class SObjectRenderer;
 class SProject;
 class SProjectLoader;
+class QTimer;
 class twComponent;
 
 namespace audio {
 class twPlugin;
 class twSamplerProgram;
+class twSamplerSample;
 }
 
 /**
@@ -65,15 +69,35 @@ class twSamplerProgram;
  * element would come back REORDERED, which the core's structural equality
  * (Extras in document order) calls a different program. As text, the core
  * sees exactly what it wrote (GATES Q1.2, proposal 56 §11 Q1).
+ *
+ * GENERATIONS (proposal 56 §4.6, Q2; DESIGN §6.1). A layer whose `src` is
+ * `file:<path>` gets its PCM from a GENERATION JOB: a worker std::thread
+ * (Qt-free, THREADING rule 1) decodes the file into an immutable
+ * twSamplerSample stamped with the layer's next generation number. The main
+ * thread POLLS for finished jobs (a QTimer, the pumpLocator pattern: workers
+ * store, the main thread reads) and INSTALLS the result: one installer call,
+ * so the slot's instance initializer carries every current generation and the
+ * instances that exist get the new buffer under the processor's mutex, with a
+ * param-epoch bump and the path above the slot staled (DESIGN §6.1 rule 2).
+ * WHILE AN OFFLINE RENDER RUNS a finished job is NOT installed: it waits for
+ * the next poll after the render (rule 3, proposal 56 invariant 6). settle()
+ * is the synchronous, bounded wait the run barrier makes before an offline
+ * render (B8, invariant 7): it blocks the main thread on the jobs themselves,
+ * never on the event loop, because the render verb sleeps on the main thread.
+ * Any other `src` (`test:…`, empty, a future `link:…`) loads nothing.
  */
 class SSamplerProgram : public SObject {
     Q_OBJECT
 
 public:
     using InstanceInitializer = std::function<void( audio::twPlugin & )>;
-    // What the shell binds: called with the initializer that installs the
-    // current snapshot, after every committed edit and once at bind time.
-    using Installer = std::function<void( const InstanceInitializer & )>;
+    // What the shell binds. `future` is the slot's next instance initializer:
+    // it installs the current program AND every current generation, so a
+    // rebuilt instance is born current (invariant 4). `now` is applied to the
+    // instances that exist (applyToInstances) and carries only what changed:
+    // the program after an edit, the new buffers after an install.
+    using Installer = std::function<void( const InstanceInitializer &future,
+                                          const InstanceInitializer &now )>;
 
     explicit SSamplerProgram( SProject *project );
     ~SSamplerProgram() override;
@@ -123,12 +147,56 @@ public:
     // instance's twSamplerHostStats::installedSerial must equal.
     std::uint64_t publishedSerial() const { return publishedSerial_; }
 
+    // --- generations (proposal 56 §4.6, Q2) ----------------------------------------
+    struct LayerState {
+        std::uint64_t installedGeneration = 0;  // 0 = no buffer installed
+        QString       installedSrc;             // the src that buffer came from
+        std::uint64_t pendingGeneration   = 0;  // 0 = no job outstanding
+        QString       pendingSrc;
+        bool          rendering() const { return pendingGeneration != 0; }
+        int           installs = 0;             // generations installed so far
+    };
+    LayerState layerState( std::uint32_t layerId ) const;
+    // Jobs started and not yet installed (finished ones a render kept back
+    // included).
+    int outstandingGenerations() const;
+
+    // THE BARRIER'S SETTLE (B8): wait, on the calling (main) thread, for every
+    // outstanding job, at most `boundMs` in all, and install what finished.
+    // True when nothing is outstanding afterwards; false with `why` when a job
+    // did not finish inside the bound (what finished is installed anyway).
+    // `waitedFor` = how many generations were outstanding, `waitedMs` = how
+    // long it took.
+    bool settle( int boundMs, int *waitedFor, qint64 *waitedMs, QString *why );
+
+    // TEST SEAM (set-sampler-render-gate): the NEXT job started for `layerId`
+    // holds before it decodes until release, or until `holdMs` ms have passed
+    // when holdMs >= 0. release() also frees a job that is holding now.
+    void holdNextJob( std::uint32_t layerId, int holdMs );
+    void releaseHeldJob( std::uint32_t layerId );
+
+    struct Job;    // Qt-free state shared with one worker (ssamplerprogram.cpp)
+    struct Gate;
+
 signals:
     void programChanged();
     void selectionChanged();
+    // A generation was installed into the instrument (or a layer's buffer was
+    // removed); `layerId` names it.
+    void generationInstalled( quint32 layerId, quint64 generation );
 
 private:
     void publish_();
+    void reconcileSamples_();
+    void startJob_( std::uint32_t layerId, const QString &src );
+    void cancelJob_( std::uint32_t layerId );
+    // Install every finished job (`force` ignores the render pin: settle()).
+    // Returns how many generations were installed.
+    int  installFinished_( bool force );
+    void installChanged_( const std::vector<std::uint32_t> &layers );
+    void pollJobs_();
+    void ensurePolling_();
+    InstanceInitializer futureInitializer_() const;
 
     audio::twSamplerProgramModel                  model_;
     QString                                       loadError_;
@@ -137,6 +205,20 @@ private:
     std::shared_ptr<const audio::twSamplerProgram> snapshot_;
     std::uint64_t                                 publishedSerial_ = 0;
     Installer                                     installer_;
+
+    struct Installed {
+        std::uint64_t                                 generation = 0;
+        QString                                       src;
+        std::shared_ptr<const audio::twSamplerSample> sample;
+    };
+    std::map<std::uint32_t, Installed>              installed_;
+    std::map<std::uint32_t, std::uint64_t>          lastGeneration_;  // never reset
+    std::map<std::uint32_t, int>                    installs_;
+    std::map<std::uint32_t, std::shared_ptr<Job>>   jobs_;            // outstanding
+    std::vector<std::shared_ptr<Job>>               retiredJobs_;     // cancelled, to join
+    std::map<std::uint32_t, std::shared_ptr<Gate>>  armedGates_;      // for the next job
+    std::map<std::uint32_t, std::shared_ptr<Gate>>  liveGates_;       // held by a job now
+    QTimer                                         *poll_ = nullptr;
 };
 
 #endif

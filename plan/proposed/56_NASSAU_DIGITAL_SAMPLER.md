@@ -516,7 +516,9 @@ synchronously, and logs
 
     run barrier: waited <ms> ms for <n> sampler generation(s) on track <path>
 
-which is the line GATES Q2.3 asserts. Then the existing
+which is the line GATES Q2.3 asserts. *(Built: `startRender()` calls
+`ssamplerwiring::settleBeforeRender()` just before `beginRun()`, which cannot
+refuse — §11 Q2 item 1.)* Then the existing
 `forgetContinuity()` + `invalidateRenderPathRange()` runs, in that order. The
 walk-not-registry rule of the barrier (`objects/track/CONTRACT.md` inv. 14)
 holds: the settle finds its slots through the same walk.
@@ -528,7 +530,8 @@ generation pretending to be current.
 **Pinned during a render.** While `SAppContext::isRenderingActive()`, an
 arriving generation is **queued**, not installed, and the queue is flushed on
 the main thread when the render completes. An install mid-render would stale
-pages under a running render and give it two generations.
+pages under a running render and give it two generations. *(Built, and not
+gated: no scripted render can meet an arrival — §11 Q2 item 7.)*
 
 **Playback start** runs the barrier without the settle: a playback run renders
 whatever generation is installed, and a later install invalidates as any edit
@@ -1181,3 +1184,99 @@ change between the two refs, so qbx's verbatim copy stands.
    is `twSamplerHost::setRoutedOutputs`'s layout (bit k = aux k + 1), which is
    the slot processor's `setRoutedOutBuses` mask (main = bit 0) shifted right
    by one.
+
+
+### Q2 (QBX-263, 2026-11-01)
+
+Built: per-layer generations in `SSamplerProgram` (jobs, install, poll,
+settle), the offline render's settle in the shell
+(`ssamplerwiring::settleBeforeRender`, called from `startRender`), three test
+verbs, two cases. Gated: Q2.1, Q2.2, Q2.3 and Q2.q3. Not gated: Q2.q1;
+not built: Q2.q2. Where the text above did not survive the build:
+
+1. **The settle is in `startRender()`, not in `beginRun()`** (§4.6 "The
+   barrier, offline": "`beginRun()` … first calls
+   `ssampler::settleBeforeRun( slot )` — only for an offline render").
+   `beginRun()` is shared by the render and the three play-start paths and
+   returns nothing, while the settle must REFUSE a render; so
+   `startRender()` calls `ssamplerwiring::settleBeforeRender( project, &why )`
+   right before `beginRun()`, which keeps §4.6's order (settle, then
+   `forgetContinuity()` + `invalidateRenderPathRange()`) and its walk (the
+   barrier's own `collectInstrumentTracks` under the master). The log line is
+   §4.6's, with `<path>` = `splacements::specOf()` ("0", "Drums:0"), and it is
+   written only for a track that HAD an outstanding generation — so a case can
+   assert it absent from a render that waited for nothing. ONE bound covers
+   the whole render, not one per job or per track.
+2. **A file layer's job is a `std::thread` per job, and the main thread
+   polls** (§4.6 "computed on a worker (never Qt), posted to the main
+   thread"). A worker may not post (THREADING rule 1: no queued call from a
+   raw thread), so it stores its result, sets an atomic and notifies a
+   condition variable; a 10 ms `QTimer` on the program (alive only while a
+   job exists) installs finished ones, and the settle waits on the condition
+   variable — the only wait that works while the `render` verb sleeps on the
+   main thread. Not the revalidator's analysis lane: a render's
+   `pauseBackground()` pauses that lane, and a settle queued behind unrelated
+   analysis would wait for it.
+3. **The installer takes two initializers** (§4.3's "an install is then:
+   `applyToInstances(install)`"). `future` (program + every current
+   generation) becomes the slot's instance initializer; `now` carries only
+   what changed — the program after an edit (Q1's behaviour, unchanged), or
+   `setSample` for each changed layer after a generation. All finished jobs
+   go in ONE install (one epoch bump).
+4. **`collectRetired()` runs inside every generation install**, under the
+   processor's mutex (§4.2 "the app calls it from the main thread after every
+   install and from a slow timer"). There is no slow timer: a buffer the
+   install just replaced is still parked and is freed by the NEXT install,
+   so at most one retired buffer per swap waits. A slow timer would have to
+   go through `applyToInstances`, which bumps the param epoch — re-rendering
+   the track to free memory.
+5. **The install's stale is redundant for offline renders, so it is gated
+   on the epoch** (Q2.1). The run barrier invalidates every instrument
+   track from the render's start, so a render after an install that staled
+   nothing still hears the new sample (measured: the sabotage that installs
+   through the bare instances, skipping `applyToInstances`, passes every
+   render assertion). The stale matters for PLAYBACK, which a case cannot
+   pin. `qxa.sampler_q2_generations` therefore asserts it directly: the
+   job is held across the edit (whose own program publish stales too), the
+   track's content epoch is captured, and it must have advanced once the
+   generation is installed (`assert-sampler-layer
+   trackEpochAdvancedSince=`). That sabotage fails there.
+6. **Q2.1 and Q2.2 are asserted as byte identity with single-generation
+   goldens.** A's golden is `sampler_q0_note.wav` itself — the model's file
+   layer renders Q0's `sampler-test-install` byte for byte (measured) — and
+   B's is `goldens/sampler_q2_b.wav`, the first render of a session that
+   never had another generation. Every render of either sample after a swap,
+   an undo, a redo or a 2 → 1 → 2 rebuild equals its golden; each render
+   spans 17 pages with the one-shot sounding from the first.
+7. **Rule 3's pin is built and NOT GATED** (Q2.q1). The poll installs only
+   when `SAppContext::isRenderingActive()` is false (a static
+   `SAppContext::hasInstance()` was added so a unit test without an
+   application is not tripped by it). No scripted case can make a job finish
+   DURING a render: the settle leaves nothing outstanding when a render
+   starts, and the `render` verb sleeps on the main thread, so no action and
+   no poll runs until it ends. Removing the check passes every gate
+   (measured). Only a GUI render, whose event loop keeps running, can reach it.
+8. **Test verbs, as built** (§4.5). `set-sampler-render-gate` takes
+   `layer`, `ready`, `holdMs` (< 0: until released) and `settleBoundMs`
+   (the test override of `SMARAGD_SAMPLER_SETTLE_MS`, which Q2.q3 needs).
+   `assert-sampler-layer` reads `generation` (installed), `rendering`,
+   `pending`, `installs` and `src` — the Q3.2 `renders` counter arrives with
+   the bounce — plus `captureTrackEpoch` / `trackEpochAdvancedSince` (item 5).
+   **`wait-sampler-generations`** is new: the settle without a render, so a
+   case can install a swap before rendering and keep the barrier's line out
+   of renders that should not wait.
+9. **Assumptions awaiting the author** (each easily changed):
+   (a) a layer's `src` is resolved, not re-encoded: `file:<path>` resolves
+   as the MIDI-file verbs resolve an input (absolute; next to the action
+   script; next to the project file through `SFilePathRef`; the cwd), and
+   the stored text is what the verb was given — relocation and "collect
+   files" for sampler layers are not Q2;
+   (b) a generation number is per layer and never goes back, so an UNDO
+   that writes the old `src` back is a NEW generation (DESIGN §6.1 rule 1:
+   "grows with each new buffer"), and a job superseded before it finished
+   leaves its number unused;
+   (c) a decode that FAILS (missing file, > 2 channels) is not outstanding:
+   the layer keeps its previous generation, announced, and the render runs —
+   the settle refuses only a job that is still running at the bound;
+   (d) a `src` that is not `file:` (`test:…`, empty) REMOVES the layer's
+   buffer, installed as a change like any generation.
