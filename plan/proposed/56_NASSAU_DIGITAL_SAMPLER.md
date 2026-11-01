@@ -1162,7 +1162,10 @@ built, and where the text above did not survive the build:
    on the main thread.
 10. **Not done in Q1, recorded**: `remove-plugin` + undo loses the program (the
     inverse rebuilds a NEW slot from descriptor and blob; a model child is in
-    neither). `sampler-test-install` (Q0's test verb) bypasses the model; the
+    neither). *Correction (QBX-254, 2026-11-01): fixed generically in
+    objects/track — the inverse carries the slot's model children by object,
+    pinned, and re-adopts them into the new slot before its instances exist;
+    gated by `qxa.sampler_remove_plugin_undo`.* `sampler-test-install` (Q0's test verb) bypasses the model; the
     next model edit on the same slot replaces its initializer.
 
 

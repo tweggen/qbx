@@ -10,6 +10,7 @@
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
 #include <QByteArray>
+#include <QList>
 #include <QPointer>
 #include <QDomElement>
 #include <QString>
@@ -100,12 +101,6 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     QPointer<SObject> scSource( slot->sidechainSource() );
     const bool scPre = slot->sidechainPreFader();
 
-    // Remove the slot (SLink will be deleted, which deletes the SPluginSlot)
-    SLink *link = chain->childAt(slotIndex_);
-    if (link) {
-        delete link;
-    }
-
     // Create inverse action
     audio::twPluginDescriptor desc_inv;
     desc_inv.format = format_.toStdString();
@@ -118,6 +113,28 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     SInsertPluginAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_,
                                                            desc_inv, state_, slotId_);
     if (scSet) inverse->setSidechain(scSource.data(), scPre);
+
+    // QBX-254: the slot's MODEL CHILDREN (NassauDigital's program) are in
+    // neither the descriptor nor the state blob, so the inverse carries the
+    // objects themselves, PINNED (setModelChildren addRef()s them) -- which is
+    // why the inverse is built before anything is unlinked. The children are
+    // then detached HERE rather than with the slot, which is only
+    // deleteLater()'d: until the event loop ran, a removed slot would still
+    // hold them and an undo would link them under two slots at once.
+    QList<SLink *>   childLinks;     // a copy: deleting a link edits the order
+    QList<SObject *> modelChildren;
+    for (SLink *lk : slot->childLinks()) {
+        childLinks.append(lk);
+        modelChildren.append(&lk->getSObject());
+    }
+    inverse->setModelChildren(modelChildren);
+    qDeleteAll(childLinks);
+
+    // Remove the slot (SLink will be deleted, which deletes the SPluginSlot)
+    SLink *link = chain->childAt(slotIndex_);
+    if (link) {
+        delete link;
+    }
 
     return {true, inverse};
 }

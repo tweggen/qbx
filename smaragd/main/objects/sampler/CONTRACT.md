@@ -235,6 +235,19 @@ absolute (there is nothing to be relative to).
 - `qxa.sampler_q2_barrier` — Q2.3 (a held job; the render waits, logs the
   line once, and equals the render made once the layer was ready), Q2.q3
   (a job held past a 300 ms bound refuses the render with the reason).
+- `qxa.sampler_remove_plugin_undo` (QBX-254) — `remove-plugin` + undo, and
+  remove + undo + redo + undo, bring the slot back with THE SAME program
+  object: equal to the program before the removal, `installed="1"`, the layer
+  still on generation 1 with one install (the same buffer, not decoded
+  again), and a render byte-identical to the one before the removal. The
+  mechanism is generic and lives in objects/track (its CONTRACT, model
+  children): the inverse carries the slot's children pinned and re-adopts
+  them, so the shell's child-adopted hook binds the program to the new slot
+  before its instances are built. Sabotages that bite: no re-adopt; no pin
+  (with `drain-pending-deletes` after each removal); a pin the first undo
+  releases (bites the redo leg only); adopting after the link is parented
+  (bites the render identity only: the instances are born without the
+  sample buffers).
 - Sabotages that bite (QBX-263): an install that does not reach the live
   instances; one that bypasses `applyToInstances` (no stale); a barrier that
   does not settle; a settle that does not install; a bound that does not
@@ -249,9 +262,6 @@ absolute (there is nothing to be relative to).
   part of QBX-263.
 - An install during PLAYBACK stales the track (rule 14) but no case plays.
 
-- `remove-plugin` + undo LOSES the program: the inverse `insert-plugin`
-  rebuilds the slot from its descriptor and state blob, and the program is a
-  model child, not part of the blob. Not a Q1 AC; recorded for a follow-up.
 - `sampler-test-install` (testkit, Q0) bypasses the model: it sets its own
   instance initializer, and the next model edit on the same slot replaces it.
   Do not mix the two in one case.

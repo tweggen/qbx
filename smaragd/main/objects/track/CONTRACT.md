@@ -695,9 +695,24 @@ enforced by `check_layering.py`: `tw/sampler` is not in this slice's
    **`SPluginSlot` is a CONTAINER element kind** since then: a child the file
    lost, or a child element an older build does not know, costs that child's
    link and never the slot and its state chunk (proposal 37 D8a), gated by
-   `qxa.sampler_q1_newer_program`'s lost-program section. (`remove-plugin` +
-   undo rebuilds a NEW slot from descriptor and blob, so a model child does
-   not survive it yet; recorded in `objects/sampler/CONTRACT.md`.)
+   `qxa.sampler_q1_newer_program`'s lost-program section.
+   **`remove-plugin` + undo KEEPS the model children** (QBX-254). The undo
+   rebuilds a NEW slot from descriptor and blob, and a model child is in
+   neither, so `remove-plugin` hands its inverse the children THEMSELVES:
+   `SInsertPluginAction::setModelChildren()` pins each (`addRef`, released in
+   the action's destructor), the forward action then deletes the slot's child
+   links itself (the slot is only `deleteLater()`'d, and a removed slot still
+   holding them would put a child under two slots after an undo), and the
+   inverse re-adopts them in order through `adoptChild()` BEFORE its link is
+   parented, so the hook binds them before the instances exist. The pin lives
+   on the INVERSE because qbx's history keeps one inverse for every undo and
+   redoes by re-running the forward action (whose own fresh inverse is
+   discarded): the same objects must outlive every redo's removal. Live
+   state, not XML: a serialized inverse carries no children (like the slot
+   object itself). Generic: nothing here names the child's type. Gated by
+   `qxa.sampler_remove_plugin_undo` (`objects/sampler/CONTRACT.md`). NOT
+   GATED: the explicit detach of the child links (removing it passes the
+   case; it is defensive against the deferred delete).
 
 ## The PUPPET POSE (proposal 40 M3e AC 4)
 

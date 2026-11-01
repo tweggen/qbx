@@ -2,6 +2,7 @@
 #define SINSERTPLUGINACTION_H
 
 #include "app/actions/saction.h"
+#include <QList>
 #include <QPointer>
 #include <QtGlobal>
 #include <vector>
@@ -33,11 +34,26 @@ public:
         const QString &stateBase64 = QString(),
         quint64 slotId = 0
     );
+    ~SInsertPluginAction() override;
 
     QString name() const override { return QStringLiteral("insert-plugin"); }
     SApplyResult apply(SProject *project) override;
     void writeXml(QDomElement &elem) const override;
     bool readXml(const QDomElement &elem, int version) override;
+
+    // THE SLOT'S MODEL CHILDREN (QBX-254; objects/track inv. on model
+    // children): set only on the inverse of a remove-plugin whose slot held
+    // SObject children through its SLink loop -- NassauDigital's program is
+    // one. The undo re-creates a NEW slot object, and a model child is in
+    // neither the descriptor nor the state blob, so without this the restored
+    // slot came back without it. The children are carried by OBJECT and PINNED
+    // (addRef) for this action's lifetime: qbx's history keeps ONE inverse for
+    // every undo and redoes by re-running the forward remove-plugin, so the
+    // same objects must survive every redo's removal. Re-adopted, in order,
+    // BEFORE the link is parented, so the child-adopted hook binds them before
+    // the instances exist. Live state, NOT serialized -- like the slot id's
+    // object identity, it has no XML spelling.
+    void setModelChildren(const QList<SObject *> &children);
 
     // THE SIDECHAIN of the slot this re-creates (proposal 55 M4, T5): set only
     // on the inverse of a remove-plugin whose slot was keyed, so the undo
@@ -76,6 +92,9 @@ private:
     // slot back under the SAME id, or every return of it silently unroutes
     // (T5). Written only when non-zero.
     quint64 slotId_ = 0;
+    // See setModelChildren(). Each non-null entry holds one reference.
+    QList<QPointer<SObject>> modelChildren_;
+
     // See setSidechain().
     bool              scSet_ = false;
     QPointer<SObject> scSource_;

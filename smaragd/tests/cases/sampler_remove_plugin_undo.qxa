@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_remove_plugin_undo">
+
+  <!-- QBX-254: remove-plugin + undo KEEPS a NassauDigital slot's program.
+
+       The inverse of remove-plugin inserts a NEW SPluginSlot from the
+       descriptor and the state blob. The slot's SSamplerProgram is a MODEL
+       CHILD of the slot (proposal 56 B4), in neither of the two, so before
+       the fix the restored slot came back with no program object at all and
+       the instrument played the empty program: silence.
+
+       What the case asserts, after remove then undo, and again after
+       remove, undo, redo, undo:
+         - the program equals the one before the removal (the core's
+           structural equality, nextId included: nothing was edited);
+         - every live instance of the RESTORED slot holds the published
+           program (installed="1");
+         - the layer is still on generation 1 with one install: the restored
+           slot plays the SAME decoded buffer, it was not decoded again;
+         - the render equals the render made before the removal BYTE FOR
+           BYTE, and that render is not silent (so the identity is not
+           between two silences);
+         - all of it with the deferred deletes delivered after each removal,
+           so the program survives because the inverse PINS it, not because
+           nothing got round to freeing it.
+
+       The fixture is sampler_q2_generations' A: one zone over every key,
+       root 60, one-shot, one FILE layer (test_stereo.wav), a note at tick
+       40 = frame 1000. A second zone above the note's key, edited by
+       set-zone, makes the program more than one add-zone without changing
+       what the note plays. Ids: zone 1, its layer 2; zone 3, its layer 4. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="99" rootKey="60" mode="oneshot">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="100" keyHi="127" rootKey="110">
+      <layer src="test:high"/>
+    </add-zone>
+    <set-zone trackPath="0" slotIndex="0" zone="3" rootKey="112"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="5"
+                            scope="zone" id="3" attr="rootKey" value="112" installed="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" src="file:../test_stereo.wav"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeRemove"/>
+
+    <render filename="srpu_before.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="srpu_before.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+
+    <!-- ============================================ remove, then undo -->
+    <remove-plugin trackPath="0" slotIndex="0"/>
+    <!-- A scripted run never delivers deferred deletes on its own, so an
+         object nothing holds would linger to the undo anyway. Delivering them
+         here is what makes the inverse's PIN on the program a gated claim:
+         unpinned, the program is freed now, as the app's event loop would. -->
+    <drain-pending-deletes/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+    <render filename="srpu_removed.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="srpu_removed.wav" startFrame="0" frameCount="72000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1"
+                            equalsCaptured="beforeRemove" installed="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" src="file:../test_stereo.wav"/>
+    <render filename="srpu_undo1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="srpu_undo1.wav" expected="srpu_before.wav"/>
+
+    <!-- ================================ redo the removal, then undo again
+         qbx's history redoes by re-running the FORWARD remove-plugin and
+         undoes with the inverse the FIRST apply made, so the program must
+         survive the redo's removal of the slot the first undo built. -->
+    <redo/>
+    <drain-pending-deletes/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1"
+                            equalsCaptured="beforeRemove" installed="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" src="file:../test_stereo.wav"/>
+    <render filename="srpu_undo2.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="srpu_undo2.wav" expected="srpu_before.wav"/>
+
+    <!-- The restored program is LIVE, not a copy frozen at removal: an edit
+         after the undo reaches the instance and its undo comes back. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" rootKey="48"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" differsFromCaptured="beforeRemove"
+                            installed="1"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeRemove"
+                            installed="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
