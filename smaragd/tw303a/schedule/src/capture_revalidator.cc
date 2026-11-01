@@ -122,6 +122,8 @@ CaptureRevalidator::GraphStats CaptureRevalidator::graphStats() const {
     s.nodeRetries   = statNodeRetries_.load();
     s.missPages     = statMissPages_.load();
     s.selfStale     = statSelfStale_.load();
+    s.depthDrops    = statDepthDrops_.load();
+    s.maxDepth      = statMaxDepth_.load();
     return s;
 }
 
@@ -463,7 +465,20 @@ CaptureRevalidator::expandNode_(std::shared_ptr<twComponent> comp,
     // its last insert (fix/stateful-insert-retry) every insert on a path is a
     // planner level of its own, so a nested folder with full chains on every
     // level is deeper than it used to be. A real graph is far below either.
-    if (!comp || depth > 64) return nullptr;
+    if (!comp) return nullptr;
+    if (depth > kMaxExpandDepth) {
+        // Counted, not only refused (proposal 55 T7): a dropped dep is a page
+        // nothing planned, and before this nothing could see one.
+        statDepthDrops_.fetch_add(1, std::memory_order_relaxed);
+        return nullptr;
+    }
+    {
+        uint64_t seen = statMaxDepth_.load(std::memory_order_relaxed);
+        while ((uint64_t)depth > seen &&
+               !statMaxDepth_.compare_exchange_weak(seen, (uint64_t)depth,
+                                                    std::memory_order_relaxed)) {
+        }
+    }
 
     const NodeKey key{comp.get(), pageStart};
     {

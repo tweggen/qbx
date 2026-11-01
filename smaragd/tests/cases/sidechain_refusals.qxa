@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M4, AC4.5 (the verb half) and §3.2's refusals: EVERY KEY THE
+  VERB MUST NOT MAKE IS REFUSED, WITH A MESSAGE ONLY THAT REFUSAL PRODUCES,
+  AND NOTHING CHANGES.
+
+  The tree:
+    0    Bass        tw.test.clap.duck in slot 0
+    1    Kick        tw.test.clap.split in slot 0 (no sidechain input), a
+                     duck in slot 1; its aux routed to ...
+    2    Kick Aux 1  ... the return track R
+    3    Drums       a folder with a duck in slot 0, holding
+    3,0  Snare       a duck in slot 0
+    4    Mono        tw.test.clap.monosplit, 1-in/1-out on a stereo track:
+                     DualMono
+    $send:Verb       a send lane, fed from Bass by a send
+
+  The four cycle shapes of AC4.5, each refused at the verb naming both ends:
+  B keyed from itself (a self edge), from its own folder (containment only),
+  R's source keyed from R (aux then key), a send loop closed by a key (send
+  then key). Each refusal's log assertion matches text no other refusal (and
+  no return-track refusal) produces.
+
+  AND THE NOT-CYCLES ARE ACCEPTED, or "refuse everything" would pass: a
+  nested track keyed from a top-level sibling, a track keyed from a return,
+  a send lane's insert and the master lane's insert keyed from a track.
+-->
+<SActionScript version="1" name="sidechain_refusals">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Bass"/>
+    <insert-plugin trackPath="0" slotIndex="0" format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Kick"/>
+    <insert-plugin trackPath="1" slotIndex="0" format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <insert-plugin trackPath="1" slotIndex="1" format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <assert-return-track trackPath="2" source="1" slot="0" bus="1" routed="1"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Drums"/>
+    <insert-plugin trackPath="3" slotIndex="0" format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Snare"/>
+    <insert-plugin trackPath="4" slotIndex="0" format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <reparent-track source="4" destParent="3" destIndex="-1"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Mono"/>
+    <insert-plugin trackPath="4" slotIndex="0" format="clap" uid="tw.test.clap.monosplit"
+                   name="Smaragd Test Mono Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="1" nOut="1"/>
+
+    <add-send-lane sendName="Verb"/>
+    <add-send track="0" dest="Verb" level="0" pre="false" enabled="true"/>
+    <assert-track-count count="5"/>
+
+    <!-- ===================== THE SLOT (D9) ============================== -->
+    <set-plugin-sidechain trackPath="0" slot="5" source="1" expectReject="true"/>
+    <assert-log contains="cannot key Bass slot 5 -- there is no plugin in slot 5"/>
+
+    <set-plugin-sidechain trackPath="1" slot="0" source="0" expectReject="true"/>
+    <assert-log contains="the plugin in slot 0 has no sidechain input bus"/>
+
+    <set-plugin-sidechain trackPath="4" slot="0" source="0" expectReject="true"/>
+    <assert-log contains="slot 0 runs DualMono (one plugin instance per channel), so it has no single sidechain input"/>
+
+    <!-- ===================== THE SOURCE ================================= -->
+    <set-plugin-sidechain trackPath="0" slot="0" source="$master" expectReject="true"/>
+    <assert-log contains="the MASTER lane cannot key a sidechain"/>
+
+    <set-plugin-sidechain trackPath="0" slot="0" source="$master,0" expectReject="true"/>
+    <assert-log contains="the conductor lane carries no audio to key Bass from"/>
+
+    <set-plugin-sidechain trackPath="0" slot="0" source="9" expectReject="true"/>
+    <assert-log contains="no lane at 9 -- the key source is addressed like any other lane"/>
+
+    <set-plugin-sidechain trackPath="0" slot="0" source="1" tap="mid" expectReject="true"/>
+    <assert-log contains="tap must be 'pre' or 'post', not mid"/>
+
+    <!-- ===================== CYCLES (D7, AC4.5) ========================= -->
+    <!-- B keyed from itself: a self edge. -->
+    <set-plugin-sidechain trackPath="0" slot="0" source="0" expectReject="true"/>
+    <assert-log contains="Bass cannot key its own slot (a self edge)"/>
+
+    <!-- B keyed from its own folder: containment only. -->
+    <set-plugin-sidechain trackPath="3,0" slot="0" source="3" expectReject="true"/>
+    <assert-log contains="keying Snare from Drums would close a routing CYCLE -- Snare already reaches Drums"/>
+
+    <!-- R's source keyed from R: aux then key. -->
+    <set-plugin-sidechain trackPath="1" slot="1" source="2" expectReject="true"/>
+    <assert-log contains="keying Kick from Kick Aux 1 would close a routing CYCLE -- Kick already reaches Kick Aux 1"/>
+
+    <!-- A send loop closed by a key: Bass -> Verb (send), Verb -> Bass (key). -->
+    <set-plugin-sidechain trackPath="0" slot="0" source="$send:Verb" expectReject="true"/>
+    <assert-log contains="keying Bass from Verb would close a routing CYCLE -- Bass already reaches Verb"/>
+
+    <!-- ===================== CLEAR ====================================== -->
+    <clear-plugin-sidechain trackPath="0" slot="0" expectReject="true"/>
+    <assert-log contains="slot 0 of Bass is not keyed"/>
+
+    <!-- Nothing above keyed anything. -->
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="0" wired="0"/>
+    <assert-plugin-sidechain trackPath="1" slot="1" keyed="0" wired="0"/>
+    <assert-plugin-sidechain trackPath="3,0" slot="0" keyed="0" wired="0"/>
+
+    <!-- ===================== THE NOT-CYCLES ARE ACCEPTED ================ -->
+    <!-- A nested track from a top-level sibling. -->
+    <set-plugin-sidechain trackPath="3,0" slot="0" source="0"/>
+    <assert-plugin-sidechain trackPath="3,0" slot="0" keyed="1" source="0" wired="1"/>
+    <!-- A track from a return. -->
+    <set-plugin-sidechain trackPath="0" slot="0" source="2" tap="post"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="1" source="2" tap="post" wired="1"/>
+    <!-- A send lane's insert, keyed from a track. -->
+    <insert-plugin trackPath="$send:Verb" slotIndex="0" format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="$send:Verb" slot="0" source="1"/>
+    <assert-plugin-sidechain trackPath="$send:Verb" slot="0" keyed="1" source="1" wired="1"/>
+    <!-- The master lane's insert, keyed from a track. -->
+    <insert-plugin trackPath="$master" slotIndex="0" format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="$master" slot="0" source="0"/>
+    <assert-plugin-sidechain trackPath="$master" slot="0" keyed="1" source="0" wired="1"/>
+    <assert-log level="warn" contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
+  </actions>
+</SActionScript>

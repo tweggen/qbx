@@ -241,6 +241,51 @@ public:
     void    setAuxReferenced( bool r ) { auxReferenced_ = r; }
     bool    auxReferenced() const { return auxReferenced_; }
 
+    // --- SIDECHAINS (proposal 55 D5, D6, D8; built in M4) ------------------
+    //
+    // A slot of this track may be KEYED from a lane (SPluginSlot::sidechain):
+    // port 1 of its insert reads that lane's pre (chain) or post (fader)
+    // output. These are the app-typed seams objects/mixer needs, which may not
+    // name tw/plugins: the verbs edit the model through
+    // setPluginSlotSidechain(), the mixer's pass wires it through
+    // wireSlotKey(), and the testkit reads the live wiring back.
+    bool     pluginSlotHasSidechain( int slotIndex ) const;
+    SObject *pluginSlotSidechainSource( int slotIndex ) const;
+    bool     pluginSlotSidechainPre( int slotIndex ) const;
+    /// True when any slot of this track carries a sidechain (set, resolved or
+    /// not) -- the pass's T8 guard and the slot-change handlers ask it.
+    bool     anyPluginSlotKeyed() const;
+    /// Key (`keyed`) or clear the sidechain of slot `slotIndex`, then ask the
+    /// root to re-run its routing pass. A keyed slot with a NULL source is a
+    /// key that failed to resolve, kept so it fails closed (an inverse may
+    /// restore one). No refusal here: the verbs refuse (D7, D9), and the pass
+    /// fails closed on whatever a file carries. False when there is no such
+    /// slot.
+    bool     setPluginSlotSidechain( int slotIndex, SObject *source, bool preFader,
+                                     bool keyed = true );
+    bool     clearPluginSlotSidechain( int slotIndex );
+    /// May slot `slotIndex` be keyed at all (D9)? False with the reason in
+    /// `why`: a missing slot, a plugin that is not loaded, a DualMono slot, a
+    /// plugin with no sidechain input bus.
+    bool     sidechainRoutable( int slotIndex, QString *why ) const;
+
+    /// THE KEY WIRING, called by SStdMixer's pass and from nowhere else (D5,
+    /// 47 D4). For a keyed slot, `source` is the key lane to wire (its
+    /// sendTapComponent at the slot's tap point) or null to FAIL CLOSED with
+    /// `reason` announced once per state; a slot with no sidechain is unwired
+    /// silently. Idempotent: a pass that changes nothing touches no plug.
+    /// `changed` is set when the live wiring moved -- the caller then
+    /// invalidates this track's render path, because setKeySource stales the
+    /// insert only and every page above it would serve the old key. Returns
+    /// whether the slot's key is wired.
+    bool     wireSlotKey( int slotIndex, STrack *source, const QString &reason,
+                          bool *changed = nullptr );
+    /// LIVE: port 1 of the slot's insert is wired AND reads the tap component
+    /// its sidechain names (47's assert-master-inputs lesson).
+    bool     pluginSlotKeyWired( int slotIndex ) const;
+    /// "keyChannels=C|busChannels=S|mapping=<name>", or "".
+    QString  describePluginSlotKey( int slotIndex ) const;
+
     // --- events (proposal 37 3.2 / 3.2.1) ---------------------------------
     //
     // A track holds no KIND (D3): it takes whatever clips it is given, and it

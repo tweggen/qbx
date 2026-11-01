@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M4, AC4.1 = NassauDigital GATES.md X2.2: A PLUGIN KEYED FROM A
+  RETURN TRACK DUCKS BY EXACTLY ITS GAIN INSIDE THE KEY, NOT AT ALL OUTSIDE
+  IT, AND NOT AT ALL WITHOUT THE KEY.
+
+  "Bass" (B) plays test_stereo.wav (3 s; channel 0 at RMS 0.5, channel 1 at
+  0.25 - the channels DIFFER, so a key or a mapping that crossed them could
+  not pass for the right one) through tw.test.clap.duck, a keyed hard gate:
+  the key is on from the first frame whose |key| exceeds Threshold (0.01)
+  until 2048 frames after the last such frame, and while it is on
+  out = in * 0.25, otherwise out = in. No attack, no release: the gain is a
+  closed form.
+
+  "Kick" (A) plays test_clipsaw.wav (2 s, a sawtooth at RMS 0.5485) from
+  frame 24000, through tw.test.clap.split at MainLevel 0, whose aux bus 1 is
+  routed to the return track "Kick Aux 1" (R). B's duck is keyed from R at the
+  pre tap. The key is therefore on over [24000, 120000 + 2048).
+
+  THE FILE HOLDS B ALONE: A's main is exactly 0.0 (MainLevel 0) and R is
+  MUTED - which must not stop the key (D6: a key ignores mute; a user track's
+  mute is structural, so R's chain still carries the aux).
+
+  Windows (all more than 2048 frames from a key edge):
+    inside   [28000, 116000)     0.25 x dry, +-1 %: ch0 0.125, ch1 0.0625
+    before   [0, 23000)          dry, +-1 %:        ch0 0.5,   ch1 0.25
+    after    [124000, 144000)    dry, +-1 %
+  Two-sided bands throughout: silence from a dead upstream satisfies
+  "quieter than", never "0.25 x dry".
+
+  AND NOT WITHOUT IT: the same project with clear-plugin-sidechain measures
+  dry inside the key window; undo keys it again; then, with the key clip
+  removed, dry again.
+
+  Watched failing: with the pass's key half unwired (rewireKeys returning at
+  once), the inside window measures dry; with the pass ignoring the slot's
+  tap point and reading R's TRACK MIX instead of its chain, the key is silent
+  (a return's track mix is disconnected).
+-->
+<SActionScript version="1" name="sidechain_duck_from_return">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- B: the keyed track. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Bass"/>
+    <add-sample trackPath="0" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- A: the key's source, its main silenced, its aux routed to R. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Kick"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="24000"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="0" value="0"/>
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <assert-return-track trackPath="2" source="1" slot="0" bus="1" routed="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+
+    <!-- THE KEY: B's duck from R, pre (the default). -->
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="0" wired="0"/>
+    <set-plugin-sidechain trackPath="0" slot="0" source="2"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="1" source="2" tap="pre"
+                             wired="1" mapping="mapping=copy"/>
+
+    <render filename="scd_keyed.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- inside the key: 0.25 x dry, +-1 % -->
+    <assert-audio-energy filename="scd_keyed.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+    <assert-audio-energy filename="scd_keyed.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.061875" maxRms="0.063125"/>
+    <!-- before and after it: dry, +-1 % -->
+    <assert-audio-energy filename="scd_keyed.wav" startFrame="0" frameCount="23000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="scd_keyed.wav" startFrame="0" frameCount="23000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+    <assert-audio-energy filename="scd_keyed.wav" startFrame="124000" frameCount="20000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="scd_keyed.wav" startFrame="124000" frameCount="20000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+
+    <!-- ============ AND NOT WITHOUT IT: the sidechain cleared ============ -->
+    <clear-plugin-sidechain trackPath="0" slot="0"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="0" wired="0"/>
+    <render filename="scd_cleared.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scd_cleared.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="scd_cleared.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+
+    <!-- Undo keys it again, and the duck is back. -->
+    <undo count="1"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="1" source="2" tap="pre" wired="1"/>
+    <render filename="scd_rekeyed.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scd_rekeyed.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+
+    <!-- ============ AND NOT WITHOUT IT: the key clip removed ============= -->
+    <remove-sample trackPath="1" clipIndex="0"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="1" wired="1"/>
+    <render filename="scd_noclip.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scd_noclip.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="scd_noclip.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+  </actions>
+</SActionScript>

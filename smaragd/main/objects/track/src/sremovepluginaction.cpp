@@ -11,6 +11,7 @@
 #include "app/actions/sactionregistry.h"
 #include <QByteArray>
 #include <QList>
+#include <QPointer>
 #include <QDomElement>
 #include <QString>
 #include <cstdint>
@@ -94,6 +95,11 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
 
     // Proposal 55 T5: the id a return track names this slot by.
     slotId_ = slot->slotId();
+    // ...and its sidechain (M4): the undo re-creates a NEW slot object, which
+    // would otherwise come back unkeyed.
+    const bool scSet = slot->hasSidechain();
+    QPointer<SObject> scSource( slot->sidechainSource() );
+    const bool scPre = slot->sidechainPreFader();
 
     // Create inverse action
     audio::twPluginDescriptor desc_inv;
@@ -106,6 +112,7 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
 
     SInsertPluginAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_,
                                                            desc_inv, state_, slotId_);
+    if (scSet) inverse->setSidechain(scSource.data(), scPre);
 
     // QBX-254: the slot's MODEL CHILDREN (NassauDigital's program) are in
     // neither the descriptor nor the state blob, so the inverse carries the

@@ -374,7 +374,8 @@ public slots:
 
     /// Proposal 55 M2: called once per load by the post-load pass, after every
     /// chain has been adopted, so a loaded return is routed exactly once with
-    /// everything in place. Does nothing for a tree with no return (T8).
+    /// everything in place. Does nothing for a tree with no return and no
+    /// keyed slot (T8; keys since M4).
     void routeReturnsAfterLoad();
 
     /// Proposal 55 D7: hand an edit's invalidation to the routing dependents
@@ -470,6 +471,22 @@ private:
      */
     void rewireReturns();
 
+    /**
+     * THE KEY HALF of the pass (proposal 55 D5, M4), called from
+     * reconnectTracksToMixer() after rewireReturns() and from nowhere else.
+     * Wires port 1 of every keyed slot in the tree -- user tracks, return
+     * tracks, send lanes and the master lane alike -- to its key lane's tap
+     * point through STrack::wireSlotKey (this module may not name tw/plugins),
+     * and fails closed on every key it cannot wire (a dangling source, a
+     * source outside this tree, the master or the conductor as a source, a
+     * dropped cycle edge), announced once per state.
+     *
+     * NOT through ssolo::isLaneAudible, deliberately (D6): a key ignores mute
+     * and solo. Idempotent under repetition (inv. 6): a pass that changes
+     * nothing re-wires no plug and re-renders nothing.
+     */
+    void rewireKeys();
+
     /// Every STrack in this root's tree, depth-first in child order (folders
     /// before their children), then the send lanes, then the master lane.
     QList<STrack *> allTracks_() const;
@@ -535,6 +552,12 @@ private:
     // one walks no return, builds no tap and touches no slot mask -- except
     // on the ONE pass after the last return went away, which clears them.
     bool auxRoutedLastPass_ = false;
+    // Proposal 55 M4, the same guard for keys: did the last pass find a keyed
+    // slot anywhere in the tree?
+    bool keyRoutedLastPass_ = false;
+    // Keyed tracks already told that a lane of their key path is armed (Q1
+    // (a) for keys: announced once per arm).
+    QList<QPointer<STrack> > liveKeyAnnounced_;
     // Set only inside routeReturnsAfterLoad(): the one pass allowed to route
     // returns while the project is still loading.
     bool routingAfterLoad_ = false;

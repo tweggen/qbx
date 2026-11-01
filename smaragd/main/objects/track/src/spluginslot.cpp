@@ -8,6 +8,8 @@
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/plugins/twplugindescriptor.h"
+#include "tw/graph/twlatch.h"
+#include "tw/core/twlog.h"
 #include <algorithm>
 #include <QByteArray>
 #include <QCoreApplication>
@@ -256,6 +258,83 @@ int SPluginSlot::auxOutBusChannels( int bus ) const
     return 0;
 }
 
+// --- the sidechain (proposal 55 M4) -----------------------------------------
+
+void SPluginSlot::setSidechain( SObject *source, bool preFader )
+{
+    scSource_ = source;
+    scSet_    = true;
+    scPre_    = preFader;
+    scState_.clear();   // a new key is announced afresh
+}
+
+void SPluginSlot::clearSidechain()
+{
+    scSource_ = nullptr;
+    scSet_    = false;
+    scPre_    = true;
+    scState_.clear();
+}
+
+int SPluginSlot::sidechainBusChannels() const
+{
+    if( proc_ && getSlotState() == audio::twPluginSlotState::Active ) {
+        if( audio::twPlugin *p = proc_->plugin() ) {
+            if( p->audioInBusCount() < 2 ) return 0;
+            return (int) p->audioInBus( 1 ).channels;
+        }
+    }
+    if( effective_.nInBuses >= 2 && effective_.inBusChannels.size() >= 2 )
+        return (int) effective_.inBusChannels[1];
+    return 0;
+}
+
+bool SPluginSlot::keyWiredTo( const twComponent *component ) const
+{
+    if( !insert_ || !component ) return false;
+    return twProducerOf( insert_->getInputPlug( audio::twPluginInsert::kKeyPort ) ).get()
+           == component;
+}
+
+bool SPluginSlot::keyWired() const
+{
+    return insert_ && insert_->keyWired();
+}
+
+bool SPluginSlot::applyKey( const std::shared_ptr<twComponent> &component )
+{
+    // NEVER materializes an insert for an unkeyed slot that has none.
+    if( !component && !insert_ ) { keyHold_.reset(); return false; }
+    std::shared_ptr<audio::twPluginInsert> ins = getInsert();
+    if( !ins ) return false;
+
+    // IDEMPOTENT, so a pass that changes nothing re-renders nothing: the plug
+    // already reads this producer AND the processor already decided its D4
+    // row for this producer's width. setKeySource() stales the insert's pages
+    // (setInput bumps the epoch) and resets the plugin, so calling it on every
+    // solo toggle would re-render every keyed slot from its first frame.
+    if( component ) {
+        const idx_t want = std::max<idx_t>( 1, component->getOutputChannels() );
+        if( keyWiredTo( component.get() ) && proc_ && proc_->keyChannels() == want ) {
+            keyHold_ = component;
+            return false;
+        }
+    } else if( !ins->keyWired() ) {
+        keyHold_.reset();
+        return false;
+    }
+    ins->setKeySource( component );
+    // Released AFTER the plug moved: the old producer must outlive the plug
+    // that reads it.
+    keyHold_ = component;
+    return true;
+}
+
+QString SPluginSlot::describeKey() const
+{
+    return proc_ ? QString::fromStdString( proc_->describeKey() ) : QString();
+}
+
 // --- the instrument slot (proposal 37 P3b) ---------------------------------
 
 void SPluginSlot::setEventSource( std::shared_ptr<const twEventSource> source )
@@ -470,6 +549,18 @@ int SPluginSlot::serialize( QTextStream &o )
           << "</state>\n";
     }
 
+    // THE SIDECHAIN (proposal 55 D8), ONLY WHEN SET, so a project that never
+    // keyed a slot re-serializes byte-identically (T8). The source is an
+    // object id exactly as <auxSource track=> and pluginChainId are; a source
+    // that did not resolve is written as source='0' so the slot stays keyed
+    // (and its key silent) across a save.
+    if( scSet_ ) {
+        const std::uintptr_t src = scSource_
+            ? reinterpret_cast<std::uintptr_t>( scSource_.data() ) : 0;
+        o << "<sidechain source='" << src << "' tap='"
+          << ( scPre_ ? "pre" : "post" ) << "'/>\n";
+    }
+
     // The slot's MODEL CHILDREN (proposal 56 B4): an SLink per child, the
     // base class's shape. Since Q1 a NassauDigital slot has one, its program;
     // every other slot still has none, so their files are byte-unchanged.
@@ -521,6 +612,33 @@ SLink *SPluginSlot::instantiateFromDomElement(
         }
         new SLink( target->getSObject(), slot );
         adopted.append( &target->getSObject() );
+    }
+
+    // THE SIDECHAIN (proposal 55 D8), DEFERRED for pluginChainId's reason:
+    // the key lane's element may not have been instantiated yet. A source id
+    // that does not resolve FAILS CLOSED: the slot stays keyed with no source,
+    // the mixer pass announces the key silent, and it is never re-attached by
+    // a later object (T6).
+    const QDomElement scEl = element.firstChildElement( "sidechain" );
+    if( !scEl.isNull() ) {
+        slot->scSet_ = true;
+        slot->scPre_ = scEl.attribute( "tap", "pre" ) != QLatin1String( "post" );
+        const QString srcId = scEl.attribute( "source" );
+        SProjectLoader *loader = &projectLoader;
+        QPointer<SPluginSlot> guard( slot );
+        projectLoader.deferResolve( [loader, guard, srcId]() {
+            if( !guard ) return;
+            SLink *lk = loader->getObjectDictionary().value( srcId );
+            SObject *src = lk ? &lk->getSObject() : nullptr;
+            if( !src || !src->isLane() ) {
+                TW_LOGW( "model", "[SIDECHAIN] '%s': its key source %s is not in the "
+                         "project; the key stays silent",
+                         guard->getSName().toUtf8().constData(),
+                         srcId.toUtf8().constData() );
+                return;
+            }
+            guard->scSource_ = src;
+        } );
     }
 
     slot->readPostChildrenAttributes( element );

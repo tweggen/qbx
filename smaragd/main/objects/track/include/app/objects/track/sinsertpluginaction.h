@@ -55,6 +55,14 @@ public:
     // object identity, it has no XML spelling.
     void setModelChildren(const QList<SObject *> &children);
 
+    // THE SIDECHAIN of the slot this re-creates (proposal 55 M4, T5): set only
+    // on the inverse of a remove-plugin whose slot was keyed, so the undo
+    // brings the key back with the slot. The source is held by OBJECT (a lane
+    // removed meanwhile is alive on the undo stack and no path reaches it), so
+    // it is live state and NOT serialized -- a scripted insert-plugin keys a
+    // slot with set-plugin-sidechain afterwards.
+    void setSidechain(SObject *source, bool preFader);
+
 private:
     QString trackPath_;
     int slotIndex_;
@@ -86,6 +94,11 @@ private:
     quint64 slotId_ = 0;
     // See setModelChildren(). Each non-null entry holds one reference.
     QList<QPointer<SObject>> modelChildren_;
+
+    // See setSidechain().
+    bool              scSet_ = false;
+    QPointer<SObject> scSource_;
+    bool              scPre_ = true;
 };
 
 #endif // SINSERTPLUGINACTION_H

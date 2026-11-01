@@ -1600,6 +1600,21 @@ the return chain's input and reads the source insert (`STrack::returnRouted`),
 lesson again: a wired and a wiped route are both silent on a quiet fixture, so
 the wiring is the only place a case can tell them apart.
 
+## `assert-plugin-sidechain` (proposal 55 M4)
+
+Reads a keyed slot's model AND its LIVE wiring: `wired=1` means port 1 of the
+slot's insert reads the key lane's tap component (`STrack::pluginSlotKeyWired`),
+`mapping=` is a substring of what the processor decided (`describeKey`). The
+same lesson as `assert-return-track`: a wired and a wiped key are both silent on
+a quiet fixture.
+
+## `assert-render-policy maxDepthDrops= minPlanDepth=` (proposal 55 M4, T7)
+
+MAXIMUM on the dependencies `CaptureRevalidator::expandNode_`'s depth guard
+refused (a dependency it refuses is a page nothing planned) and MINIMUM on the
+deepest expansion reached -- the witness that a case is as deep as it claims.
+Both read the project scheduler's cumulative `graphStats()`.
+
 ## `assert-track-pan` (proposal 49 M3)
 
 `trackPath` / `pan` / `tolerance`, reading `STrack::getPan()`.

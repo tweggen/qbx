@@ -459,7 +459,8 @@ const Fixture kFixtures[] = {
       " afterMidiIn='1'/>" },
     { "assert-render-policy",
       "<assert-render-policy liveThreadRefusals='0' liveOwnedRefusals='64'"
-      " minLiveOwnedRefusals='1'/>" },
+      " minLiveOwnedRefusals='1' maxNodeRetries='0' maxMissPages='0'"
+      " maxDepthDrops='0' minPlanDepth='12'/>" },
     // Transport polish (proposal 21 L5). Every optional attribute is present,
     // because each of them is written only when it was given.
     { "assert-metronome-clicks",
@@ -840,6 +841,15 @@ const Fixture kFixtures[] = {
     { "assert-return-track",
       "<assert-return-track trackPath='1' isReturn='1' source='0' slot='0' bus='1'"
       " routed='1' mapping='mapping=copy' mask='2'/>" },
+    // --- the sidechain verbs (proposal 55 M4). `tap` is written only when
+    // given, so the fixture gives it.
+    { "set-plugin-sidechain",
+      "<set-plugin-sidechain trackPath='0' slot='1' source='$send:Verb' tap='post'/>" },
+    { "clear-plugin-sidechain",
+      "<clear-plugin-sidechain trackPath='0' slot='1'/>" },
+    { "assert-plugin-sidechain",
+      "<assert-plugin-sidechain trackPath='0' slot='1' keyed='1' source='2' tap='pre'"
+      " wired='1' mapping='mapping=copy'/>" },
     { "add-send",
       "<add-send track='1' dest='Reverb' level='-6' pre='false'"
       " enabled='true'/>" },
@@ -1266,6 +1276,21 @@ const LaneRow kLaneRows[] = {
       "a system lane is never a return (set-return-source refuses one), so it "
       "has no source to clear and refuses on that" },
     { "assert-return-track", Accept, "read-only" },
+
+    // ================== PROPOSAL 55 M4: THE SIDECHAIN VERBS =================
+    //
+    // A key is a slot attribute, and every lane with a chain has slots: a
+    // send lane's or the master lane's insert may be KEYED. The SOURCE may be
+    // a send lane (cycle-walked over the union graph, D7) and never the
+    // master, whose output already contains every lane, nor the conductor,
+    // which carries no audio. Gate: sidechain_refusals.
+    { "set-plugin-sidechain",    Conditional,
+      "55/D5+D7: any lane with a chain may be KEYED; a SEND lane may be the "
+      "source (cycle-walked); the MASTER and the conductor are refused as a "
+      "source by role" },
+    { "clear-plugin-sidechain",  Accept,
+      "55/D5: clears what set-plugin-sidechain may set, on any lane" },
+    { "assert-plugin-sidechain", Accept, "read-only" },
     // Addresses a send lane by NAME (`lane=`), so isLaneAddressed() does not
     // flag it and nothing would fail without a row -- the same technicality
     // add-send-lane escapes on. Present because the table records the DECISION

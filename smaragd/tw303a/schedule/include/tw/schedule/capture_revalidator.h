@@ -75,6 +75,11 @@ struct CaptureRevalidationJob {
  */
 class CaptureRevalidator {
 public:
+    /// expandNode_'s depth guard: a dependency deeper than this is not
+    /// planned (GraphStats::depthDrops counts each one). 64 since
+    /// fix/stateful-insert-retry; see expandNode_.
+    static constexpr int kMaxExpandDepth = 64;
+
     /**
      * Construct revalidator with worker thread pool.
      *
@@ -161,6 +166,12 @@ public:
         uint64_t selfStale     = 0;   // pages published from an OUTDATED PLAN
                                       // and immediately re-staled (see
                                       // processGraphNode's self-staleness note)
+        // Proposal 55 M4 (T7, AC4.6): routing lengthens dependency paths, and
+        // a dep past expandNode_'s depth guard is silently NOT PLANNED. These
+        // make that observable: how many expansions the guard refused, and
+        // the deepest level any expansion reached (the root is depth 0).
+        uint64_t depthDrops    = 0;
+        uint64_t maxDepth      = 0;
     };
     GraphStats graphStats() const;
 
@@ -352,6 +363,8 @@ private:
     std::atomic<uint64_t> statNodeRetries_{0};
     std::atomic<uint64_t> statMissPages_{0};
     std::atomic<uint64_t> statSelfStale_{0};
+    std::atomic<uint64_t> statDepthDrops_{0};   // see GraphStats::depthDrops
+    std::atomic<uint64_t> statMaxDepth_{0};
 
     // Shutdown coordination
     std::atomic<bool> shutdown_{false};
