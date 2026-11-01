@@ -124,6 +124,30 @@
                           asset="Renamed"/>
     <assert-audio-energy filename="sq3_5.wav" startFrame="1000" frameCount="1024"
                          channel="0" minRms="0.22" maxRms="0.28"/>
+
+    <!-- ========================= a bounce in flight is SUPERSEDED, not queued
+         The render gate holds the next bounce (generation 3, the asset at
+         0 dB) before it renders anything. A second edit (-12.0412 dB, a
+         quarter) moves the asset again while it is held: the layer's NEWEST
+         generation is now the stale one, so the debounce cancels it and
+         bounces generation 4. Generation 3 is never installed (installs goes
+         2 -> 3, not 4), and the render hears the second edit. -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false"/>
+    <set-clip-volume clip="Src:0,0" volumeDb="0"/>
+    <wait-ms ms="500"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="1" pending="3" renders="3"/>
+    <set-clip-volume clip="Src:0,0" volumeDb="-12.0412"/>
+    <!-- At once: generation 3 still held, the layer due again. -->
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="1" pending="3" renders="3"/>
+    <wait-ms ms="500"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="4"
+                          rendering="0" installs="3" renders="4"/>
+    <render filename="sq3_6.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq3_6.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.11" maxRms="0.14"/>
   </actions>
 
 </SActionScript>

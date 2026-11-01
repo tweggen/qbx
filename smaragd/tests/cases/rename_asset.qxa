@@ -74,11 +74,16 @@
     <!-- =================================== an asset NOTHING places or links
          "Pad" is held by the registry's pin alone. The rename registers the
          new name BEFORE it drops the old one, so the pin count never passes
-         through zero; the other order frees the body (deleteLater), which a
+         through zero; the other order queues the body for deletion (deleteLater), which a
          test-case run delivers only at drain-pending-deletes, and the new
-         name then names freed memory. -->
+         name would name freed memory but for SObject::event's resurrection
+         guard. -->
     <rename-asset assetName="Pad" newName="Pad 2"/>
     <drain-pending-deletes/>
+    <!-- The other order is survived ONLY because SObject::event swallows a
+         deferred delete of an object that was re-referenced, and says so:
+         that line is what this asserts absent. -->
+    <assert-log contains="resurrected after a queued deletion" minCount="0" maxCount="0"/>
     <place-asset assetName="Pad 2" trackPath="2" timePos="48000"/>
     <render filename="ra_3.wav" format="wav" quality="10" durationSec="2"/>
     <assert-audio-energy filename="ra_3.wav" startFrame="48000" frameCount="48000"

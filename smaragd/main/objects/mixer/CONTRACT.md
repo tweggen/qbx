@@ -18,8 +18,10 @@ Invariants:
    `rename-asset` (QBX-266) moves only the registry's NAME: the body keeps its
    identity, so every placement and every sampler asset link (an SLink to the
    body) is untouched; the new entry is registered before the old one is
-   dropped, so the body's refcount never passes through zero. Gated by
-   `rename_asset.qxa` and `sampler_q3_asset_link.qxa`.
+   dropped, so the body's refcount never passes through zero (the other
+   order survives only through SObject::event's resurrection guard, whose
+   warning `rename_asset.qxa` asserts absent). Gated by `rename_asset.qxa`
+   and `sampler_q3_asset_link.qxa`.
 3. SPluginChain mirrors its model into tw/plugins chain components; wiring
    rebuilds go through rebuildWiring() after input changes.
 4. Track selection is a SET with one distinguished PRIMARY, and both are

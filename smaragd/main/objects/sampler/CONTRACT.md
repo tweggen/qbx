@@ -342,7 +342,9 @@ absolute (there is nothing to be relative to).
   generation unchanged, after the debounce and after a settle; Q3.4:
   `rename-asset` changes `asset=` and nothing else (no bounce), and after a
   save and a reload the link names the renamed asset, bounces it, and an edit
-  of it after the reload is heard.
+  of it after the reload is heard; and a bounce held by the render gate is
+  SUPERSEDED by a second edit (cancelled, never installed: installs 2 -> 3
+  with generation 4, the render hears the second edit).
 - `qxa.sampler_q3_link_cycle` — Q3.3: refused for an asset over the master
   root and for one over an arrangement holding the sampler's track, each with
   its line, the src and the generation state unchanged; Q3.q1: refused through
