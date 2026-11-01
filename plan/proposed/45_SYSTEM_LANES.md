@@ -371,7 +371,10 @@ Three more refusals, same milestone:
 - **No arm, and no monitor.** `arm-track` **and `set-monitor-mode on`** are
   refused: the live set is `{armed && monitorEffective} ∪ {monitor == on}`, so
   refusing only the first leaves a second door to the same contradiction with
-  D4. `set-track-input` likewise.
+  D4. `set-track-input` likewise. **Correction, 2026-11-01 (QBX-260):** the
+  second term now needs `mixer/monitorArming=any`, so on the default that door
+  is shut for a master nobody armed. BOTH refusals stay, and this is why they
+  do: a refusal that holds only on the default setting is not a refusal.
 - **No instrument.** Slot 0 of a system lane's chain may not be an instrument.
 - **No structural edit.** `remove-track`, `reparent-track`, `move-track` refuse.
   It is not the user's object.
@@ -1767,7 +1770,15 @@ same loop — so the wiring is idempotent under repetition, which is what
    `toggle-playback` the pair reported "OK — 0 records" over a live refusal
    (the window was literally `log records 6 .. 6`, empty). All three were tried
    under the sabotage; only the first bites. Same vacuous shape
-   `master_insert_while_monitoring`'s first draft had.
+   `master_insert_while_monitoring`'s first draft had. **Correction, 2026-11-01
+   (QBX-260):** the measurement stands but the action it names MOVED. With the
+   second term gone from the default live set, the plan is built at the
+   **arm**, so `send_lane_survives_rewire`'s pair was relocated there -- it had
+   become one of the vacuous placements this paragraph warns about, and being
+   absent-shaped (`maxCount="0"`) it went on passing while gating nothing.
+   The lesson generalises: a placement measured against a rule is invalidated
+   by a change to that rule, silently, in exactly the cases that assert an
+   absence.
 4. **`$send:<name>` NEEDED THE DECISION M1 DEFERRED HERE.** `parseQualified`
    splits a spec on its first ':', so `$send:Reverb` parsed as the ROOT
    `$send` plus the path `Reverb`. The rule chosen is one condition — text

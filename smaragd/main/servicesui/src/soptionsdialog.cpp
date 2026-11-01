@@ -997,6 +997,20 @@ QWidget *SOptionsDialog::buildMixingPage()
         "arrangement you placed it in keeps playing." );
     form->addRow( "Solo affects:", soloScope_ );
 
+    // QBX-260. Worded as the BEHAVIOUR, like the row above: "armed-only" and
+    // "any" are what the INI stores and what computeClosure branches on, and
+    // neither tells a user what their microphone is about to do.
+    monitorArming_ = new QComboBox;
+    monitorArming_->addItem( "only tracks that are record-armed", "armed-only" );
+    monitorArming_->addItem( "any track whose monitor is on", "any" );
+    monitorArming_->setToolTip(
+        "A track's monitor setting normally says what it will do once you "
+        "arm it for recording, so nothing listens to an input, takes an "
+        "instrument live or stops playing its own clips until you arm. The "
+        "other setting lets monitor \"on\" alone put a track live, which is "
+        "the older behaviour." );
+    form->addRow( "Monitor:", monitorArming_ );
+
     loadMixingPage();
     return page;
 }
@@ -1006,6 +1020,9 @@ void SOptionsDialog::loadMixingPage()
     SSettings &s = SSettings::instance();
     selectByData( soloScope_,
         s.value( SOpt::SoloScope, SOpt::def( SOpt::SoloScope ) ).toString() );
+    selectByData( monitorArming_,
+        s.value( SOpt::MonitorArming,
+                 SOpt::def( SOpt::MonitorArming ) ).toString() );
 }
 
 void SOptionsDialog::applyMixingPage()
@@ -1015,13 +1032,22 @@ void SOptionsDialog::applyMixingPage()
     // and there is exactly one place that converts the string (QBX-256).
     SSettings::instance().setValue( SOpt::SoloScope,
                                     soloScope_->currentData().toString() );
+    // Same shape (QBX-260): the write is all this does, and SApplication
+    // watches SSettings::changed for the key and refreshes the live set.
+    SSettings::instance().setValue( SOpt::MonitorArming,
+                                   monitorArming_->currentData().toString() );
 }
 
 QString SOptionsDialog::describeMixingPage() const
 {
+    // APPENDED, never inserted: assert-mixing-options matches substrings and
+    // four committed cases carry `soloScope=`.
     return QStringLiteral( "soloScope=" )
          + ( soloScope_ ? soloScope_->currentData().toString()
-                        : QStringLiteral( "?" ) );
+                        : QStringLiteral( "?" ) )
+         + QStringLiteral( "|monitorArming=" )
+         + ( monitorArming_ ? monitorArming_->currentData().toString()
+                            : QStringLiteral( "?" ) );
 }
 
 // ---------------------------------------------------------------- Log page

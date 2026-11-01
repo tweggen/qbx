@@ -12877,7 +12877,10 @@ sliveinputactions.{h,cpp}` (three verbs), `main/testkit/slivetestactions.{h,cpp}
 
 **THE CLOSURE.** `sliveplan::computeClosure` walks the lane tree once, takes
 `{armed && monitorEffective} ∪ {monitor == on}` intersected with "has an
-`audio:` input", and closes it upward to the output — DEEPEST FIRST, which is
+`audio:` input" (**2026-11-01, QBX-260:** the second term is now conditional on
+`mixer/monitorArming=any`; the default `armed-only` leaves
+`{armed && monitorEffective}` alone. Since L2 the intersection is also "has an
+`audio:` OR `midi:` input"), and closes it upward to the output — DEEPEST FIRST, which is
 what makes a parent's `liveChildren` indices strictly less than its own
 (`twLivePlan::finalize()` proves it). Per member: the slot processors in slot
 order, the `twGainStage::Envelope` snapshot, the `twRewire` channel map, the

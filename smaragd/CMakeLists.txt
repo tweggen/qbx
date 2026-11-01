@@ -392,6 +392,17 @@ if(TEST qxa.arrangement_folder_solo_scoped)
     set_tests_properties(qxa.arrangement_folder_solo_scoped PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# --- a DIFFERENT per-user mixer key, same discipline (QBX-260) ----------------
+#
+# `monitor_needs_arm` writes `mixer/monitorArming`, not `mixer/soloScope`, so
+# it is NOT a fifth member of the group above and the count in that paragraph
+# stands at four. It is here for the same reason all the same: a .qxa that
+# writes a per-user key cannot run beside a case that reads it, and it
+# restores SOpt::def() (`armed-only`) at the end.
+if(TEST qxa.monitor_needs_arm)
+    set_tests_properties(qxa.monitor_needs_arm PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the deferred `media:` drop (proposal 38 gate 3) --------------------------
 #
 # Same INI argument as the three above (it writes media/lastSourceId and

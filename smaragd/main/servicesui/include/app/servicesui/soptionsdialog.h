@@ -191,6 +191,8 @@ private:
     QCheckBox *logToFile_;
     // Mixing page (QBX-256): what solo is applied across.
     QComboBox *soloScope_ = nullptr;
+    // Mixing page (QBX-260): whether a monitor mode needs the record arm.
+    QComboBox *monitorArming_ = nullptr;
     QLabel    *logPathLabel_;
 
     // MIDI page (proposal 37 P7b). `midiVirtualBtn_` is DISABLED where the

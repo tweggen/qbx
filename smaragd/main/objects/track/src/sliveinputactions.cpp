@@ -27,10 +27,17 @@ STrack *resolveTrack( SProject *project, const QString &pathRoot_,
     // AC5.2: NONE OF THESE THREE REACH A SYSTEM LANE. The refusal is here, in
     // the resolver the three share, rather than three times in three apply()
     // bodies, because D6's reason is that refusing only ONE of them leaves a
-    // second door to the same contradiction: the live set is
+    // second door to the same contradiction: under
+    // `mixer/monitorArming=any` the live set is
     // `{armed && monitorEffective} U {monitor == on}`, so a master left on
     // monitor "on" is live-owned whether it was ever armed or not, and a
     // live-owned master is precisely the shape D4a refuses to render.
+    //
+    // QBX-260 made `armed-only` the DEFAULT, which shuts that door for a
+    // master nobody armed -- and is exactly why the refusal stays rather than
+    // being relaxed to arm-track alone: the door is still there for anyone who
+    // chooses `any`, and a refusal that holds only on the default setting is
+    // not a refusal.
     //
     // set-monitor-mode is refused for EVERY mode, not just "on". D6 names
     // "set-monitor-mode on" because that is the mode that does the damage, but
@@ -57,8 +64,10 @@ SApplyResult SArmTrackAction::apply( SProject *project )
 
     SAction *inverse = new SArmTrackAction( trackPath_, track->isArmedForRecording() );
     track->setArmedForRecording( armed_ );
-    // The live set is {armed && monitorEffective} u {monitor == on} (design
-    // D9), so arming is a plan-rebuild trigger even when nothing else moved.
+    // The live set is {armed && monitorEffective}, plus {monitor == on} under
+    // `mixer/monitorArming=any` (design D9, narrowed by QBX-260), so arming is
+    // a plan-rebuild trigger even when nothing else moved -- and under the
+    // default policy it is the ONLY thing that puts a lane in the set.
     SAppContext::get().liveLanesChanged();
     return { true, inverse };
 }

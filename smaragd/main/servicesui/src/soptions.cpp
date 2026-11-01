@@ -106,6 +106,12 @@ QVariant SOpt::def( const QString &key )
     // else. `arrangement` is for the user who reads a sub-arrangement as a
     // closed mix, and it is exactly the behaviour qbx had before the option.
     if( key == SoloScope )           return QStringLiteral( "global" );
+    // MONITORING NEEDS THE ARM (QBX-260, the author's decision of
+    // 2026-11-01): a monitor mode says what the lane does when it is armed,
+    // and touching it must not by itself open an input or take a plugin live.
+    // `any` restores the pre-option rule for whoever wants a lane that
+    // monitors on its own.
+    if( key == MonitorArming )       return QStringLiteral( "armed-only" );
     // Media browser (proposal 38 gate 2). "local" is the only source the MVP
     // registers, so remembering it is the honest default rather than an empty
     // string the combo would have to interpret. The mask is Audio (1) --

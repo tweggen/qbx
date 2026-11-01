@@ -352,7 +352,15 @@ input while stopped or recording, playback while playing (so under Auto, pressin
 track's playback with the input (Cubase semantics, not REAPER's sum) — serialized
 when non-default; arm reuses `ArmedForRecording` (never starts monitoring on
 load). Live set = closure of `{armed && monitorEffective} ∪ {monitor == on}` up to
-the master. `SVirtualKeyboardDock` becomes an in-process `MidiInput` port
+the master. **Correction, 2026-11-01 (QBX-260):** the second term is now
+conditional on the per-user `SOpt::MonitorArming` (`mixer/monitorArming`), and
+its default `armed-only` DROPS it. The reason is the one this sentence does not
+weigh: taking a lane live has audible consequences -- its chain goes
+live-owned, it leaves the frozen sum, a pump starts -- and a monitor mode is a
+preference, not a gesture that asks for any of them. `any` restores this
+sentence exactly. Nothing about an ARMED lane differs between the two, because
+`monitorEffective` already answers true for mode On. Gate:
+`monitor_needs_arm`. `SVirtualKeyboardDock` becomes an in-process `MidiInput` port
 ("Computer keyboard") so live play and recording treat it like hardware; step-
 input at the locator stays the stopped-transport behaviour. Meters: the pre-FX
 input meter is a lock-free peak pair from the bridge; a live track's post-FX

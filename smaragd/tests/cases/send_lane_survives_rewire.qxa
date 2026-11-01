@@ -91,22 +91,27 @@
     <set-track-input trackPath="0" input="audio:file:3"/>
     <set-monitor-mode trackPath="0" mode="on"/>
 
+    <arm-track trackPath="0" armed="1"/>
+
     <!-- ASSERTED HERE, AND THE PLACEMENT IS ITSELF A MEASUREMENT.
          assert-log's window opens at the immediately preceding action that is
          not an assert-log, and the live plan is built - and refused, if it is
-         going to be - AT set-monitor-mode, NOT at the arm and NOT at the
-         transport edge: the live set is
-         `{armed && monitorEffective} u {monitor == on}`, so monitor "on" alone
-         puts the track in it. All three placements were tried under the
-         non-unity sabotage and only this one sees the refusal; the other two
-         reported "OK - 0 records" over a live one, which is the same vacuous
-         shape master_insert_while_monitoring's first draft had. -->
+         going to be - AT THE ARM, not at set-monitor-mode and not at the
+         transport edge. Under QBX-260's default
+         (`mixer/monitorArming=armed-only`) the live set is
+         `{armed && monitorEffective}`, so monitor "on" alone puts the track in
+         nothing and the window at the monitor verb is empty of anything the
+         plan could have said. The pair SAT THERE until QBX-260 moved it, back
+         when monitor "on" alone was enough; all three placements were tried
+         under the non-unity sabotage and only the one that owns the plan build
+         sees the refusal. The other two reported "OK - 0 records" over a live
+         one, the same vacuous shape master_insert_while_monitoring's first
+         draft had - and an absent-shaped assertion left on the wrong action is
+         exactly the kind that keeps passing while gating nothing. -->
     <assert-log level="warn" contains="live monitoring is off"
                 minCount="0" maxCount="0"/>
     <assert-log level="warn" contains="a master input level is not unity"
                 minCount="0" maxCount="0"/>
-
-    <arm-track trackPath="0" armed="1"/>
     <set-locator position="0"/>
     <toggle-playback play="1"/>
     <wait-playhead minAdvance="4096" timeoutMs="30000"/>
