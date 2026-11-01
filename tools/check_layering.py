@@ -387,9 +387,11 @@ APP_ENG = {
     # objects/sampler (proposal 56 Q1): `sampler` for the editable program
     # (twSamplerProgramModel) and the snapshot it hands the instrument,
     # `plugins` for the `twPlugin &` its instance initializer takes (reached
-    # as a twSamplerHost by capability). Nothing else until Q2+ (sources,
-    # render, schedule, pages, sidecar arrive with generations and bounces).
-    'objects/sampler': _ENG_BASE | {'plugins', 'sampler'},
+    # as a twSamplerHost by capability). `sources` since Q2 (QBX-263): a
+    # generation job decodes a `file:` layer with twSampleSource, the decoder
+    # every sample in the app goes through. render, schedule, pages and
+    # sidecar arrive with the asset bounce (Q3) and stretch (Q4).
+    'objects/sampler': _ENG_BASE | {'plugins', 'sampler', 'sources'},
     # objects/track + events since proposal 37 P1: STrack owns the per-track
     # twEventClipSet and the twEventMerge feed (3.2.1).
     # objects/track + render + sidecar + sources since proposal 40 M1b:

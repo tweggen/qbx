@@ -8,12 +8,17 @@ program verbs: `add-zone`, `remove-zone`, `add-layer`, `remove-layer`,
 `set-zone`, `set-layer`, `set-sampler-program`, `select-zones`, and the three
 inverse forms `reinsert-zone`, `reinsert-layer`, `restore-sampler-values`.
 
+Since Q2 (QBX-263) it also owns each layer's GENERATIONS (proposal 56 §4.6,
+DESIGN §6.1): the jobs that decode a `file:` layer, their install, and the
+bounded settle the offline render's barrier makes (invariants 12–16).
+
 Public headers: app/objects/sampler/*.h
 
 Depends on (engine): tw/core, tw/graph, **tw/sampler** (the editable program
 `twSamplerProgramModel` and the snapshot it hands the instrument), **tw/plugins**
 (the `twPlugin &` the instance initializer takes, reached as a `twSamplerHost`
-by capability). App edges: {actions, model, persistence} — **the RANK of
+by capability), **tw/sources** (since Q2: `twSampleSource`, the decoder every
+sample in the app goes through, on a generation job's worker). App edges: {actions, model, persistence} — **the RANK of
 `objects/midi`** (DESIGN §9.2; proposal 56 Q-6, answered by the author
 2026-10-27). It does NOT depend on `objects/track`, although the slot it
 configures lives there, and `objects/track` never depends on it (proposal 56
@@ -108,6 +113,63 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     in selection order, so a removed zone drops out and comes back with its
     undo. ASSUMPTION awaiting the author (proposal 56 §11 Q1).
 
+12. **A `file:` LAYER IS FED BY GENERATIONS** (DESIGN §6.1 rule 1). After
+    every committed edit and at bind time, `reconcileSamples_()` compares each
+    layer's `src` with what is installed and what is on its way: a new
+    `file:<path>` starts a JOB with the layer's next generation number (a
+    per-layer counter that never goes back, so an undo that writes the old
+    `src` back is a NEW generation); a `src` that is not `file:` (`test:…`,
+    empty, a future `link:…`) REMOVES the layer's buffer (installed as a
+    change too); a removed layer takes its buffer and its job with it; a job
+    whose `src` was edited again before it finished is CANCELLED and its
+    result never installed. The path resolves as the MIDI-file verbs resolve
+    an input: absolute; next to the action script (`sampleBaseDir`); next to
+    the project file (`SFilePathRef`); the cwd. ASSUMPTION (Q2): the stored
+    `src` is the text the verb was given, not re-encoded relative to the
+    project on save (relocation and "collect files" are not Q2).
+
+13. **A JOB TOUCHES NO QOBJECT AND NEVER CALLS BACK** (THREADING rule 1: no
+    signal, no queued call, no event from the worker; `twSampleSource` itself
+    takes a `QString` and logs through `qWarning`, exactly as it does on the
+    revalidator pool's `std::thread`s for the feel-flow bounce). One
+    `std::thread` per job decodes with `twSampleSource` into an immutable
+    `twSamplerSample` (`fromPlanar`, stamped with the generation), stores it,
+    sets an atomic `done` and notifies a condition variable. The MAIN thread
+    finds it, by POLLING (a 10 ms `QTimer`, running only while a job exists —
+    the pumpLocator pattern) or by WAITING on the condition variable
+    (`settle()`). Every worker is joined on the main thread: at install, at
+    the poll after a cancel, and in the destructor (which releases a held
+    one). A decode that fails leaves the layer on its previous generation,
+    announced (`generation N FAILED (…); the layer keeps generation M`).
+
+14. **INSTALLING IS A STATE CHANGE, AND ONE INSTALL CARRIES EVERY FINISHED
+    JOB** (DESIGN §6.1 rule 2, proposal 56 invariant 6). An install is ONE
+    installer call: `future` = program + every current generation (the slot's
+    next instance initializer: a rebuilt instance is born with them,
+    invariant 3) and `now` = `setSample` for each changed layer, then
+    `collectRetired()` — under the processor's mutex, never in `process()`
+    (proposal 56 invariant 5; a buffer replaced by THIS install is still
+    parked and is freed by the next one). Through the slot's
+    `applyToInstances()`, so the param epoch moves and the path above the
+    slot is staled. Gated by `assert-sampler-layer trackEpochAdvancedSince=`
+    across an install with no edit in between (`qxa.sampler_q2_generations`).
+
+15. **NOTHING IS INSTALLED WHILE AN OFFLINE RENDER RUNS** (DESIGN §6.1 rule
+    3). The poll installs only when `SAppContext::isRenderingActive()` is
+    false; a job that finishes during a render stays queued and is installed
+    by the first poll after it. NOT GATED: a scripted render sleeps on the
+    main thread, so no poll can run during one, and the barrier's settle
+    leaves nothing outstanding when a render starts (proposal 56 §11 Q2).
+
+16. **`settle()` IS THE BARRIER'S WAIT** (B8, proposal 56 invariant 7):
+    synchronous on the calling (main) thread, bounded, waiting on the jobs'
+    condition variables rather than the event loop, installing what
+    finished (`force`, ignoring rule 15 — the render has not started) and
+    reporting how many were outstanding, how long it took, and which job is
+    late. The shell calls it from `startRender()` and logs the line GATES
+    Q2.3 asserts (`shell/CONTRACT.md`); `wait-sampler-generations` calls it
+    without a render.
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -147,8 +209,30 @@ absolute (there is nothing to be relative to).
   reload; a program this core refuses is kept verbatim; a lost program costs
   only its link.
 - `action_roundtrip_test` — every verb and inverse, children included.
+- `qxa.sampler_q2_generations` — Q2.1 (a swap's install advances the track's
+  content epoch with no edit in between; the render after it is the new
+  sample's single-generation golden byte for byte, and B's level from the
+  onset), Q2.2 (each of two renders with a swap between them equals its own
+  sample's single-generation golden), undo and redo as new generations, a
+  2 -> 1 -> 2 rebuild born with the generation, a non-file `src` removing
+  the buffer. A's golden IS `sampler_q0_note.wav`: the model's file layer
+  renders Q0's test install byte for byte.
+- `qxa.sampler_q2_barrier` — Q2.3 (a held job; the render waits, logs the
+  line once, and equals the render made once the layer was ready), Q2.q3
+  (a job held past a 300 ms bound refuses the render with the reason).
+- Sabotages that bite (QBX-263): an install that does not reach the live
+  instances; one that bypasses `applyToInstances` (no stale); a barrier that
+  does not settle; a settle that does not install; a bound that does not
+  refuse; the barrier line written when nothing was outstanding.
 
 ## Not gated / known limits
+
+- Rule 15 (no install during a render) — see the invariant: no scripted case
+  can make a job finish during a render, so removing the check passes every
+  gate (measured, QBX-263). Q2.q1 is therefore not gated.
+- Q2.q2 (round-robin page independence through qbx's page renders) is not
+  part of QBX-263.
+- An install during PLAYBACK stales the track (rule 14) but no case plays.
 
 - `remove-plugin` + undo LOSES the program: the inverse `insert-plugin`
   rebuilds the slot from its descriptor and state blob, and the program is a

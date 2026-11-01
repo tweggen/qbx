@@ -1285,6 +1285,23 @@ bool SApplication::startRender(const audio::RenderParams &params, QString *error
         return false;
     }
 
+    // THE SAMPLER SETTLE (proposal 56 B8, DESIGN §6.1 rule 3): an OFFLINE
+    // render starts only when no NassauDigital generation is outstanding. It
+    // waits here, synchronously and bounded, installs what it waited for, and
+    // runs BEFORE the barrier so the barrier's invalidation covers the
+    // installs. A job that does not finish inside the bound refuses the render
+    // with the reason (QBX-145): never a render of the older generation
+    // pretending to be current. Playback does not settle (see beginRun).
+    {
+        QString why;
+        if (!ssamplerwiring::settleBeforeRender(currentProject_, &why)) {
+            resumeLiveAfterRender();
+            if (error) *error = why;
+            TW_LOGW( "app", "startRender: render did not start: %s", qPrintable(why) );
+            return false;
+        }
+    }
+
     // THE RUN BARRIER (proposal 37 D4), on the MAIN thread and BEFORE the
     // render worker exists - so it is ordered ahead of the run's first demand
     // by construction, not by a race we would have to reason about. This is the

@@ -1,14 +1,17 @@
 #include "app/testkit/ssamplertestactions.h"
 
 #include "app/actions/sactionregistry.h"
+#include "app/model/splacements.h"
 #include "app/objects/track/spluginactionsupport.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/shell/sapplication.h"
+#include "app/shell/ssamplerwiring.h"
 #include "app/testkit/stestfilepath.h"
 #include "app/objects/sampler/ssamplerprogram.h"
 #include "app/objects/sampler/ssamplerslots.h"
 
 #include "tw/analysis/audio_analysis.h"
+#include "tw/graph/twcomponent.h"
 #include "tw/plugins/twplugin.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/sampler/twsamplerhost.h"
@@ -393,4 +396,255 @@ static const bool s_reg_assertsamplerprogram =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "assert-sampler-program" ),
           [] { return new SAssertSamplerProgramAction; } ),
+      true );
+
+// ================================================ set-sampler-render-gate ===
+
+SApplyResult SSetSamplerRenderGateAction::apply( SProject *project )
+{
+    const QString where = QStringLiteral( "set-sampler-render-gate: track %1 slot %2 layer %3" )
+                              .arg( trackPath_ ).arg( slotIndex_ ).arg( layer_ );
+    if( hasBound_ ) ssamplerwiring::setSettleBoundOverrideMs( settleBoundMs_ );
+    if( layer_ <= 0 ) {
+        if( hasBound_ ) {
+            qInfo().noquote() << QStringLiteral( "set-sampler-render-gate: settle bound %1 ms" )
+                                     .arg( settleBoundMs_ );
+            return { true, nullptr };
+        }
+        qWarning().noquote() << where << ": needs layer= (or settleBoundMs= alone); REJECTED";
+        return { false, nullptr };
+    }
+    QString why;
+    SSamplerProgram *prog = ssampler::programAt( project, pathRoot(), trackPath_, slotIndex_,
+                                                 false, &why );
+    if( !prog ) {
+        qWarning().noquote() << where << ": REJECTED:" << why;
+        return { false, nullptr };
+    }
+    if( !prog->model().hasLayer( (std::uint32_t)layer_ ) ) {
+        qWarning().noquote() << where << ": REJECTED: no such layer";
+        return { false, nullptr };
+    }
+    if( ready_ ) prog->releaseHeldJob( (std::uint32_t)layer_ );
+    else         prog->holdNextJob( (std::uint32_t)layer_, holdMs_ );
+    qInfo().noquote() << where << ( ready_ ? ": released"
+                                           : QStringLiteral( ": the next job HOLDS (%1)" )
+                                                 .arg( holdMs_ >= 0
+                                                           ? QStringLiteral( "%1 ms" ).arg( holdMs_ )
+                                                           : QStringLiteral( "until released" ) ) );
+    return { true, nullptr };
+}
+
+void SSetSamplerRenderGateAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "layer", layer_ );
+    elem.setAttribute( "ready", ready_ ? "true" : "false" );
+    elem.setAttribute( "holdMs", holdMs_ );
+    if( hasBound_ ) elem.setAttribute( "settleBoundMs", settleBoundMs_ );
+}
+
+bool SSetSamplerRenderGateAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    slotIndex_ = elem.attribute( "slotIndex", "0" ).toInt();
+    layer_     = elem.attribute( "layer", "0" ).toInt();
+    ready_     = elem.attribute( "ready", "false" ) == QLatin1String( "true" );
+    holdMs_    = elem.attribute( "holdMs", "-1" ).toInt();
+    hasBound_  = elem.hasAttribute( "settleBoundMs" );
+    settleBoundMs_ = elem.attribute( "settleBoundMs", "-1" ).toInt();
+    return true;
+}
+
+QStringList SSetSamplerRenderGateAction::knownAttributes() const
+{
+    return { QStringLiteral( "trackPath" ), QStringLiteral( "slotIndex" ),
+             QStringLiteral( "layer" ),     QStringLiteral( "ready" ),
+             QStringLiteral( "holdMs" ),    QStringLiteral( "settleBoundMs" ) };
+}
+
+static const bool s_reg_setsamplerrendergate =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "set-sampler-render-gate" ),
+          [] { return new SSetSamplerRenderGateAction; } ),
+      true );
+
+// =================================================== assert-sampler-layer ===
+
+namespace {
+const QStringList &layerCheckNames()
+{
+    static const QStringList n = { QStringLiteral( "generation" ), QStringLiteral( "rendering" ),
+                                   QStringLiteral( "pending" ),    QStringLiteral( "installs" ),
+                                   QStringLiteral( "src" ),        QStringLiteral( "captureTrackEpoch" ),
+                                   QStringLiteral( "trackEpochAdvancedSince" ) };
+    return n;
+}
+
+// The TRACK's content epoch: the counter its pages are stamped with. A bump
+// makes every page stamped before it STALE (twcomponent.h: a page is stale
+// when page->contentEpoch < contentEpochNow()), so "the epoch advanced across
+// an install" is exactly "the install staled the track's pages", whether or
+// not any page happens to be cached at that moment.
+QHash<QString, uint64_t> &epochCaptures()
+{
+    static QHash<QString, uint64_t> c;
+    return c;
+}
+}  // namespace
+
+SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
+{
+    const QString where = QStringLiteral( "assert-sampler-layer: track %1 slot %2 layer %3" )
+                              .arg( trackPath_ ).arg( slotIndex_ ).arg( layer_ );
+    if( checks_.isEmpty() ) {
+        qWarning().noquote() << where << ": checks NOTHING; REJECTED";
+        return { false, nullptr };
+    }
+    QString why;
+    SSamplerProgram *prog = ssampler::programAt( project, pathRoot(), trackPath_, slotIndex_,
+                                                 false, &why );
+    if( !prog ) {
+        qWarning().noquote() << where << "FAIL no program:" << why;
+        return { false, nullptr };
+    }
+    const SSamplerProgram::LayerState st = prog->layerState( (std::uint32_t)layer_ );
+    const QString got = QStringLiteral( "generation=%1 rendering=%2 pending=%3 installs=%4 src=%5" )
+                            .arg( (qulonglong)st.installedGeneration )
+                            .arg( st.rendering() ? 1 : 0 )
+                            .arg( (qulonglong)st.pendingGeneration )
+                            .arg( st.installs )
+                            .arg( st.installedSrc );
+    QStringList fails;
+    auto num = [&]( const char *k, qulonglong have ) {
+        if( checks_.contains( QLatin1String( k ) ) &&
+            checks_.value( QLatin1String( k ) ).toULongLong() != have )
+            fails << QStringLiteral( "%1: want %2" ).arg( QLatin1String( k ),
+                                                          checks_.value( QLatin1String( k ) ) );
+    };
+    num( "generation", st.installedGeneration );
+    num( "rendering", st.rendering() ? 1 : 0 );
+    num( "pending", st.pendingGeneration );
+    num( "installs", (qulonglong)st.installs );
+    if( checks_.contains( QStringLiteral( "src" ) ) && checks_.value( "src" ) != st.installedSrc )
+        fails << QStringLiteral( "src: want \"%1\"" ).arg( checks_.value( "src" ) );
+    if( checks_.contains( QStringLiteral( "captureTrackEpoch" ) ) ||
+        checks_.contains( QStringLiteral( "trackEpochAdvancedSince" ) ) ) {
+        QString root = pathRoot();
+        SObject *track = splacements::laneBySpec( project, trackPath_, root );
+        std::shared_ptr<twComponent> comp = track ? track->getRootComponent() : nullptr;
+        if( !comp ) {
+            fails << QStringLiteral( "no track component at %1" ).arg( trackPath_ );
+        } else {
+            const uint64_t now = comp->contentEpochNow();
+            const QString since = checks_.value( QStringLiteral( "trackEpochAdvancedSince" ) );
+            if( !since.isEmpty() ) {
+                if( !epochCaptures().contains( since ) )
+                    fails << QStringLiteral( "trackEpochAdvancedSince: nothing captured as \"%1\"" )
+                                 .arg( since );
+                else if( now <= epochCaptures().value( since ) )
+                    fails << QStringLiteral( "trackEpochAdvancedSince \"%1\": the track's content "
+                                             "epoch is still %2 (captured %3): its pages were NOT "
+                                             "staled" )
+                                 .arg( since ).arg( now ).arg( epochCaptures().value( since ) );
+                else
+                    qInfo().noquote() << where << QStringLiteral( ": track epoch %1 -> %2" )
+                                                      .arg( epochCaptures().value( since ) ).arg( now );
+            }
+            const QString cap = checks_.value( QStringLiteral( "captureTrackEpoch" ) );
+            if( !cap.isEmpty() ) epochCaptures().insert( cap, now );
+        }
+    }
+    if( !fails.isEmpty() ) {
+        for( const QString &f : fails ) qWarning().noquote() << where << "FAIL" << f << "; got" << got;
+        return { false, nullptr };
+    }
+    qInfo().noquote() << where << ": OK (" << got << ")";
+    return { true, nullptr };
+}
+
+void SAssertSamplerLayerAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "layer", layer_ );
+    for( auto it = checks_.constBegin(); it != checks_.constEnd(); ++it )
+        elem.setAttribute( it.key(), it.value() );
+}
+
+bool SAssertSamplerLayerAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    slotIndex_ = elem.attribute( "slotIndex", "0" ).toInt();
+    layer_     = elem.attribute( "layer", "0" ).toInt();
+    checks_.clear();
+    for( const QString &k : layerCheckNames() )
+        if( elem.hasAttribute( k ) ) checks_.insert( k, elem.attribute( k ) );
+    return true;
+}
+
+QStringList SAssertSamplerLayerAction::knownAttributes() const
+{
+    return QStringList{ QStringLiteral( "trackPath" ), QStringLiteral( "slotIndex" ),
+                        QStringLiteral( "layer" ) } + layerCheckNames();
+}
+
+static const bool s_reg_assertsamplerlayer =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-sampler-layer" ),
+          [] { return new SAssertSamplerLayerAction; } ),
+      true );
+
+// =============================================== wait-sampler-generations ===
+
+SApplyResult SWaitSamplerGenerationsAction::apply( SProject *project )
+{
+    const QString where = QStringLiteral( "wait-sampler-generations: track %1 slot %2" )
+                              .arg( trackPath_ ).arg( slotIndex_ );
+    QString why;
+    SSamplerProgram *prog = ssampler::programAt( project, pathRoot(), trackPath_, slotIndex_,
+                                                 false, &why );
+    if( !prog ) {
+        qWarning().noquote() << where << ": REJECTED:" << why;
+        return { false, nullptr };
+    }
+    int     n  = 0;
+    qint64  ms = 0;
+    QString late;
+    if( !prog->settle( timeoutMs_, &n, &ms, &late ) ) {
+        qWarning().noquote() << where << "FAIL:" << late;
+        return { false, nullptr };
+    }
+    qInfo().noquote() << where << QStringLiteral( ": %1 generation(s) settled in %2 ms" )
+                                      .arg( n ).arg( ms );
+    return { true, nullptr };
+}
+
+void SWaitSamplerGenerationsAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "timeoutMs", timeoutMs_ );
+}
+
+bool SWaitSamplerGenerationsAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_ = elem.attribute( "trackPath", "0" );
+    slotIndex_ = elem.attribute( "slotIndex", "0" ).toInt();
+    timeoutMs_ = elem.attribute( "timeoutMs", "15000" ).toInt();
+    if( timeoutMs_ < 0 ) timeoutMs_ = 15000;
+    return true;
+}
+
+QStringList SWaitSamplerGenerationsAction::knownAttributes() const
+{
+    return { QStringLiteral( "trackPath" ), QStringLiteral( "slotIndex" ),
+             QStringLiteral( "timeoutMs" ) };
+}
+
+static const bool s_reg_waitsamplergenerations =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "wait-sampler-generations" ),
+          [] { return new SWaitSamplerGenerationsAction; } ),
       true );

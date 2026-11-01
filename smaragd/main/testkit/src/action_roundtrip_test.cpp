@@ -100,6 +100,16 @@ const Fixture kFixtures[] = {
     { "assert-sampler-program",
       "<assert-sampler-program trackPath='0' slotIndex='0' zones='2' nextId='6'"
       " equalsCaptured='a' ignoreNextId='1' installed='1'/>" },
+    // Proposal 56 Q2: the generation test verbs.
+    { "set-sampler-render-gate",
+      "<set-sampler-render-gate trackPath='0' slotIndex='0' layer='2' ready='false'"
+      " holdMs='400' settleBoundMs='500'/>" },
+    { "assert-sampler-layer",
+      "<assert-sampler-layer trackPath='0' slotIndex='0' layer='2' generation='2'"
+      " rendering='0' pending='0' installs='2' src='file:../test_stereo.wav'"
+      " captureTrackEpoch='e1' trackEpochAdvancedSince='e0'/>" },
+    { "wait-sampler-generations",
+      "<wait-sampler-generations trackPath='0' slotIndex='0' timeoutMs='5000'/>" },
     { "assert-audio-energy",
       "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"
       " startFrame='48000' frameCount='96000' channel='1'/>" },
@@ -1157,6 +1167,10 @@ const LaneRow kLaneRows[] = {
     { "restore-sampler-values", Accept, "as add-zone (the set verbs' inverse)" },
     { "select-zones",           Accept, "as add-zone; selection only" },
     { "assert-sampler-program", Accept, "read-only" },
+    // Proposal 56 Q2: aimed at a NassauDigital program as the Q1 verbs are.
+    { "set-sampler-render-gate", Accept, "a test seam on a NassauDigital program, which a system lane cannot hold" },
+    { "assert-sampler-layer",   Accept, "read-only" },
+    { "wait-sampler-generations", Accept, "waits on a NassauDigital program, which a system lane cannot hold" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
     { "remove-automation-lane", Accept, "the inverse of the above" },
     { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },

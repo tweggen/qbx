@@ -90,6 +90,11 @@ public:
     // Process-wide instance, set once by SApplication at startup.
     static void setInstance( SAppContext *ctx );
     static SAppContext &get();
+    // False in a unit test that runs model code without an application (and
+    // before SApplication's constructor). Code that only CONSULTS the runtime
+    // (proposal 56 Q2: "is a render running?") asks this first instead of
+    // tripping get()'s assert.
+    static bool hasInstance() { return instance_ != nullptr; }
 
 private:
     static SAppContext *instance_;

@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q2_generations">
+
+  <!-- PROPOSAL 56 Q2 (QBX-263): A GENERATION IS A STATE CHANGE, AND A RENDER
+       IS MADE OF ONE.
+
+       Q2.1  Installing a generation stales the track's pages: a render after
+             swapping a layer's sample hears the new sample FROM THE FIRST
+             FRAME. Asserted as BYTE IDENTITY with a golden rendered from a
+             session in which the new sample was the ONLY one ever installed,
+             plus the level of the first 1024 frames after the onset.
+       Q2.2  Two renders of one session, with a swap between them, are each
+             internally made of ONE generation (no page of the old sample
+             after a page of the new). Each render below spans 17 pages
+             (FRAME_CAPACITY 4096 frames, 72000 frames) and the one-shot
+             sounds in every page from the second on; each render equals the
+             single-generation golden of its sample byte for byte, so every
+             page is that generation's.
+
+       ======================================================= the fixture
+
+       A NassauDigital slot with ONE zone over every key, root 60, one-shot,
+       and ONE layer whose src is a FILE. The two samples are told apart by
+       level AND by channel balance (first 48000 frames, Python's wave module):
+
+           A = ../test_stereo.wav     ch0 rms 0.49999   ch1 rms 0.24999 (a sine)
+           B = ../test_autosaw.wav    ch0 rms 0.231     ch1 rms 0.231   (a saw)
+
+       Both carry energy from their first frame (test_sawtooth.wav does not:
+       its first 64 frames are zero, so "from the first frame" could not be
+       told from "a page late"). A note at tick 40 = frame 1000 (120 BPM, ppq
+       960), velocity 127, plays the layer at unity.
+
+       Ids: add-zone gives the zone id 1 and its layer id 2 (the core hands
+       out ids from nextId, zone first).
+
+       ===================================================== the goldens
+
+       ../goldens/sampler_q2_b.wav is the FIRST render of a session whose
+       layer was created with B and never swapped: generation 1, the only
+       generation that session ever had. A's is ../goldens/sampler_q0_note.wav
+       itself: Q0's render of the same zone and note through
+       sampler-test-install, and the model's file layer renders it BYTE FOR
+       BYTE (measured), which is also a check that a file layer's job decodes
+       exactly what the Q0 path read. Both fix the core's arithmetic (a core
+       bump that changes them says why, proposal 56 §4.1).
+
+       wait-sampler-generations is the run barrier's settle without a render:
+       the case waits for each install itself, so no render below has a
+       generation outstanding and none logs the barrier's "waited" line
+       (asserted). The barrier's own wait is sampler_q2_barrier. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="file:../test_stereo.wav"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" src="file:../test_stereo.wav"/>
+
+    <!-- ===================================================== generation 1: A
+         The session's only generation so far: this IS the A golden. -->
+    <render filename="sq2_a1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+    <assert-file-identical actual="sq2_a1.wav" expected="../goldens/sampler_q0_note.wav"/>
+    <assert-audio-energy filename="sq2_a1.wav" startFrame="0" frameCount="1000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <assert-audio-energy filename="sq2_a1.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.45" maxRms="0.55"/>
+
+    <!-- ========================================== Q2.1: swap to B, generation 2
+         THE STALE, asserted on its own. The edit itself publishes a new
+         program, which stales the track too; to see that the INSTALL stales
+         it, the job is HELD (until released) across the edit, the track's
+         content epoch is captured with the job still outstanding, and it must
+         have ADVANCED once the generation is installed. Every page stamped
+         before an advance is stale (twcomponent.h), so this is "the install
+         staled the track's pages" whether or not a page is cached. An offline
+         render cannot show it on its own: the run barrier invalidates every
+         instrument track from the render's start anyway (measured: the
+         sabotage that installs without the stale passes every render below). -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:../test_autosaw.wav"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="1" pending="2" captureTrackEpoch="beforeInstall"/>
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="true"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="2" src="file:../test_autosaw.wav"
+                          trackEpochAdvancedSince="beforeInstall"/>
+
+    <render filename="sq2_b2.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+    <!-- The WHOLE render is B's single-generation render: every frame,
+         every page. -->
+    <assert-file-identical actual="sq2_b2.wav" expected="../goldens/sampler_q2_b.wav"/>
+    <!-- ...silent before the note, and B's level from the onset on: the first
+         1024 frames are already the saw, not the sine a page late. -->
+    <assert-audio-energy filename="sq2_b2.wav" startFrame="0" frameCount="1000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <assert-audio-energy filename="sq2_b2.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.18" maxRms="0.28"/>
+    <assert-audio-energy filename="sq2_b2.wav" startFrame="1000" frameCount="1024"
+                         channel="0" minRms="0.45" maxRms="0.55" expectReject="true"/>
+    <!-- The two goldens must differ, or every identity above is vacuous. -->
+    <assert-file-identical actual="sq2_b2.wav" expected="../goldens/sampler_q0_note.wav"
+                           expectReject="true"/>
+
+    <!-- ============================== Q2.2: the first render is STILL all A
+         Two renders of one session with a swap between them: sq2_a1 (before)
+         and sq2_b2 (after). Each was asserted equal to its own sample's
+         single-generation golden above. -->
+
+    <!-- ================================ undo: the swap back is generation 3
+         The undo writes the old src back; that is a NEW buffer, so a NEW
+         generation (DESIGN §6.1 rule 1), and the render is A's again. -->
+    <undo/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          rendering="0" installs="3" src="file:../test_stereo.wav"/>
+    <render filename="sq2_a3.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="sq2_a3.wav" expected="../goldens/sampler_q0_note.wav"/>
+
+    <!-- ...and the redo re-applies the forward edit: generation 4, B again. -->
+    <redo/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="4"
+                          rendering="0" installs="4" src="file:../test_autosaw.wav"/>
+    <render filename="sq2_b4.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="sq2_b4.wav" expected="../goldens/sampler_q2_b.wav"/>
+
+    <!-- ===================== a rebuilt instance is born with the generation
+         2 -> 1 -> 2 channels re-instantiates the plugin (invariant 4): the new
+         instance gets generation 4 from the slot's initializer, not from a
+         new job. -->
+    <set-project-channels channels="1"/>
+    <set-project-channels channels="2"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="4"
+                          rendering="0" installs="4"/>
+    <render filename="sq2_b4r.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-file-identical actual="sq2_b4r.wav" expected="../goldens/sampler_q2_b.wav"/>
+
+    <!-- A src that is not a file installs nothing and REMOVES the buffer: the
+         instrument falls silent (the empty layer), a state change too. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
+                          rendering="0" installs="4"/>
+    <render filename="sq2_none.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq2_none.wav" startFrame="0" frameCount="72000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -94,4 +94,68 @@ private:
     QMap<QString, QString> checks_;   // every other attribute, by name
 };
 
+// Proposal 56 Q2 (QBX-263): the generation test verbs.
+
+// set-sampler-render-gate — the NEXT generation job of one layer holds before
+// it decodes (the set-render-gate pattern): until ready="true", or for holdMs.
+// settleBoundMs= also sets the offline render's settle bound for the rest of
+// the run (-1 restores SMARAGD_SAMPLER_SETTLE_MS / 30 s).
+class SSetSamplerRenderGateAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "set-sampler-render-gate" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    int     slotIndex_ = 0;
+    int     layer_     = 0;
+    bool    ready_     = false;
+    int     holdMs_    = -1;
+    bool    hasBound_  = false;
+    int     settleBoundMs_ = -1;
+};
+
+// assert-sampler-layer — one layer's generation state, as the model holds it:
+// generation= (installed), rendering= (1/0: a job outstanding),
+// pending= (the outstanding job's generation), installs= (how many
+// generations were installed), src= (what the installed buffer came from),
+// captureTrackEpoch= / trackEpochAdvancedSince= (the TRACK's content epoch,
+// remembered under a name / now above the remembered one: the install staled
+// every page stamped before it).
+class SAssertSamplerLayerAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-sampler-layer" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    int     slotIndex_ = 0;
+    int     layer_     = 0;
+    QMap<QString, QString> checks_;
+};
+
+// wait-sampler-generations — the settle the run barrier makes, without a
+// render: waits synchronously (bounded) for every outstanding job of one
+// slot's program and installs the results. Fails when one is still
+// outstanding after timeoutMs.
+class SWaitSamplerGenerationsAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "wait-sampler-generations" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    int     slotIndex_ = 0;
+    int     timeoutMs_ = 15000;
+};
+
 #endif

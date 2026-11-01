@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q2_barrier">
+
+  <!-- PROPOSAL 56 Q2 (QBX-263): AN OFFLINE RENDER WAITS AT THE RUN BARRIER.
+
+       Q2.3  An offline render started while a layer's render is outstanding
+             waits at the run barrier - its log line is asserted - and its
+             bytes equal a render started after the layer was ready (cmp).
+       Q2.q3 A settle that exceeds its bound refuses the render with a reason
+             a case can assert-log; released, the next render settles and
+             runs.
+
+       ======================================================= the fixture
+
+       sampler_q2_generations' fixture: one zone over every key, root 60,
+       one-shot, layer 2 a FILE, a note at frame 1000. A = ../test_stereo.wav
+       (a sine, ch0 0.5 / ch1 0.25), B = ../test_autosaw.wav (a saw, 0.231 on
+       both); the goldens are those case's single-generation renders.
+
+       set-sampler-render-gate holds the layer's NEXT generation job before it
+       decodes (the set-render-gate pattern): for holdMs, or until ready="true".
+       While it holds, the job is OUTSTANDING (assert-sampler-layer
+       rendering="1"), deterministically: nothing can install it.
+
+       The barrier's line is written ONLY when a generation was outstanding at
+       the render's start, so each render below that had nothing to wait for
+       asserts it ABSENT (maxCount="0"), and the one that waited asserts it
+       exactly once. assert-log reads the log of the action it follows. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1" rendering="0"/>
+
+    <!-- Ready from the start: nothing to wait for, no line. -->
+    <render filename="sb_a.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+    <assert-file-identical actual="sb_a.wav" expected="../goldens/sampler_q0_note.wav"/>
+
+    <!-- ============================================================ Q2.3
+         The swap's job HOLDS for 1500 ms before it decodes: long enough that
+         the one assertion between it and the render cannot outlast it on a
+         loaded box (the render must FIND it outstanding). -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false" holdMs="1500"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:../test_autosaw.wav"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="1" pending="2" src="file:../test_stereo.wav"/>
+
+    <!-- Started while generation 2 is outstanding: the barrier waits for it,
+         installs it, and says so, once. -->
+    <render filename="sb_waited.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="run barrier: waited" minCount="1" maxCount="1"/>
+    <assert-log contains="for 1 sampler generation(s) on track 0" minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="2" src="file:../test_autosaw.wav"/>
+
+    <!-- Started after the layer was ready: no wait, no line... -->
+    <render filename="sb_ready.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+
+    <!-- ...and THE SAME BYTES (cmp). -->
+    <assert-file-identical actual="sb_waited.wav" expected="sb_ready.wav"/>
+    <!-- It is B that both rendered, the single-generation B: the waited
+         render did not start on A and switch, and did not stay on A. -->
+    <assert-file-identical actual="sb_waited.wav" expected="../goldens/sampler_q2_b.wav"/>
+    <assert-file-identical actual="sb_waited.wav" expected="sb_a.wav" expectReject="true"/>
+
+    <!-- =========================================================== Q2.q3
+         A job that holds until RELEASED, and a 300 ms bound: the render is
+         REFUSED with the reason, and nothing is rendered or installed. -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false"
+                             settleBoundMs="300"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:../test_stereo.wav"/>
+    <render filename="sb_refused.wav" format="wav" quality="10" durationSec="1.5"
+            expectReject="true"/>
+    <assert-log contains="run barrier: REFUSED: NassauDigital on track 0: layer 2 generation 3 still rendering after 300 ms"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="1" pending="3"/>
+
+    <!-- Released, and the default bound back: the job finishes, and the next
+         render is A's single-generation render. (Whether that render still
+         finds it outstanding depends on the poll, so the line is not asserted
+         here; the waited case is Q2.3 above.) -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="true"
+                             settleBoundMs="-1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sb_released.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          rendering="0" installs="3"/>
+    <assert-file-identical actual="sb_released.wav" expected="../goldens/sampler_q0_note.wav"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
