@@ -111,3 +111,45 @@ static const bool s_reg_clicksoloindicator = (
         []{ return new SClickSoloIndicatorAction; }
     ), true
 );
+
+// ----------------------------------------------------- click-arm-indicator
+
+QStringList SClickArmIndicatorAction::knownAttributes() const
+{
+    return {};
+}
+
+SApplyResult SClickArmIndicatorAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = mainWindow();
+    if (!win) {
+        qWarning() << "click-arm-indicator: no main window";
+        return {false, nullptr};
+    }
+    // REJECTS when the command is disabled, for the reason the header gives
+    // under click-solo-indicator: the refusal has to be the seam's, or the
+    // assertion "the badge does nothing when nothing is armed" would hold
+    // over a build that greys nothing.
+    if (!win->clickArmIndicator()) {
+        qWarning() << "click-arm-indicator: the command is disabled "
+                      "(nothing is armed)";
+        return {false, nullptr};
+    }
+    return {true, nullptr};
+}
+
+void SClickArmIndicatorAction::writeXml(QDomElement & /*elem*/) const
+{
+}
+
+bool SClickArmIndicatorAction::readXml(const QDomElement & /*elem*/, int /*version*/)
+{
+    return true;
+}
+
+static const bool s_reg_clickarmindicator = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("click-arm-indicator"),
+        []{ return new SClickArmIndicatorAction; }
+    ), true
+);

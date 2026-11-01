@@ -1382,6 +1382,10 @@ void SApplication::keyboardNoteOff( int key, int channel )
 void SApplication::liveLanesChanged()
 {
     if( liveMonitor_ ) liveMonitor_->refresh();
+    // AFTER the rebuild, never before: a reader that asks the model what is
+    // armed must see the state the rebuild acted on, not the one it was about
+    // to replace. See the signal's own comment for why it says "may".
+    emit liveLanesMayHaveChanged();
 }
 
 void SApplication::setPlaybackRunning( bool play )

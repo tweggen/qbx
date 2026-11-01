@@ -2277,3 +2277,58 @@ nothing alone. Not gated: `locatorAdvanced` under real playback.
   is deliberately out of scope: a mute is local and visible on its own lane,
   and a "something is muted" badge would light nearly always and teach the
   user to ignore that corner of the window.
+
+## inv. 70a — ...and the same badge says a track is ARMED, and where
+
+Asked for by the author beside inv. 70: "the same display for at least one
+track is armed would also come handy". It IS the same display, so everything
+above holds one flag over — and the mechanism is shared rather than copied.
+
+- **ONE MECHANISM, `SLaneBadge`.** The counting, the root naming
+  (`splacements::specOf()` paired with `rootHolding()`), the on-screen
+  question, the explicit hide, the Highlight-role colour and the describe()
+  shape live there; `SSoloIndicator` and `SArmIndicator` each supply only
+  their lane set, their word, their three tooltip sentences and their
+  describe() PREFIX. A second copy of the root-naming pair is exactly what
+  ssolorules.h's header warns about, and it is the part of a badge that can be
+  subtly wrong.
+- **WHY AN ARM EARNS A BADGE.** Since QBX-260 the arm is what puts a lane in
+  the live set: an armed track whose monitor is on has its input open and its
+  instrument live. "What is armed" therefore stopped being a question only the
+  Record button cares about, and an armed lane can sit in an arrangement tab
+  nobody has open — inv. 70's case, one flag over.
+- **AN INERT ARM STILL COUNTS.** A project saved with a track armed comes back
+  armed but NOT live (QBX-260 design D9 keeps a load from opening the
+  microphone). `sarm::armedLanesInProject()` reports it anyway, because that
+  is what the track's own Arm button shows and a badge disagreeing with the
+  button would be the worse lie. The tooltip states what an arm MEANS rather
+  than claiming a device state the badge does not read.
+- **`sarmcensus.h` IS A SIBLING OF `ssolorules.h`, NOT A SHARED WALK.** Solo's
+  walk lives with the audibility RULE because solo's effect IS that rule (in
+  `global` scope it follows the reference graph, not the lane tree). An arm
+  never travels through a placement — what is armed is the lane the user armed
+  — so folding the two together would put a plain flag behind a doorway marked
+  "here be solo scope".
+- **ONE SIGNAL, AND IT IS A SUPERSET.** There is no per-project arm signal to
+  wire: `arm-track` is the only writer of the flag (every button and every
+  script goes through the verb) and it ends in
+  `SAppContext::liveLanesChanged()`. `SApplication` raises
+  `liveLanesMayHaveChanged()` there, AFTER the rebuild, and the badge
+  recomputes — "may", because the same call carries an input or monitor
+  change. `SApplication` outlives every project, so the connection is made
+  once; the tab signal moves BOTH badges.
+- **THE DISARM IS ROOTED PER LANE, NEVER PER TAB**, system lanes pre-flighted
+  out, one `SCompositeAction` for one undo step — `clearAllSolos()`'s three
+  rules, for its three reasons.
+- Gated by `arm_indicator_status_bar.qxa`: absent at rest; two arms at
+  DIFFERENT indices in different roots; `armRoots=Arrangement;Drums` and
+  `armOnScreen=0` with the master tab active; the painted text
+  (`ARM · 2 lanes`); the solo badge unmoved by any of it (a shared base that
+  leaked state between the two would show up there); the click; the seam's own
+  refusal afterwards; and one undo restoring exactly those two flags. Watched
+  failing: dropping the macro's per-lane root fails eight assertions, four of
+  them the post-click ones; walking only the master root in the census fails
+  the count and the list.
+- NOT GATED: the colour and the tooltip text, for inv. 70's reasons. RECORDING
+  is deliberately not this badge: that is a transport state the transport bar
+  owns, while this is the SET of lanes a pass would capture into.
