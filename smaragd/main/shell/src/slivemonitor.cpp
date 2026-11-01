@@ -51,6 +51,19 @@ frozenRootsOf( const std::shared_ptr<const twLivePlan> &plan )
     return out;
 }
 
+// QBX-260's policy, read where every other per-user option this file consults
+// is read, and converted in ONE place so the two computeClosure call sites
+// cannot disagree about what the INI says. An unrecognised value is
+// `armed-only`, the default (SOpt::MonitorArming).
+sliveplan::MonitorArming monitorArmingOption()
+{
+    const QString v = SSettings::instance()
+        .value( SOpt::MonitorArming, SOpt::def( SOpt::MonitorArming ) )
+        .toString();
+    return v == QLatin1String( "any" ) ? sliveplan::MonitorArming::Any
+                                       : sliveplan::MonitorArming::ArmedOnly;
+}
+
 }  // namespace
 
 SLiveMonitor::SLiveMonitor( SApplication *app )
@@ -870,10 +883,12 @@ void SLiveMonitor::refresh()
     const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
                                                   : app_->isPlaying();
     SLiveClosure want = sliveplan::computeClosure(
-        mixer, playing, app_->isRecordingActive(), inertlyArmed_ );
-    // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9). The
-    // metronome owns no track, so it joins as a FLAG and leaves the whole
-    // arm/disarm protocol below untouched.
+        mixer, playing, app_->isRecordingActive(), inertlyArmed_,
+        monitorArmingOption() );
+    // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9), where
+    // the monitor half needs `mixer/monitorArming=any` since QBX-260 and is
+    // empty on the default. The metronome owns no track, so it joins as a
+    // FLAG and leaves the whole arm/disarm protocol below untouched.
     const bool clickWhileRecording = SSettings::instance()
         .value( SOpt::ClickWhileRecording,
                 SOpt::def( SOpt::ClickWhileRecording ) ).toBool();
@@ -1285,8 +1300,12 @@ void SLiveMonitor::projectChanged()
     // arms it in THIS session, which is what `arm-track` clears.
     inertlyArmed_.clear();
     if( SStdMixer *mixer = rootMixer() ) {
-        const SLiveClosure all =
-            sliveplan::computeClosure( mixer, false, false, {} );
+        // THE REAL POLICY, not a fixed one: this asks "which lanes would
+        // monitor", and seeding the inert set from a DIFFERENT rule than the
+        // one refresh() will apply is how a loaded project's arm would slip
+        // past design D9 under one of the two policies and not the other.
+        const SLiveClosure all = sliveplan::computeClosure(
+            mixer, false, false, {}, monitorArmingOption() );
         for( STrack *t : all.sources )
             if( t->isArmedForRecording() ) inertlyArmed_.push_back( t );
     }

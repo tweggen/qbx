@@ -166,7 +166,27 @@ Known debt: there is no UI for the per-track MIDI port — the verb and the seri
 Known debt: SApplication is the app-wide service locator — the SCC hub;
 Phase 6 splits it into narrow context interfaces.
 
-## The live lane (proposal 21 L1b, design D3/D4/D5/D9)
+## The live lane (proposal 21 L1b, design D3/D4/D5/D9, narrowed by QBX-260)
+
+11a. **A MONITOR MODE IS A CONFIGURATION OF THE LANE, NOT A SWITCH THAT OPENS
+    AN INPUT** (QBX-260). D9's live set was
+    `{armed && monitorEffective} u {monitorMode == on}`; the second term alone
+    took a lane's chain live-owned, published a plan and dropped the lane from
+    the frozen sum, so setting a preference stopped the lane's own clips. The
+    per-user `SOpt::MonitorArming` (`mixer/monitorArming`) now governs that
+    term: `armed-only`, the default, drops it entirely and leaves
+    `{armed && monitorEffective}`; `any` restores it. `monitorEffective`
+    already answers true for mode On, so NOTHING about an armed lane differs
+    between the two policies — the policy decides only the UNARMED case.
+
+    The string is converted to `sliveplan::MonitorArming` in one place
+    (`monitorArmingOption()` in slivemonitor.cpp) and reaches
+    `sliveplan::computeClosure` as a parameter, the discipline `metronomeWanted`
+    follows for `ClickWhileRecording`. `SApplication` watches
+    `SSettings::changed` for the key and raises `liveLanesChanged()`: the
+    policy changes the live SET rather than a property of a member, so
+    `planSignature()` cannot see it and the `pumpEdits()` tick would never
+    republish. Gate: `monitor_needs_arm`.
 
 12. **`SLiveMonitor` is a sibling of `SMidiOutPump` and `SAutomationRecorder`,
     and it OWNS THE ARM/DISARM ORDERING.** Constructed with the app, destroyed
@@ -249,9 +269,13 @@ Phase 6 splits it into narrow context interfaces.
     reaches `publishPlan()` twice: through the full arm/disarm path, and
     through the `sameSet` fast path taken whenever the closure MEMBERSHIP did
     not move. The check lived only on the first, and a track whose monitor mode
-    is **on** is in the live set BEFORE it is armed — so arming it never
+    is **on** was in the live set BEFORE it was armed — so arming it never
     changed the membership, the fast path was taken, and the master shape was
-    never consulted at all. Under the refuse-everything rule this replaced,
+    never consulted at all. (QBX-260 narrowed the live set, so under the
+    default `mixer/monitorArming=armed-only` arming such a track now DOES move
+    the membership. The check still belongs on both routes: `any` restores the
+    old rule, and the fast path is reached by every fader, insert and transport
+    edge regardless of the policy.) Under the refuse-everything rule this replaced,
     that meant a limiter dropped on the master while a track was monitoring
     silently kept the LINEAR split: the RT went on adding a frozen root page
     the master had processed to a ring that had bypassed it — the doubling

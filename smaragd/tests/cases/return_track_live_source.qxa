@@ -43,7 +43,9 @@
     <!-- ============ ARMED: announced once, still wired ================== -->
     <arm-track trackPath="0" armed="true"/>
     <assert-log contains="[RETURN] 'Kit Aux 1' is silent while its source 'Kit' is armed"/>
-    <!-- Monitor "on" re-builds the plan in the same arm: no second line. -->
+    <!-- The ARM is what put the lane in the live set and logged the line
+         above (QBX-260). Monitor "on" re-builds the same plan inside the same
+         arm, so there is no second line. -->
     <set-monitor-mode trackPath="0" mode="on"/>
     <assert-log contains="is silent while its source" minCount="0" maxCount="0"/>
     <assert-return-track trackPath="1" routed="1" mask="2"/>

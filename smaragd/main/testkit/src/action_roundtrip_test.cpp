@@ -683,7 +683,8 @@ const Fixture kFixtures[] = {
     { "dump-midi-capture",
       "<dump-midi-capture filename='midi_out.txt' minCount='6'/>" },
     { "assert-mixing-options",
-      "<assert-mixing-options contains='soloScope=' soloScope='global'/>" },
+      "<assert-mixing-options contains='soloScope=' soloScope='global'"
+      " monitorArming='armed-only'/>" },
     { "assert-midi-options",
       "<assert-midi-options contains='backend=capture' absent='virtual=no'"
       " outputPorts='1' inputPorts='1'/>" },

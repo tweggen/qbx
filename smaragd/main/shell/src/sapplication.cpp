@@ -1023,6 +1023,15 @@ SApplication::SApplication( int &argc, char **argv )
                       this, [this]( const QString &key ) {
                           if( key == QLatin1String( SOpt::SoloScope ) )
                               pushSoloScope();
+                          // QBX-260: the policy changes the live SET, not a
+                          // property of a member, so planSignature() cannot
+                          // see it and the 40 ms pumpEdits() tick will not
+                          // republish. refresh() is the one rebuild trigger;
+                          // it compares the closure and rewires only on a
+                          // difference, so a key written with nothing armed
+                          // costs one walk of the lane tree.
+                          if( key == QLatin1String( SOpt::MonitorArming ) )
+                              liveLanesChanged();
                       } );
 
     // Restore the audio output device chosen in a previous session.

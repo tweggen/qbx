@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-260: A MONITOR MODE IS A CONFIGURATION, NOT A SWITCH THAT OPENS AN INPUT.
+
+  THE BUG. The live set was `{armed && monitorEffective} u {monitorMode ==
+  on}`, so the second term alone put a lane in the live closure. Touching a
+  track's monitor setting therefore took its plugin chain live-owned,
+  published a live plan and excluded the lane from the frozen sum with no arm
+  anywhere in the gesture. What the user hears is the lane's own clips going
+  quiet, or sounding through a pump they never asked to start; what the user
+  did was set a preference.
+
+  WHAT IS GATED. `SOpt::MonitorArming` (`mixer/monitorArming`), per-user,
+  default `armed-only`: the monitor mode says what the lane will do once it is
+  ARMED and nothing more. `any` adds the old term back for whoever wants it.
+  Both arms are visited here, because "never live" and "live only when armed"
+  are different claims and the first one passes on a build that has lost the
+  live path altogether.
+
+  HOW LIVE-OWNERSHIP IS READ. `assert-meter` freezes the page at a position
+  ITSELF, with no transport and no scheduler, and runs the production
+  twLevelProbe on it. A live-owned chain answers such an arrival with SILENCE
+  and counts it (`twPluginSlotProcessor::liveOwnedRefusals`) rather than
+  interleaving a second position stream into a stateful plugin. So the probe
+  reads the sequenced note when the lane is NOT live-owned and exactly 0 when
+  it is, which is the same seam live_instrument_ownership rests on and the
+  numbers below are its measured ones (0.556769 +-4 %).
+
+  `assert-render-policy liveOwnedRefusals="0"` at stage 1 is the second,
+  independent witness: a refusal cannot be counted if nothing is live-owned.
+  It is asserted only there, because stages 2 and 3 are SUPPOSED to refuse.
+
+  `mixer/monitorArming` IS THE KEY THIS CASE WRITES, so it is RUN_SERIAL and
+  it restores `armed-only` (SOpt::def()) at the end, the discipline the four
+  `mixer/soloScope` cases already follow.
+-->
+<SActionScript version="1" name="monitor_needs_arm">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <!-- A SEQUENCED note, so the frozen page at 0.5 s holds something that
+         can be missing while the chain is live-owned and present when it is
+         not. Without it "silence while live" would be unfalsifiable. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Seq"/>
+    <add-note clip="0,0" tick="0" dur="3840" key="60" velocity="100" channel="0"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- THE CONTROL, before any monitor mode: the probe reads the
+         arrangement. -->
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- ===== 1. THE DEFAULT: monitor on, NOT armed, so nothing is live ===== -->
+    <!-- Unwritten: this asserts the DEFAULT the option ships with, which is
+         the half of the ticket a value written by the case cannot speak to. -->
+    <assert-mixing-options monitorArming="armed-only"/>
+
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <wait-ms ms="400"/>
+
+    <!-- THE ASSERTION THE CASE EXISTS FOR. On the old rule this reads 0,
+         because monitor "on" alone owned the chain. -->
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0.53450" maxRms="0.57904"/>
+    <!-- ...and no freeze was ever turned away, which cannot be true of a
+         live-owned chain. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+
+    <!-- ===== 2. THE DISCRIMINATOR: arm it, and the mode takes effect ===== -->
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="400"/>
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0" maxRms="0.0005"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="64"
+                          minLiveOwnedRefusals="1"/>
+
+    <!-- Past the 250 ms disarm tail, so the chain really has been handed
+         back and the pages frozen during the tail have been staled. -->
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="900"/>
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0.53450" maxRms="0.57904"/>
+
+    <!-- ===== 3. THE OTHER ARM OF THE OPTION: `any` restores the old rule == -->
+    <!-- The monitor mode is still "on" and the track is still unarmed, so the
+         ONLY thing that changes here is the option. SApplication watches
+         SSettings::changed for the key and refreshes the live set, which is
+         the wiring this stage gates: planSignature() cannot see a membership
+         change, so without that connection the plan would not be rebuilt. -->
+    <set-option key="mixer/monitorArming" value="any"/>
+    <assert-mixing-options monitorArming="any"/>
+    <wait-ms ms="400"/>
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0" maxRms="0.0005"/>
+
+    <!-- ===== THE RESTORE, and it is also a third reading of the rule ===== -->
+    <set-option key="mixer/monitorArming" value="armed-only"/>
+    <assert-mixing-options monitorArming="armed-only"/>
+    <wait-ms ms="900"/>
+    <assert-meter trackPath="0" position="24000"
+                  minRms="0.53450" maxRms="0.57904"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

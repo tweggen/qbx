@@ -469,8 +469,31 @@ static const bool s_reg_mixer_strip_menu = (
 
 QStringList SAssertMixingOptionsAction::knownAttributes() const
 {
-    return { QStringLiteral( "contains" ), QStringLiteral( "soloScope" ) };
+    return { QStringLiteral( "contains" ), QStringLiteral( "soloScope" ),
+             QStringLiteral( "monitorArming" ) };
 }
+
+namespace {
+
+// One FIELD of a `a=1|b=2` dump, or a null QString when the field is absent --
+// which is itself a failure to report, because a field that stopped being
+// dumped must not read as a field that agrees.
+//
+// NOT an overload of this file's own `fieldOf()` thirty lines up: that one
+// returns the field as an `int` for the pixel assertions, and two functions
+// differing only in return type are not an overload set -- the compiler
+// rejects the second as an "ambiguating new declaration". Hence a name of its
+// own rather than a signature the language cannot express.
+QString mixingFieldOf( const QString &desc, const QString &key )
+{
+    for( const QString &part : desc.split( QLatin1Char( '|' ) ) ) {
+        if( part.startsWith( key + QLatin1Char( '=' ) ) )
+            return part.mid( key.size() + 1 );
+    }
+    return QString();
+}
+
+}  // namespace
 
 SApplyResult SAssertMixingOptionsAction::apply( SProject * )
 {
@@ -481,8 +504,11 @@ SApplyResult SAssertMixingOptionsAction::apply( SProject * )
     if( !contains_.isEmpty() && !desc.contains( contains_ ) )
         problems << QString( "expected to contain '%1'" ).arg( contains_ );
     if( !soloScope_.isEmpty()
-        && desc != QStringLiteral( "soloScope=" ) + soloScope_ )
+        && mixingFieldOf( desc, QStringLiteral( "soloScope" ) ) != soloScope_ )
         problems << QString( "expected soloScope=%1" ).arg( soloScope_ );
+    if( !monitorArming_.isEmpty()
+        && mixingFieldOf( desc, QStringLiteral( "monitorArming" ) ) != monitorArming_ )
+        problems << QString( "expected monitorArming=%1" ).arg( monitorArming_ );
 
     if( !problems.isEmpty() ) {
         qWarning().noquote() << "assert-mixing-options: FAILED -"
@@ -497,16 +523,20 @@ void SAssertMixingOptionsAction::writeXml( QDomElement &elem ) const
 {
     if( !contains_.isEmpty() )  elem.setAttribute( "contains", contains_ );
     if( !soloScope_.isEmpty() ) elem.setAttribute( "soloScope", soloScope_ );
+    if( !monitorArming_.isEmpty() )
+        elem.setAttribute( "monitorArming", monitorArming_ );
 }
 
 bool SAssertMixingOptionsAction::readXml( const QDomElement &elem, int )
 {
-    contains_  = elem.attribute( "contains", QString() );
-    soloScope_ = elem.attribute( "soloScope", QString() );
-    // One of the two, or the verb asserts nothing at all -- the
+    contains_      = elem.attribute( "contains", QString() );
+    soloScope_     = elem.attribute( "soloScope", QString() );
+    monitorArming_ = elem.attribute( "monitorArming", QString() );
+    // One of the three, or the verb asserts nothing at all -- the
     // assert-recorded-clip minClips lesson (an attribute nobody reads is a
     // check that is not there).
-    return !contains_.isEmpty() || !soloScope_.isEmpty();
+    return !contains_.isEmpty() || !soloScope_.isEmpty()
+           || !monitorArming_.isEmpty();
 }
 
 static const bool s_reg_assert_mixing_options = (

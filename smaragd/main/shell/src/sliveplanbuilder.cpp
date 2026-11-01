@@ -131,7 +131,8 @@ STrack *midiConsumerFor( SObject *rootMixer, STrack *t )
 }
 
 SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
-                             const std::vector<const STrack *> &inertlyArmed )
+                             const std::vector<const STrack *> &inertlyArmed,
+                             MonitorArming arming )
 {
     SLiveClosure out;
     if( !rootMixer ) return out;
@@ -139,8 +140,9 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
     TreeInfo info;
     walk( rootMixer, nullptr, 0, info );
 
-    // 1. The SOURCES: (armed AND monitorEffective) OR monitorMode == on,
-    //    intersected with "has an input this phase can render".
+    // 1. The SOURCES: (armed AND monitorEffective), plus monitorMode == on
+    //    when the policy is Any (QBX-260), intersected with "has an input
+    //    this phase can render".
     //
     // AN AUDIO INPUT MAKES ITS OWN TRACK A SOURCE. A MIDI INPUT MAKES ITS
     // CONSUMER ONE (design D4, section 3 case (iii)): the notes are heard on
@@ -156,8 +158,15 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
             std::find( inertlyArmed.begin(), inertlyArmed.end(),
                        (const STrack *) t ) != inertlyArmed.end();
         const bool armed = t->isArmedForRecording() && !inert;
+        // QBX-260. THE SECOND TERM IS THE ONE THE POLICY GOVERNS, and it is
+        // the only one: `monitorEffective` answers true for mode On already,
+        // so an ARMED lane behaves identically under both policies and what
+        // `ArmedOnly` drops is exactly the UNARMED monitor-on case -- the one
+        // route by which touching a monitor mode opened an input and took a
+        // lane live-owned with no arm anywhere in the gesture.
         const bool want  = ( armed && t->monitorEffective( playing, recording ) )
-                           || t->getMonitorMode() == STrack::MonitorMode::On;
+                           || ( arming == MonitorArming::Any
+                                && t->getMonitorMode() == STrack::MonitorMode::On );
         if( !want ) continue;
         if( audio ) {
             out.sources.push_back( t );

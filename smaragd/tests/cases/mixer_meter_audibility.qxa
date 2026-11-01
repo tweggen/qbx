@@ -71,9 +71,12 @@
          shows the monitor's pre-FX input peak.
 
          `Other` is armed with the paced file: input this case is registered
-         with. `monitor="on"` alone is what puts a track in the live set (the
-         set is {armed and monitorEffective} union {monitor == on}), which is
-         also why the DISARM below has to drop the mode back to auto. -->
+         with. The set is {armed and monitorEffective}, so the ARM is what puts
+         the track in it and the mode only says what it does once armed
+         (QBX-260; monitor "on" alone did it before, under what is now
+         `mixer/monitorArming=any`). The DISARM below drops the mode back to
+         auto as well, which is no longer load-bearing and is kept because it
+         restores the track exactly as it was found. -->
 
     <set-track-input trackPath="1" input="audio:file:3"/>
     <arm-track trackPath="1" armed="true"/>

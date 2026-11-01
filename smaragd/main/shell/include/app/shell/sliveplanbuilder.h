@@ -104,14 +104,33 @@ namespace sliveplan {
 twlive::twMasterChainState masterChainStateOf( const SStdMixer *mixer );
 
 /**
- * The live set: `{armed && monitorEffective} ∪ {monitorMode == on}`, closed
- * upward to the master (design D9).
+ * Does a lane's monitor mode take effect on its own, or only once the lane is
+ * ARMED (QBX-260)? The per-user `SOpt::MonitorArming` option, as an enum, so
+ * nothing below the shell parses the stored string.
+ */
+enum class MonitorArming {
+    ArmedOnly,   ///< `{armed && monitorEffective}` alone. The default.
+    Any,         ///< ...plus `{monitorMode == on}`. The pre-QBX-260 rule.
+};
+
+/**
+ * The live set: `{armed && monitorEffective}`, plus `{monitorMode == on}`
+ * when `arming` is `Any`, closed upward to the master (design D9, narrowed by
+ * QBX-260).
  *
  * `inertlyArmed` is the set of tracks whose `ArmedForRecording` came out of a
  * PROJECT FILE and has not been touched in this session. Design D9 says arm
  * "never starts monitoring on load", so those are not sources — a loaded
  * project must not open the developer's microphone — while the flag itself
  * still round-trips through the file untouched.
+ *
+ * `arming` is the per-user `SOpt::MonitorArming` policy. Under the default
+ * `ArmedOnly` a monitor mode is inert until the lane is armed: the second
+ * term is dropped entirely, which is the only route by which a lane used to
+ * become live -- opening an input, taking its plugins live-owned, publishing
+ * a plan -- without the user ever arming it. `monitorEffective` already
+ * answers true for mode On, so the armed half still covers "armed, monitor
+ * on"; nothing about an ARMED lane changes.
  *
  * Since L2 both halves are live. An `audio:` track is a source in its own
  * right; a `midi:`/`keyboard` track contributes its CONSUMER (design D4) —
@@ -120,7 +139,8 @@ twlive::twMasterChainState masterChainStateOf( const SStdMixer *mixer );
  * still not a source: excluding it would trade the arrangement for silence.
  */
 SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
-                             const std::vector<const STrack *> &inertlyArmed );
+                             const std::vector<const STrack *> &inertlyArmed,
+                             MonitorArming arming );
 
 /**
  * Should the click be in the plan right now (proposal 21 L5, extended by the

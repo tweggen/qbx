@@ -261,6 +261,20 @@ inline constexpr const char *MixerSections        = "mixer/sections";
 // SProject::setSoloScope() -- `app/model`, where the audibility rule lives,
 // may not read SSettings. An unrecognised value reads as `global`.
 inline constexpr const char *SoloScope            = "mixer/soloScope";
+// WHETHER A MONITOR MODE NEEDS THE RECORD ARM (QBX-260): "armed-only" | "any".
+//
+// `armed-only` (the default) reads the per-track monitor mode as a
+// CONFIGURATION of the lane -- what it will do once it is armed -- so the live
+// set is `{armed && monitorEffective}` and nothing opens an input, holds a
+// plugin live-owned or publishes a live plan until the user arms. `any` adds
+// the `{monitorMode == on}` term back, which is exactly the rule qbx had
+// before the option. An unrecognised value reads as `armed-only`.
+//
+// It is converted to `sliveplan::MonitorArming` in ONE place
+// (`sMonitorArming()` in slivemonitor.cpp), the discipline SoloScope follows:
+// a second spelling of the comparison is a second chance for two readers to
+// disagree about what the INI says.
+inline constexpr const char *MonitorArming        = "mixer/monitorArming";
 
 // MEDIA BROWSER (proposal 38 gate 2, design §B.4). Per-user and machine-local
 // for the reason every path in this table is: where this person keeps their

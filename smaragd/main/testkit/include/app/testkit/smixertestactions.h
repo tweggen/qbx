@@ -220,8 +220,14 @@ private:
 // a .qxa (or another app session) wrote the key does not see a stale default
 // and write it back.
 //
-//   contains     a substring of the describe() dump
-//   soloScope    the exact value, "global" | "arrangement"
+//   contains        a substring of the describe() dump
+//   soloScope       the exact value, "global" | "arrangement"
+//   monitorArming   the exact value, "armed-only" | "any" (QBX-260)
+//
+// Each named attribute matches its own FIELD of the dump rather than the whole
+// string. It was an equality against the whole dump while there was one field,
+// which is a check that breaks the moment a second is appended -- and
+// appending is the rule here (SOptionsDialog::describeMixingPage).
 class SAssertMixingOptionsAction : public SAction
 {
 public:
@@ -237,6 +243,7 @@ public:
 private:
     QString contains_;
     QString soloScope_;
+    QString monitorArming_;
 };
 
 #endif // SMIXERTESTACTIONS_H

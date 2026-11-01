@@ -16,12 +16,17 @@
   test is gone. The decision lives in reconnectTracksToMixer's send half, so
   that is where it is measured.
 
-  THE LIVE PLAN IS BUILT AT set-monitor-mode, NOT AT arm-track and not at the
-  transport edge. The live set is {armed && monitorEffective} U {monitor ==
-  on}, so monitor "on" ALONE puts a lane in it. Proposal 45 M7 recorded that
-  same fact the hard way - two of its three plausible assert-log placements
-  read an empty window - and it is why the assertions here sit immediately
-  after the monitor verb rather than after the arm.
+  THE LIVE PLAN IS BUILT AT THE ARM. Since QBX-260 the live set is
+  {armed && monitorEffective} and monitor "on" alone puts a lane in nothing,
+  so the arm below is what makes this lane live-owned and the monitor verb
+  that follows only rebuilds the same plan. (It was the other way round, and
+  the assertions sat immediately after the monitor verb for that reason;
+  proposal 45 M7 recorded the same fact the hard way, two of its three
+  plausible assert-log placements reading an empty window.) The assertions
+  here are not assert-logs and bite wherever the plan was built, since the
+  lane is live-owned across both actions - but the ORDER is kept deliberately:
+  arm first, monitor second, which is both what a user does and the order in
+  which the condition under test now arises.
 
   NOT GATED HERE: what the user HEARS while monitoring. That is the dropout
   the decision accepts, and measuring it needs the paced file: input and a
@@ -52,9 +57,9 @@
     <assert-send-inputs lane="Reverb" index="0" level="-6"/>
 
     <!-- ============ D9: LIVE-OWNED, SO THE BUS STOPS READING IT ========= -->
-    <!-- monitor "on" alone makes the lane live-owned; the arm is here so the
-         shape matches what a user actually does. The input REMAINS (the tap
-         is still in the model, the count does not move) and is UNWIRED. -->
+    <!-- THE ARM makes the lane live-owned (QBX-260); monitor "on" after it
+         says what the lane does now that it is armed. The input REMAINS (the
+         tap is still in the model, the count does not move) and is UNWIRED. -->
 
     <arm-track trackPath="0" armed="true"/>
     <set-monitor-mode trackPath="0" mode="on"/>
