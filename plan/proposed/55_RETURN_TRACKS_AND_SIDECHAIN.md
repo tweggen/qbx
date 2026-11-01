@@ -964,6 +964,87 @@ D5's model half, D6 (first half), D7's key edge, D8 (`<sidechain>`).
 - **AC4.6** Depth: the deepest case of the suite plans every dep — no node
   dropped by the 64 guard (T7) — asserted from the revalidator's counters.
 
+**M4 as built (2026-11-01, QBX-262).** Every AC holds as written, at the
+closed form; what the build found that this document did not say:
+
+- **Measured.** AC4.1 (`sidechain_duck_from_return`), B's RMS inside the key
+  window `[28000, 116000)`: **0.124997** on channel 0 and **0.062499** on
+  channel 1, against a dry **0.499987** / **0.24999** before and after the key
+  (`[0, 23000)`, `[124000, 144000)`): out/dry **0.25000** on both channels,
+  the band ±1 %. Cleared, and again with the key clip removed: **0.499987** /
+  **0.24999** inside the key window. AC4.2: soloing B renders byte-identical
+  to the unsoloed render; `post` with R's fader at −1000 dB measures dry
+  (0.499987), `pre` ducks (0.124997, byte-identical to the reference). AC4.3:
+  after moving the key clip from frame 24000 to 72000, `[28000, 70000)` is
+  dry and `[76000, 144000)` ducked. AC4.4: reorder, remove + undo, the key
+  lane deleted + undo, and save + reload each render byte-identical to the
+  reference; the deleted key lane renders dry. AC4.5: the four cycle shapes
+  are refused at the verb with distinct messages, and the hand-edited
+  `tests/sidechain_cycle.qxp` renders **2A = 0.461913** with exactly the key
+  edge dropped, and **A = 0.230956** once the other edge is cleared and the
+  freed key edge wired. AC4.6: see the depth note below.
+- **The key lives on the SLOT, the seams on the TRACK.** `SPluginSlot` holds
+  the source (`QPointer<SObject>`), the tap point and a "set" flag (a source
+  that did not resolve on load keeps the slot keyed with a null source, so it
+  fails closed and re-saves as `source='0'`, as D8 asks of the aux source).
+  `objects/mixer` may not name tw/plugins, so the pass calls
+  `STrack::wireSlotKey()`, which calls `SPluginSlot::applyKey()`, which calls
+  M3's `twPluginInsert::setKeySource()` with `STrack::sendTapComponent( pre )`
+  as M3 predicted.
+- **The wiring is IDEMPOTENT, and it has to be.** M3 made a key change stale
+  the insert AND reset the plugin, so a pass that re-asserted port 1
+  unconditionally (the return half re-points its tap on every pass) would
+  re-render every keyed slot from its first frame on every solo toggle.
+  `applyKey()` calls `setKeySource()` only when the plug does not already read
+  that producer at that width, and holds the producer while it is wired
+  (`keyHold_`), so a key lane deleted off the undo stack cannot leave port 1
+  plugged into a dead latch (47's unwireSendLane lesson).
+- **A key change needs `invalidateRenderPath()` on the keyed track**, M2's
+  lesson for the aux edge paid again: `setKeySource()` stales the insert only,
+  and the chain, fader, rewire, folders and master above it would serve the
+  old key.
+- **T4's premise does not hold today.** "The chain rebuild re-runs series
+  wiring; port 1 must be re-asserted, or a reorder silently drops the key" —
+  `rebuildWiring_nolock()` wires port 0 only and never touches port 1, so a
+  reorder keeps the key with no help. Measured: removing the routing pass a
+  reorder asks for left `sidechain_persistence` green. The pass is kept as the
+  defence (it is what "all routing wiring happens in the pass" means), and the
+  case bites a rebuild that DOES drop port 1 only together with that removal.
+- **Key edges come LAST in the routing graph** (after containment, send and
+  aux), so a cycle that mixes kinds loses its key edge and keeps the sends and
+  returns that were there first; announced as `[ROUTE] cycle: the key edge
+  from '<source>' into '<track>' is DROPPED`. The verb's cycle check asks the
+  model's graph with the slot's CURRENT key edge still in it, which is exact:
+  an edge entering the keyed track cannot lie on a path out of it.
+- **The invalidation walk follows a key edge as an aux edge** (a containment
+  walk from the root to the keyed track; the keyed insert sits inside its
+  chain, whose invalidation forwards to its inserts), a key on a SEND LANE
+  through the send-lane branch, and a key on the MASTER LANE through the
+  master chain, which the root's own bump already covers.
+- **Any lane with a chain may be keyed**, the master lane's and a send lane's
+  inserts included (D5 names the SOURCE kinds and is silent on the keyed
+  one); the master and the conductor are refused as a SOURCE by role.
+- **Two refusals §3.2 did not list**: a plugin with no sidechain input bus
+  (the M3 engine would ignore the key, logged once; the verb says so up
+  front, as `add-return-track` refuses a bus the plugin does not have), and a
+  `tap` other than `pre`/`post`.
+- **`remove-plugin`'s inverse carries the sidechain** (T5) as live state on
+  `insert-plugin` (`SInsertPluginAction::setSidechain`), not serialized: the
+  source is an object that may have left every root, which no path spells.
+- **Q1 (a) for keys** is announced once per arm, for an armed keyed track or
+  an armed key lane; the key stays wired. **Not gated**: like
+  `return_track_live_source` it needs a real input backend to make a lane
+  live-owned, and M4 added no live case.
+- **Depth (T7, AC4.6).** The planner's guard counted nothing, so M4 added
+  `graphStats().depthDrops` and `maxDepth` and `assert-render-policy
+  maxDepthDrops= minPlanDepth=`. Measured over the whole suite (one ctest
+  `-j4` run with a temporary per-process dump): **no case drops a
+  dependency**; the deepest is the new `sidechain_depth` at **27** (a key from
+  the return of an instrument three folders deep into a track two folders
+  deep, unity gains on every level, a send lane behind it), the deepest
+  before M4 `group_nested_track` at **16**. The guard is 64. Watched failing
+  with the guard lowered to 20.
+
 ### M5 — UI
 
 §3.3.

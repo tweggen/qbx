@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M4, AC4.4: A KEY SURVIVES EVERYTHING THAT MOVES OR RE-CREATES
+  ITS SLOT, FAILS CLOSED WHEN ITS SOURCE GOES, AND ROUND-TRIPS THROUGH THE
+  FILE BY IDENTITY (D8).
+
+  Fixture as sidechain_duck_from_return: "Bass" (B) through
+  tw.test.clap.duck, keyed from the muted return "Kick Aux 1" (R) of "Kick"
+  (A, test_clipsaw.wav from frame 24000 through tw.test.clap.split at
+  MainLevel 0). `scp_ref.wav` is the key working: B at 0.25 x dry inside
+  [28000, 116000).
+
+    A  T8, the negative control: a project with a duck and NO key writes no
+       <sidechain>, so every project saved before M4 re-serializes as it did.
+    B  T4: reorder-plugin. A unity tw.test.clap.gain goes in front of the
+       duck (slot 0 -> 1). The chain's rebuild re-wires port 0 of every
+       insert and never port 1; the pass re-asserts the key, idempotently.
+       MEASURED: T4's premise does not hold today - removing the pass a
+       reorder asks for left this section green, because the rebuild never
+       touches port 1. The section bites a rebuild that DOES drop port 1
+       only when the pass is missing too (both sabotages together fail
+       here, the chain one alone does not), so it gates the defence, not a
+       live hole.
+    C  T5: remove-plugin + undo. The inverse inserts a NEW slot object, so the
+       key survives only because the inverse carries the sidechain back.
+    D  T6: deleting the KEY LANE. The key goes SILENT and says so (B dry);
+       undo brings the same track back and the key with it.
+    E  D8: save + reload. The file carries <sidechain source=... tap='pre'/>
+       inside the slot; the reloaded project renders byte-identically. LAST,
+       because load-project replaces the project.
+-->
+<SActionScript version="1" name="sidechain_persistence">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Bass"/>
+    <add-sample trackPath="0" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Kick"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="24000"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="0" value="0"/>
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+
+    <!-- ===================== A: T8, NO KEY ============================== -->
+    <save-project path="../../build/scp_no_key.qxp"/>
+    <assert-file-contains path="../../build/scp_no_key.qxp" text="sidechain" absent="true"/>
+
+    <set-plugin-sidechain trackPath="0" slot="0" source="2"/>
+    <render filename="scp_ref.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scp_ref.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+
+    <!-- ===================== B: REORDER (T4) ============================ -->
+    <insert-plugin trackPath="0" slotIndex="1"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <reorder-plugin trackPath="0" fromIndex="0" toIndex="1"/>
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" source="2" wired="1"
+                             mapping="mapping=copy"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="0" wired="0"/>
+    <render filename="scp_reorder.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="scp_reorder.wav" expected="scp_ref.wav"/>
+
+    <!-- ===================== C: REMOVE + UNDO (T5) ====================== -->
+    <remove-plugin trackPath="0" slotIndex="1"/>
+    <render filename="scp_removed.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scp_removed.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <undo count="1"/>
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" source="2" tap="pre"
+                             wired="1"/>
+    <render filename="scp_undo.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="scp_undo.wav" expected="scp_ref.wav"/>
+
+    <!-- ===================== D: THE KEY LANE GOES (T6) ================== -->
+    <remove-track trackPath="2"/>
+    <assert-log contains="[SIDECHAIN] 'Bass' slot 1: the key is SILENT: its key source 'Kick Aux 1' is not in this arrangement"/>
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" wired="0"/>
+    <render filename="scp_orphan.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scp_orphan.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <undo count="1"/>
+    <assert-log contains="[SIDECHAIN] 'Bass' slot 1: the key is wired again"/>
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" source="2" wired="1"/>
+    <render filename="scp_restored.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="scp_restored.wav" expected="scp_ref.wav"/>
+
+    <!-- ===================== E: SAVE + RELOAD (D8) ====================== -->
+    <save-project path="../../build/scp_keyed.qxp"/>
+    <assert-file-contains path="../../build/scp_keyed.qxp" text="&lt;sidechain source='"/>
+    <assert-file-contains path="../../build/scp_keyed.qxp" text="tap='pre'/&gt;"/>
+    <load-project path="../../build/scp_keyed.qxp"/>
+    <!-- No key is announced silent while the load is half done: the pass
+         skips keys until the post-load pass wires them, with every key lane
+         resolved. -->
+    <assert-log contains="[SIDECHAIN]" minCount="0" maxCount="0"/>
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" source="2" tap="pre"
+                             wired="1" mapping="mapping=copy"/>
+    <render filename="scp_reloaded.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="scp_reloaded.wav" expected="scp_ref.wav"/>
+  </actions>
+</SActionScript>

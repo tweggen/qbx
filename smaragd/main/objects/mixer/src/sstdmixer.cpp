@@ -377,6 +377,9 @@ void SStdMixer::reconnectTracksToMixer()
     rewireSendBuses();
     // ...and the RETURN TRACKS (proposal 55 D3), likewise.
     rewireReturns();
+    // ...and the sidechain KEYS (proposal 55 D5, M4), after the returns, since
+    // a key may read a return whose tap this pass has just (re-)built.
+    rewireKeys();
 }
 
 void SStdMixer::rewireReturns()
@@ -508,6 +511,110 @@ void SStdMixer::rewireReturns()
     auxRoutedLastPass_ = anyReturn;
 }
 
+void SStdMixer::rewireKeys()
+{
+    const QList<STrack *> tracks = allTracks_();
+    bool anyKey = false;
+    for( STrack *t : tracks )
+        if( t && t->anyPluginSlotKeyed() ) { anyKey = true; break; }
+    // T8: no key now and none last pass -- nothing to wire or unwire.
+    if( !anyKey && !keyRoutedLastPass_ ) return;
+    // NOT WHILE LOADING, for rewireReturns()'s reason: the deferred resolvers
+    // have not yet given a slot its key source. routeReturnsAfterLoad() wires
+    // every loaded key once.
+    if( SProject *p = getProjectSafe() )
+        if( p->isLoading() && !routingAfterLoad_ ) return;
+
+    QSet<const STrack *> inTree;
+    for( STrack *t : tracks ) if( t ) inTree.insert( t );
+
+    // THE CYCLE BREAK over the union of edge kinds (D7), the graph the other
+    // two halves break cycles with; key edges come last in it, so a cycle
+    // that mixes kinds loses its KEY edge.
+    QList<sroute::Edge> dropped;
+    (void) acceptedRoutingGraph_( &dropped );
+    QSet<QPair<sroute::Node, sroute::Node> > droppedKey;
+    for( const sroute::Edge &e : dropped ) {
+        if( e.kind != sroute::EdgeKind::Key ) continue;
+        droppedKey.insert( qMakePair( e.from, e.to ) );
+        const SObject *src = objOf( e.from );
+        const SObject *dst = objOf( e.to );
+        TW_LOGW( "model",
+                 "[ROUTE] cycle: the key edge from '%s' into '%s' is DROPPED -- "
+                 "'%s' already reaches '%s'. The routing graph must be acyclic; "
+                 "set-plugin-sidechain refuses one, a project file can still "
+                 "carry one.",
+                 src->getSName().toUtf8().constData(),
+                 dst->getSName().toUtf8().constData(),
+                 dst->getSName().toUtf8().constData(),
+                 src->getSName().toUtf8().constData() );
+    }
+
+    QList<QPointer<STrack> > stillLive;
+    for( STrack *t : tracks ) {
+        if( !t ) continue;
+        const int n = t->pluginSlotCount();
+        bool trackMoved = false;
+        for( int i = 0; i < n; ++i ) {
+            QString why;
+            STrack *src = nullptr;
+            if( t->pluginSlotHasSidechain( i ) ) {
+                SObject *srcObj = t->pluginSlotSidechainSource( i );
+                src = dynamic_cast<STrack *>( srcObj );
+                if( !srcObj ) {
+                    why = QStringLiteral( "its key source is gone" );
+                } else if( !src ) {
+                    why = QStringLiteral( "its key source '%1' is not a lane with a "
+                                          "chain" ).arg( srcObj->getSName() );
+                } else if( src->systemRole() == SSystemRole::Master ) {
+                    why = QStringLiteral( "its key source is the MASTER lane, whose "
+                                          "output is the sum that already contains "
+                                          "this track" );
+                } else if( src->systemRole() == SSystemRole::Conductor ) {
+                    why = QStringLiteral( "its key source is the conductor lane, "
+                                          "which carries no audio" );
+                } else if( !inTree.contains( src ) ) {
+                    why = QStringLiteral( "its key source '%1' is not in this "
+                                          "arrangement" ).arg( src->getSName() );
+                } else if( droppedKey.contains( qMakePair(
+                               nodeOf( static_cast<SObject *>( src ) ),
+                               nodeOf( static_cast<SObject *>( t ) ) ) ) ) {
+                    why = QStringLiteral( "its key edge from '%1' closes a routing "
+                                          "cycle" ).arg( src->getSName() );
+                }
+            }
+            bool moved = false;
+            const bool wired = t->wireSlotKey( i, why.isEmpty() ? src : nullptr, why,
+                                               &moved );
+            if( moved ) trackMoved = true;
+
+            // Q1 (a) FOR KEYS, at the proposal's default: a live-owned slot
+            // renders only for the live pump, so an ARMED keyed track has no
+            // key path in the pump, and an ARMED key lane's own instrument
+            // answers every frozen render with silence. Accepted, as 47 D9
+            // accepted it for sends, and ANNOUNCED once per arm.
+            if( wired && ( t->isLiveOwnedLane() || src->isLiveOwnedLane() ) ) {
+                bool told = false;
+                for( const QPointer<STrack> &p : liveKeyAnnounced_ ) if( p == t ) told = true;
+                if( !told )
+                    TW_LOGW( "model", "[SIDECHAIN] '%s' slot %d: the key from '%s' is not "
+                             "heard while %s is armed: a live-owned slot renders only "
+                             "for the live pump (proposal 55 Q1 (a), as 47 D9)",
+                             t->getSName().toUtf8().constData(), i,
+                             src->getSName().toUtf8().constData(),
+                             t->isLiveOwnedLane() ? "the keyed track" : "the key lane" );
+                if( !stillLive.contains( t ) ) stillLive.append( t );
+            }
+        }
+        // A changed key re-stamped the keyed insert only; every page above it
+        // (the chain, the fader, the rewire, the containers, the master) still
+        // holds the old key's audio (47 M2, paid for the key edge).
+        if( trackMoved ) t->invalidateRenderPath();
+    }
+    liveKeyAnnounced_ = stillLive;
+    keyRoutedLastPass_ = anyKey;
+}
+
 void SStdMixer::routingChanged()
 {
     reconnectTracksToMixer();
@@ -519,7 +626,7 @@ void SStdMixer::routingChanged()
 void SStdMixer::routeReturnsAfterLoad()
 {
     for( STrack *t : allTracks_() ) {
-        if( t && t->isReturnTrack() ) {
+        if( t && ( t->isReturnTrack() || t->anyPluginSlotKeyed() ) ) {
             routingAfterLoad_ = true;
             routingChanged();
             routingAfterLoad_ = false;
@@ -599,13 +706,37 @@ QList<sroute::Edge> SStdMixer::routingCandidates_( bool enabledOnly ) const
     //    the sends 47 M3 has always kept. The return's position is free (a
     //    return may sit in any folder), so the walk is the whole tree, not the
     //    top level the send sources are collected from. A return with no
-    //    resolved source has no edge. KEY edges follow here in M4.
-    for( STrack *t : allTracks_() ) {
+    //    resolved source has no edge.
+    const QList<STrack *> tracks = allTracks_();
+    for( STrack *t : tracks ) {
         if( !t || !t->isReturnTrack() || t->isSystemLane() ) continue;
         STrack *src = t->auxSourceTrack();
         if( !src ) continue;
         out.append( { nodeOf( static_cast<SObject *>( src ) ),
                       nodeOf( static_cast<SObject *>( t ) ), sroute::EdgeKind::Aux } );
+    }
+
+    // 4. KEY (proposal 55 M4): key lane -> the track whose slot it keys, for
+    //    every keyed slot in allTracks_() order (the tree depth-first in child
+    //    order = file order, then the send lanes, then the master lane), slots
+    //    in chain order, AFTER every aux edge -- so a cycle that mixes kinds
+    //    drops the KEY edge and keeps the sends and returns that were there
+    //    first. A key with no resolved source has no edge; neither has one
+    //    from the master or the conductor, which the pass refuses by role
+    //    (the master's sum is not in this graph, so no walk could see the
+    //    cycle it closes).
+    for( STrack *t : tracks ) {
+        if( !t ) continue;
+        const int n = t->pluginSlotCount();
+        for( int i = 0; i < n; ++i ) {
+            if( !t->pluginSlotHasSidechain( i ) ) continue;
+            STrack *src = dynamic_cast<STrack *>( t->pluginSlotSidechainSource( i ) );
+            if( !src ) continue;
+            if( src->systemRole() == SSystemRole::Master
+                || src->systemRole() == SSystemRole::Conductor ) continue;
+            out.append( { nodeOf( static_cast<SObject *>( src ) ),
+                          nodeOf( static_cast<SObject *>( t ) ), sroute::EdgeKind::Key } );
+        }
     }
     return out;
 }
@@ -653,7 +784,7 @@ void SStdMixer::invalidateRoutingDependents(
     // T8: with no send lane and no return there is no routing edge, nothing
     // to build and nothing to bump -- the commonest project pays two tests.
     if( bumped.isEmpty() ) return;
-    if( sendLanes_.isEmpty() && !auxRoutedLastPass_ ) return;
+    if( sendLanes_.isEmpty() && !auxRoutedLastPass_ && !keyRoutedLastPass_ ) return;
 
     // THE WIRED GRAPH, not the model's: what is followed is what the pass
     // actually connected, so a dropped cycle edge is not followed either. It
@@ -702,7 +833,24 @@ void SStdMixer::invalidateRoutingDependents(
             // bumped is passed on, so a send FROM the return, or from a folder
             // holding it, is followed as well. Positions are shared, so the
             // range carries over unmapped (the send lane's argument below).
-            if( e.kind == sroute::EdgeKind::Aux ) {
+            // A KEYED TRACK (proposal 55 M4), reached over a KEY edge. Its
+            // keyed insert sits inside its chain, and the chain's
+            // invalidation forwards to its inserts, so the walks that cover
+            // a return cover it too: a user track (or a folder, or a return)
+            // by the containment walk from here, which also bumps every
+            // container above it; a send lane by the send-lane branch below
+            // (its bus is bumped too, harmlessly). The MASTER LANE needs
+            // nothing: this mixer is the root of the walk that found the
+            // edit, and its own bump covers the master lane's chain.
+            if( e.kind == sroute::EdgeKind::Key && dep == static_cast<SObject *>( masterLane_ ) ) {
+                if( whole ) bumpMasterChainEpoch();
+                else for( const SDirtyRange &r : fresh ) bumpMasterChainEpochRange( r.start, r.end );
+                continue;
+            }
+            const bool keyOnSendLane = e.kind == sroute::EdgeKind::Key
+                && sendLanes_.contains( static_cast<STrack *>( dep ) );
+            if( e.kind == sroute::EdgeKind::Aux
+                || ( e.kind == sroute::EdgeKind::Key && !keyOnSendLane ) ) {
                 if( whole ) {
                     QList<SObject *> sub;
                     invalidateRenderChainsContaining( dep, &sub );

@@ -365,9 +365,11 @@ set(APP_OBJECTS_FILES
     objects/mixer/include/app/objects/mixer/ssendlaneactions.h
     objects/mixer/include/app/objects/mixer/ssendtapactions.h
     objects/mixer/include/app/objects/mixer/sreturntrackactions.h
+    objects/mixer/include/app/objects/mixer/ssidechainactions.h
     objects/mixer/src/ssendlaneactions.cpp
     objects/mixer/src/ssendtapactions.cpp
     objects/mixer/src/sreturntrackactions.cpp
+    objects/mixer/src/ssidechainactions.cpp
     objects/mixer/src/sreparenttrackaction.cpp
     objects/mixer/src/srestoretrackaction.cpp
     objects/mixer/src/sstdmixer.cpp
@@ -588,6 +590,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertsendsaction.h
     testkit/include/app/testkit/sassertsendinputsaction.h
     testkit/include/app/testkit/sassertreturntrackaction.h
+    testkit/include/app/testkit/sassertpluginsidechainaction.h
     testkit/include/app/testkit/ssendstripactions.h
     testkit/src/sactionrunner.cpp
     testkit/src/sactionscript.cpp
@@ -655,6 +658,7 @@ set(APP_UI_FILES
     testkit/src/sassertsendsaction.cpp
     testkit/src/sassertsendinputsaction.cpp
     testkit/src/sassertreturntrackaction.cpp
+    testkit/src/sassertpluginsidechainaction.cpp
     testkit/src/ssendstripactions.cpp
     # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under
     # include/app/testkit/ -- it is not part of testkit's public action-verb

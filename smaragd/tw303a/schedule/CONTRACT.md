@@ -148,13 +148,24 @@ Invariants:
     injectors (`contendCacheMs`, `staleAfterDemand`) that make each half
     deterministic; `twComponent::CacheLockForTests` is the test-only seam that
     makes the lock genuinely unavailable instead of merely contended.
+13. **THE DEPTH GUARD IS COUNTED, NOT ONLY APPLIED** (proposal 55 M4, T7).
+    `expandNode_` refuses a dependency deeper than `kMaxExpandDepth` (64), and
+    a refused dependency is a page NOTHING PLANNED: the render still reaches
+    it through the legacy pull, so the symptom is not a wrong sample but an
+    unplanned, unverified page. Routing (sends, returns, sidechain keys) adds
+    whole second paths through other lanes, so `graphStats()` carries
+    `depthDrops` (refusals) and `maxDepth` (the deepest expansion; the root is
+    depth 0), and `assert-render-policy maxDepthDrops= minPlanDepth=` asserts
+    both. Measured in M4: the deepest case in the suite reaches the depth
+    recorded in proposal 55 "M4 as built" with no drop.
 
 How to test: `ctest -R schedule_test` (retireObject and retireComponentNodes lifetime/retirement — including 100
 randomized interleavings of a retirement against a running demand — the
 dependency-
 counting scheduler, and both directions of verify-at-publish self-staleness);
 `SMARAGD_LOG_LEVEL=debug` prints the run's `nodesExecuted / nodeRetries /
-missPages / selfStale` at shutdown, which is how a scheduler change is shown
+missPages / selfStale` at shutdown (`assert-render-policy` also prints
+`depthDrops / maxDepth`), which is how a scheduler change is shown
 not to multiply renders. Also exercised by every project load + edit.
 
 Known debt: revalidationComplete UI signal still TODO (UI re-reads on next

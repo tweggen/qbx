@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M4, AC4.5 (the file half): A CYCLE A PROJECT FILE CARRIES IS
+  BROKEN AT THE WIRING PASS, DETERMINISTICALLY AND OUT LOUD, BY DROPPING
+  EXACTLY ONE EDGE - 47 M3's shape, paid for the key edge.
+
+  set-plugin-sidechain refuses a cycle (sidechain_refusals), but THE LOADER
+  DOES NOT GO THROUGH THE VERB. tests/sidechain_cycle.qxp is a project saved
+  by this app and then edited by hand to add the closing edge:
+
+    "Kick" plays test_autosaw.wav (RMS A in [0.2240, 0.2379]) through
+    tw.test.clap.split (MainLevel 1: main = in, aux = in) and then
+    tw.test.clap.duck; the split's aux is routed to the return "Kick Aux 1"
+    (R, unmuted). The hand-added <sidechain> keys Kick's duck from R:
+    Kick -> R (aux), R -> Kick (key). A cycle of two edges.
+
+  THE BREAK IS DETERMINISTIC BY EDGE ORDER: aux edges are offered to the pass
+  before key edges, so the KEY edge is dropped and the return kept. THE
+  RESULTING LEVEL IS A CLOSED FORM:
+    key dropped, aux kept    Kick dry (A) + R (A)            = 2A
+    aux dropped, key kept    Kick keyed by a silent R (A) + 0 = A
+    both dropped             A + 0                           = A
+    neither                  the render-time break's accident
+  so 2A is the one answer that says "exactly the key edge went".
+
+  THEN THE CYCLE IS UNDONE from the other end (R stops being a return), and
+  the key edge that was dropped is accepted and wired: R is now an empty
+  track, so the key is silent and Kick plays A alone.
+-->
+<SActionScript version="1" name="sidechain_cycle_broken">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sidechain_cycle.qxp"/>
+
+    <!-- IMMEDIATELY AFTER load-project, as send_cycle_broken explains: the
+         break happens while the project is adopted, and assert-log's window
+         opens at the preceding non-assert-log action. -->
+    <assert-log level="warn" minCount="1" maxCount="1"
+                contains="[ROUTE] cycle: the key edge from 'Kick Aux 1' into 'Kick' is DROPPED"/>
+    <assert-log level="warn" minCount="0" maxCount="0"
+                contains="[ROUTE] cycle: the aux edge"/>
+    <assert-log level="warn" minCount="1"
+                contains="[SIDECHAIN] 'Kick' slot 1: the key is SILENT: its key edge from 'Kick Aux 1' closes a routing cycle"/>
+
+    <!-- The key is in the model, cycle and all; the break is a WIRING
+         decision, not an edit to the user's project. -->
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" source="1" tap="pre" wired="0"/>
+    <assert-return-track trackPath="1" source="0" slot="0" bus="1" routed="1"/>
+
+    <render filename="scc_cycle.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="scc_cycle.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.4480" maxRms="0.4758"/>
+
+    <!-- ============ REMOVING THE OTHER EDGE FREES THE KEY ============== -->
+    <clear-return-source trackPath="1"/>
+    <assert-log level="warn" minCount="0" maxCount="0" contains="[ROUTE] cycle"/>
+    <assert-plugin-sidechain trackPath="0" slot="1" keyed="1" source="1" wired="1"/>
+    <render filename="scc_free.wav" format="wav" quality="10" durationSec="2.0"/>
+    <assert-audio-energy filename="scc_free.wav" startFrame="24000" frameCount="48000"
+                         channel="0" minRms="0.2240" maxRms="0.2379"/>
+  </actions>
+</SActionScript>

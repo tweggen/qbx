@@ -547,6 +547,57 @@ Gated by `return_track_split_cmp` (X2.1, `cmp`), `return_track_instrument`,
 and `return_track_live_source`; the sabotage each one was watched failing
 under is listed in the QBX-251 PR.
 
+## SIDECHAIN KEYS (proposal 55 M4, D5/D6/D7/D8)
+
+37. **A KEY IS WIRED BY THE PASS, NEVER BESIDE IT.** `rewireKeys()` is called
+    from `reconnectTracksToMixer()` after `rewireReturns()` (a key may read a
+    return whose tap that half just rebuilt) and from nowhere else. It walks
+    every slot of every track in `allTracks_()` -- user tracks, returns, send
+    lanes and the master lane: any lane with a chain may be KEYED -- and asks
+    `STrack::wireSlotKey()`, which wires port 1 of the slot's insert to the
+    key lane's `sendTapComponent( pre )` (this module may not name
+    `twPluginInsert`). The chain's own rebuild re-wires port 0 only, so the
+    pass is what keeps a key across `reorder-plugin` (T4); a slot insert,
+    remove or reorder on a track with a keyed slot asks for the pass.
+38. **IDEMPOTENT, OR EVERY SOLO TOGGLE RE-RENDERS EVERY KEYED SLOT.**
+    `twPluginInsert::setKeySource()` stales the insert and resets the plugin
+    (M3), so `SPluginSlot::applyKey()` calls it only when the plug does not
+    already read that producer at that width. When it did move, the keyed
+    track's render path is invalidated: setKeySource stales the insert alone,
+    and every page above it -- chain, fader, rewire, folders, master -- would
+    serve the old key (inv. 31's lesson, for the key edge).
+39. **A KEY IGNORES MUTE AND SOLO (D6).** Nothing in the key half asks
+    `ssolo::isLaneAudible`. A user track's mute is structural (its parent
+    nulls its plug), so a muted key lane's chain still carries its material,
+    and a solo elsewhere darkens the key lane at the master without touching
+    the plug the key reads.
+40. **IT FAILS CLOSED, AND SAYS SO ONCE PER STATE.** A key source that is gone,
+    not a lane, not in this tree, the master or the conductor (refused by
+    role: the master's sum is not in the routing graph), or whose key edge was
+    dropped as a cycle leaves port 1 UNWIRED -- the plugin hears a silent
+    sidechain, never a stale one. `[SIDECHAIN] '<track>' slot <n>: the key is
+    SILENT: <why>` on entering the state, `... the key is wired again` on
+    leaving it.
+41. **KEY EDGES ARE IN THE ONE ROUTING GRAPH, after the aux edges** (inv. 28,
+    34): a cycle mixing kinds drops the KEY edge, announced as `[ROUTE]
+    cycle: the key edge from ... is DROPPED`. `invalidateRoutingDependents()`
+    follows a key edge exactly as an aux edge (a containment walk from this
+    root to the keyed track; the keyed insert sits inside its chain, whose
+    invalidation forwards to its inserts), a key on a SEND LANE through the
+    send-lane branch, and a key on the MASTER LANE through the master chain
+    (already covered by this root's own bump). Its T8 guard is "no send lane,
+    no return and no keyed slot at the last pass".
+42. **NOT WHILE LOADING**, for inv. 35's reason; `routeReturnsAfterLoad()`
+    runs the post-load pass when the tree has a return OR a keyed slot.
+43. **Q1 (a) FOR KEYS, ANNOUNCED ONCE PER ARM.** When the keyed track or the
+    key lane is live-owned, the pass logs `[SIDECHAIN] ... is not heard while
+    ... is armed` once per arm and leaves the key wired.
+
+Gated by `sidechain_duck_from_return` (X2.2), `sidechain_routing`,
+`sidechain_persistence`, `sidechain_refusals`, `sidechain_cycle_broken` and
+`sidechain_depth`; the sabotage each one was watched failing under is listed
+in the QBX-262 PR and in proposal 55 "M4 as built".
+
 ## The ONE lane walk and the ONE broadcast rule (proposal 48 M0)
 
 `slaneorder::flattenTrackLanes()` and

@@ -129,6 +129,13 @@ private:
     // page, which resets a stateful plugin; a miss is a planner bug.
     qint64 maxNodeRetries_ = -1;
     qint64 maxMissPages_   = -1;
+    // Proposal 55 M4 (T7, AC4.6): expandNode_'s depth guard. maxDepthDrops is
+    // a MAXIMUM on the dependencies the guard refused (a dep it refuses is a
+    // page nothing planned); minPlanDepth a MINIMUM on the deepest expansion
+    // reached, the witness that the case is as deep as it claims. -1 = not
+    // checked.
+    qint64 maxDepthDrops_  = -1;
+    qint64 minPlanDepth_   = -1;
 };
 
 /**

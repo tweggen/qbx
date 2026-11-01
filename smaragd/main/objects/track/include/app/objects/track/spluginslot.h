@@ -9,6 +9,8 @@
 #include <functional>
 #include <memory>
 #include "tw/plugins/twpluginslotproc.h"
+#include <QPointer>
+#include <QString>
 #include <QVector>
 #include <cstdint>
 #include <memory>
@@ -254,6 +256,52 @@ public:
     int auxOutBusCount() const;
     int auxOutBusChannels( int bus ) const;
 
+    // --- the SIDECHAIN (proposal 55 D5/D8, M4) -------------------------------
+    //
+    // A keyed slot names a KEY LANE and a tap point: `pre` = the lane's chain
+    // output (after its inserts, before its fader), `post` = its fader output
+    // (47 D3's two points, STrack::sendTapComponent). The default is pre, so
+    // pulling the key lane's fader down does not stop the ducking.
+    //
+    // THE SOURCE IS NAMED BY IDENTITY (D8): a QPointer, so a deleted lane can
+    // never be inherited by a later object at the same address (T6), written
+    // to the file as `<sidechain source='<objectId>' tap='pre'/>` inside this
+    // slot's element, and ONLY WHEN SET, so a project that never keyed a slot
+    // re-serializes byte-identically (T8). A source that did not resolve on
+    // load keeps the sidechain SET with a null source: the slot stays keyed,
+    // fails closed (a silent key) and re-saves as source='0'.
+    //
+    // The model half only: setting it WIRES NOTHING. The mixer's one pass
+    // (SStdMixer::rewireKeys, inside reconnectTracksToMixer) wires port 1 of
+    // the insert through STrack::wireSlotKey() -- 47 D4 / 45 T3. Callers that
+    // want the pass to run go through STrack::setPluginSlotSidechain().
+    bool     hasSidechain() const { return scSet_; }
+    SObject *sidechainSource() const { return scSource_.data(); }
+    bool     sidechainPreFader() const { return scPre_; }
+    void     setSidechain( SObject *source, bool preFader );
+    void     clearSidechain();
+
+    // The plugin's SIDECHAIN input bus (its bus 1) as the LIVE instance
+    // reports it, falling back to the effective descriptor -- auxOutBusCount's
+    // rule. 0 = the plugin has none.
+    int sidechainBusChannels() const;
+
+    // THE KEY WIRING, called by STrack::wireSlotKey (the pass) and nowhere
+    // else. `component` is the key lane's tap component, or null to unwire.
+    // Holds a reference to it while it is wired, so a key lane deleted from
+    // the undo stack cannot leave port 1 reading a destroyed producer (47's
+    // unwireSendLane lesson, paid for the key). Returns whether the live
+    // wiring changed -- and with it this insert's pages (setKeySource stales
+    // them), so the caller invalidates the path above the slot.
+    bool applyKey( const std::shared_ptr<twComponent> &component );
+    /// LIVE: port 1 is wired AND reads `component`.
+    bool keyWiredTo( const twComponent *component ) const;
+    bool keyWired() const;
+    /// "keyChannels=C|busChannels=S|mapping=<name>" from the processor, or "".
+    QString describeKey() const;
+    /// The last announced key state (STrack::wireSlotKey's once-per-state rule).
+    QString &keyAnnounceState() { return scState_; }
+
     // --- the instrument slot (proposal 37 P3b) ------------------------------
     //
     // A slot is an instrument because its DESCRIPTOR says so, which is what
@@ -370,6 +418,12 @@ private:
     std::vector<std::uint8_t> savedState_;  // opaque plugin state chunk
     quint64       slotId_     = 0;   // see slotId()
     std::uint32_t routedMask_ = 0;   // see setRoutedOutBuses()
+    // The sidechain (proposal 55 M4), see hasSidechain().
+    QPointer<SObject>             scSource_;
+    bool                          scSet_ = false;
+    bool                          scPre_ = true;
+    QString                       scState_;   // last announced key state
+    std::shared_ptr<twComponent>  keyHold_;   // see applyKey()
     // The instance initializer, shared with every factory makeFactory() hands
     // out, so a later setInstanceInitializer() reaches the next rebuild.
     std::shared_ptr<InstanceInitializer> initHolder_ =

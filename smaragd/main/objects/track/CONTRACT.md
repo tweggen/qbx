@@ -963,6 +963,30 @@ track: the return stays a return, silent, and re-saves as `track='0'`.
    (`SPluginSlot::auxOutBusCount/Channels`): an in-repo fixture inserted by
    path was never scanned, so its descriptor knows no buses.
 
+## A KEYED SLOT (proposal 55 M4)
+
+**A slot may carry a SIDECHAIN**: a key lane (held by `QPointer`, T6) and a tap
+point (`pre` = the lane's chain output, the default; `post` = its fader
+output). The file carries `<sidechain source='<objectId>' tap='pre'/>` inside
+the `<SPluginSlot>` element, ONLY WHEN SET (T8); the source resolves by
+`deferResolve`, and one that does not keeps the sidechain set with a null
+source -- the key fails closed and re-saves as `source='0'`.
+
+1. **The model half only.** `STrack::setPluginSlotSidechain()` edits it and
+   asks the root for its routing pass; `wireSlotKey()` is the pass's, and only
+   its (mixer inv. 37). No refusal lives here -- the verbs refuse.
+2. **`SPluginSlot::applyKey()` is idempotent** and holds the key producer
+   (`keyHold_`) while port 1 reads it, so a key lane deleted off the undo
+   stack cannot leave a plug into a dead latch (47's unwireSendLane lesson).
+3. **`remove-plugin`'s inverse carries the sidechain** (T5):
+   `SInsertPluginAction::setSidechain()` puts it on the NEW slot before the
+   link is parented, so `onPluginSlotInserted` asks for the pass that wires it.
+   Live state, not serialized.
+4. **`sidechainRoutable()` answers D9 in app types**: no slot, a DualMono slot,
+   a plugin that is not loaded, a plugin with no sidechain input bus
+   (`SPluginSlot::sidechainBusChannels()`, from the LIVE plugin as
+   `auxOutBusCount` is).
+
 ## A FIFTH piece of per-track view state (proposal 48 M2)
 
 `mixerStripNarrow` joins `collapsed`, `laneHeightScale`, `takesExpanded` and
