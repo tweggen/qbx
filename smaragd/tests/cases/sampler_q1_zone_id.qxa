@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q1_zone_id">
+
+  <!-- QBX-265: add-zone MAY NAME AN EXPLICIT ZONE ID (proposal 56 §11, the
+       author's answer of 2026-11-01 to Q1 assumption c).
+
+       The rule: an explicit `id` is ACCEPTED when it is free and has never
+       been handed out (>= nextId), and nextId then moves past it (the zone
+       takes the id, its layers the ids after it); it is REFUSED when it is
+       in use or below nextId, and each refusal writes a line no other path
+       writes. Without one, the core assigns nextId as before. A LAYER's id
+       is still assigned, never taken. Undo removes the zone and leaves
+       nextId where the add put it; redo puts the zone back with the SAME
+       ids.
+
+       Ids below: add-zone id="7" with one layer makes zone 7 and layer 8,
+       nextId 9. The next plain add-zone gets 9 (layer 10), nextId 11. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <!-- Not a positive integer: refused, and no program object is made. -->
+    <add-zone trackPath="0" slotIndex="0" id="0" keyLo="36" expectReject="true"/>
+    <add-zone trackPath="0" slotIndex="0" id="x" keyLo="36" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+    <!-- A layer's id is assigned, never taken. -->
+    <add-zone trackPath="0" slotIndex="0" id="7" keyLo="36" expectReject="true">
+      <layer id="3" src="test:a"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+
+    <!-- ================================== an explicit id on an empty program
+         nextId is 1, so 7 is free and never used: accepted, nextId moves
+         past the zone AND its layer. -->
+    <add-zone trackPath="0" slotIndex="0" id="7" keyLo="36" keyHi="47" rootKey="40">
+      <layer src="test:a"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="1" zoneIds="7" nextId="9"
+                            installed="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="8" attr="src"
+                            value="test:a"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="zone7"/>
+
+    <!-- Undo removes it and leaves nextId at 9 (ids are never reused)... -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="0" nextId="9"/>
+    <!-- ...so 7 is now USED BEFORE (below nextId): refused, with its own line. -->
+    <add-zone trackPath="0" slotIndex="0" id="7" keyLo="36" expectReject="true"/>
+    <assert-log contains="REFUSED: zone id 7 was handed out before (nextId 9)"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="0" nextId="9"/>
+    <!-- ...and the redo puts zone 7 back with layer 8, the SAME ids. -->
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="zone7" zoneIds="7"
+                            nextId="9" installed="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="8" attr="src"
+                            value="test:a"/>
+
+    <!-- ======================================= without an id: nextId, as before -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="48" keyHi="59">
+      <layer src="test:b"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9" nextId="11"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="beforeRefusals"/>
+
+    <!-- ========================================================= the refusals
+         A TAKEN id, and a USED-BEFORE id (5 was skipped over by the explicit
+         7, so it was never a zone, but it is below nextId: never handed out
+         now). Each refusal changes nothing, nextId included. -->
+    <add-zone trackPath="0" slotIndex="0" id="7" keyLo="60" expectReject="true"/>
+    <assert-log contains="REFUSED: zone id 7 is in use" minCount="1" maxCount="1"/>
+    <add-zone trackPath="0" slotIndex="0" id="5" keyLo="60" expectReject="true"/>
+    <assert-log contains="REFUSED: zone id 5 was handed out before (nextId 11)"
+                minCount="1" maxCount="1"/>
+    <add-zone trackPath="0" slotIndex="0" id="10" keyLo="60" expectReject="true"/>
+    <assert-log contains="REFUSED: zone id 10 is in use" minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="beforeRefusals"
+                            nextId="11" installed="1"/>
+
+    <!-- ===================================================== the boundaries
+         id == nextId is free and never used: accepted (no layer, so nextId
+         moves to 12). A jump leaves a gap that nothing is handed out of:
+         the next plain add gets the id after the jump. -->
+    <add-zone trackPath="0" slotIndex="0" id="11" keyLo="60" keyHi="71"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11" nextId="12"/>
+    <add-zone trackPath="0" slotIndex="0" id="20" keyLo="72" keyHi="83"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11;20" nextId="21"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="84" keyHi="95"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11;20;21" nextId="22"
+                            installed="1"/>
+    <!-- The skipped 12..19 are below nextId: refused like any used id. -->
+    <add-zone trackPath="0" slotIndex="0" id="15" keyLo="96" expectReject="true"/>
+    <assert-log contains="REFUSED: zone id 15 was handed out before (nextId 22)"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11;20;21" nextId="22"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

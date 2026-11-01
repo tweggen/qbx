@@ -276,7 +276,8 @@ bool SAddZoneAction::readXml( const QDomElement &elem, int /*version*/ )
 
 QStringList SAddZoneAction::knownAttributes() const
 {
-    return addressAttributes() + names( twSamplerScope::Zone );
+    // `id`: an explicit zone id (QBX-265), validated by the core's wrapper.
+    return addressAttributes() + names( twSamplerScope::Zone ) + QStringList{ QStringLiteral( "id" ) };
 }
 
 // =========================================================== remove-zone ====

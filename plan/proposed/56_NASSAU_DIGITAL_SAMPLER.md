@@ -472,7 +472,7 @@ nothing.
 
 | Verb | Milestone | Attributes (beyond the address) | Inverse |
 |---|---|---|---|
-| `add-zone` | Q1 | the zone's attributes; `id` is assigned from `nextId`, never taken | `remove-zone` with the full zone |
+| `add-zone` | Q1 | the zone's attributes; `id` is assigned from `nextId`, or named explicitly when free and `>= nextId` (QBX-265, the author's answer of 2026-11-01) | `remove-zone` with the full zone |
 | `remove-zone` | Q1 | `zone` | `add-zone` restoring the id and every layer |
 | `set-zone` | Q1 | `zone` \| `zones` \| `zone="all"`, any zone attribute | `set-zone` per zone, absolute |
 | `add-layer` / `remove-layer` | Q1 | `zone`, layer attributes / `layer` | each other |
@@ -1156,6 +1156,7 @@ built, and where the text above did not survive the build:
    absolute spelling. Text parameters (`src`, `name`) are always literal.
    (c) **Zone ids** come from the core's `nextId` (DESIGN §2) — an `id` on
    `add-zone` is refused; `add-zone` takes its layers as `<layer>` children.
+   *(Changed by the author 2026-11-01, see below; built in QBX-265.)*
    (d) **How an edit reaches the engine**: every committed edit publishes one
    new snapshot (initializer, then `applyToInstances`, §4.3), synchronously
    on the main thread.
@@ -1174,6 +1175,14 @@ program object made by the first edit) are **accepted as built**. (c) is
 has never been used (`>= nextId`, which then moves past it), refused otherwise;
 without one the core assigns `nextId` as now. Layers stay `<layer>` children of
 `add-zone`.
+
+*Built (QBX-265, 2026-11-01):* the check lives in tw/sampler's
+`twSamplerProgramModel::addZone()` (no core change: it sets `nextId` to the
+id before the core's `addZone()` assigns it, so the layers follow it). A
+layer's `id` is still refused. The two refusals write `zone id N is in use`
+and `zone id N was handed out before (nextId M); ids are never reused`; an id
+that is a LAYER's counts as in use. Gated by `qxa.sampler_q1_zone_id`;
+`sampler_q1_verbs`' refused-id line now uses `id="0"`.
 
 ### Core bump to nassau-digital 5adc61a (2026-10-27)
 

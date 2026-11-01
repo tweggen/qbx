@@ -49,8 +49,9 @@
     <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
     <add-zone trackPath="0" slotIndex="0" keyLo="36" bogus="1" expectReject="true"/>
     <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
-    <!-- An id is assigned, never taken. -->
-    <add-zone trackPath="0" slotIndex="0" id="5" keyLo="36" expectReject="true"/>
+    <!-- A refused explicit id makes no program either. (Since QBX-265 a free,
+         never-used id is ACCEPTED; sampler_q1_zone_id gates the rule.) -->
+    <add-zone trackPath="0" slotIndex="0" id="0" keyLo="36" expectReject="true"/>
     <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
     <!-- Not a NassauDigital slot: track 0 slot 1 does not exist. -->
     <add-zone trackPath="0" slotIndex="1" keyLo="36" expectReject="true"/>

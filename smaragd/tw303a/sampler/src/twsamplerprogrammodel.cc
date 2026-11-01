@@ -11,6 +11,7 @@
 #include "nd_xml.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 
 namespace audio {
@@ -66,7 +67,9 @@ void fromCore( const std::vector<nd::PriorValue> &in, std::vector<twSamplerPrior
 }
 
 // Fill `obj` from attribute text through the core's table. An attribute the
-// table does not know is REFUSED here (a script typo), and so is `id`.
+// table does not know is REFUSED here (a script typo), and so is `id` -- a
+// ZONE's explicit id (QBX-265) is taken out by addZone() before this runs, so
+// what reaches here is a layer's, which is always assigned.
 template <typename T>
 bool fillFromAttrs( const std::vector<nd::ParamDesc<T>> &table, const twSamplerAttrs &attrs,
                     T &obj, const char *what, std::string *error )
@@ -384,15 +387,56 @@ std::uint32_t twSamplerProgramModel::addZone( const twSamplerAttrs &zone,
         setError( error, "a zone has at most " + std::to_string( nd::kMaxLayers ) + " layers" );
         return 0;
     }
+    // AN EXPLICIT ZONE ID (QBX-265; proposal 56 §11, the author's answer of
+    // 2026-11-01 to Q1 assumption c). Accepted only when it is free AND has
+    // never been handed out, i.e. >= nextId; nextId then moves past it (the
+    // core assigns the zone nextId, so setting nextId to the id first is all
+    // it takes, and the layers follow it). The ids skipped over are never
+    // handed out: they are below nextId from now on. Refused otherwise, with
+    // a reason only that refusal produces.
+    nd::Program  &p = impl_->program;
+    std::uint32_t wantId = 0;
+    twSamplerAttrs attrs;
+    for( const auto &a : zone ) {
+        if( a.first != "id" ) {
+            attrs.push_back( a );
+            continue;
+        }
+        char *end = nullptr;
+        const unsigned long long v = std::strtoull( a.second.c_str(), &end, 10 );
+        if( a.second.empty() || !end || *end != '\0' || a.second[0] == '-' || v == 0 ||
+            v > 0xFFFFFFF0ull ) {
+            setError( error, "zone id \"" + a.second + "\" is not a positive integer" );
+            return 0;
+        }
+        wantId = (std::uint32_t)v;
+    }
     nd::Zone z;
-    if( !fillFromAttrs( nd::zoneParams(), zone, z, "zone", error ) ) return 0;
+    if( !fillFromAttrs( nd::zoneParams(), attrs, z, "zone", error ) ) return 0;
     for( const twSamplerAttrs &la : layers ) {
         nd::Layer l;
         if( !fillFromAttrs( nd::layerParams(), la, l, "layer", error ) ) return 0;
         z.layers.push_back( std::move( l ) );
     }
-    const std::uint32_t id = nd::addZone( impl_->program, std::move( z ) );
-    if( id == 0 ) setError( error, "the core refused the zone" );
+    if( wantId != 0 ) {
+        if( idInUse( p, wantId ) ) {
+            setError( error, "zone id " + std::to_string( wantId ) + " is in use" );
+            return 0;
+        }
+        if( wantId < p.nextId ) {
+            setError( error, "zone id " + std::to_string( wantId ) +
+                                 " was handed out before (nextId " + std::to_string( p.nextId ) +
+                                 "); ids are never reused" );
+            return 0;
+        }
+    }
+    const std::uint32_t before = p.nextId;
+    if( wantId != 0 ) p.nextId = wantId;
+    const std::uint32_t id = nd::addZone( p, std::move( z ) );
+    if( id == 0 ) {
+        p.nextId = before;
+        setError( error, "the core refused the zone" );
+    }
     return id;
 }
 
