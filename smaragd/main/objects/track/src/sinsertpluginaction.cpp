@@ -37,6 +37,13 @@ SInsertPluginAction::SInsertPluginAction(
 {
 }
 
+void SInsertPluginAction::setSidechain(SObject *source, bool preFader)
+{
+    scSet_    = true;
+    scSource_ = source;
+    scPre_    = preFader;
+}
+
 // Module-path resolution lives on SPluginSlot (M4): the LOAD path needs exactly
 // the same rule, and a second copy here is how the two would drift.
 SApplyResult SInsertPluginAction::apply(SProject *project)
@@ -138,6 +145,9 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
     // Proposal 55 T5: BEFORE the link is parented, because parenting is what
     // fires slotInserted and the routing pass that re-finds this slot by id.
     if (slotId_ != 0) slot->setSlotId(slotId_);
+    // Proposal 55 M4 (T5): the key comes back with the slot -- set BEFORE the
+    // link is parented, so the routing pass slotInserted asks for wires it.
+    if (scSet_) slot->setSidechain(scSource_.data(), scPre_);
 
     // The state chunk goes in BEFORE the link is parented. setParent() is what
     // fires slotInserted -> STrack::onPluginSlotInserted -> setChannelCount(),

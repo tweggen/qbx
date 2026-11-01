@@ -10,6 +10,7 @@
 #include "tw/plugins/twplugindescriptor.h"
 #include "app/actions/sactionregistry.h"
 #include <QByteArray>
+#include <QPointer>
 #include <QDomElement>
 #include <QString>
 #include <cstdint>
@@ -93,6 +94,11 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
 
     // Proposal 55 T5: the id a return track names this slot by.
     slotId_ = slot->slotId();
+    // ...and its sidechain (M4): the undo re-creates a NEW slot object, which
+    // would otherwise come back unkeyed.
+    const bool scSet = slot->hasSidechain();
+    QPointer<SObject> scSource( slot->sidechainSource() );
+    const bool scPre = slot->sidechainPreFader();
 
     // Remove the slot (SLink will be deleted, which deletes the SPluginSlot)
     SLink *link = chain->childAt(slotIndex_);
@@ -109,8 +115,9 @@ SApplyResult SRemovePluginAction::apply(SProject *project)
     desc_inv.path = path_.toStdString();
     desc_inv.io = {nIn_, nOut_};
 
-    SAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_, desc_inv,
-                                               state_, slotId_);
+    SInsertPluginAction *inverse = new SInsertPluginAction(trackPath_, slotIndex_,
+                                                           desc_inv, state_, slotId_);
+    if (scSet) inverse->setSidechain(scSource.data(), scPre);
 
     return {true, inverse};
 }

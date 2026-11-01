@@ -271,7 +271,9 @@ QStringList SAssertRenderPolicyAction::knownAttributes() const
              QStringLiteral( "liveOwnedRefusals" ),
              QStringLiteral( "minLiveOwnedRefusals" ),
              QStringLiteral( "maxNodeRetries" ),
-             QStringLiteral( "maxMissPages" ) };
+             QStringLiteral( "maxMissPages" ),
+             QStringLiteral( "maxDepthDrops" ),
+             QStringLiteral( "minPlanDepth" ) };
 }
 
 SApplyResult SAssertRenderPolicyAction::apply( SProject *project )
@@ -280,7 +282,8 @@ SApplyResult SAssertRenderPolicyAction::apply( SProject *project )
     const qint64 liveOwned  = (qint64) SLiveMonitor::liveOwnedRefusals();
 
     bool ok = true;
-    if( maxNodeRetries_ >= 0 || maxMissPages_ >= 0 ) {
+    if( maxNodeRetries_ >= 0 || maxMissPages_ >= 0 || maxDepthDrops_ >= 0
+        || minPlanDepth_ >= 0 ) {
         CaptureRevalidator *sched = project ? project->getRevalidator() : nullptr;
         if( !sched ) {
             qWarning() << "assert-render-policy: maxNodeRetries/maxMissPages asked,"
@@ -290,7 +293,21 @@ SApplyResult SAssertRenderPolicyAction::apply( SProject *project )
         const CaptureRevalidator::GraphStats st = sched->graphStats();
         qDebug() << "assert-render-policy: scheduler nodesExecuted" << st.nodesExecuted
                  << "nodeRetries" << st.nodeRetries << "missPages" << st.missPages
-                 << "selfStale" << st.selfStale;
+                 << "selfStale" << st.selfStale << "depthDrops" << st.depthDrops
+                 << "maxDepth" << st.maxDepth;
+        if( maxDepthDrops_ >= 0 && (qint64) st.depthDrops > maxDepthDrops_ ) {
+            qWarning() << "assert-render-policy: depthDrops" << (qint64) st.depthDrops
+                       << "exceeds" << maxDepthDrops_
+                       << "- the planner's depth guard left dependencies unplanned"
+                       << "(deepest expansion" << (qint64) st.maxDepth << ")";
+            ok = false;
+        }
+        if( minPlanDepth_ >= 0 && (qint64) st.maxDepth < minPlanDepth_ ) {
+            qWarning() << "assert-render-policy: maxDepth" << (qint64) st.maxDepth
+                       << "is below the required minimum" << minPlanDepth_
+                       << "- the case is not as deep as it claims";
+            ok = false;
+        }
         if( maxNodeRetries_ >= 0 && (qint64) st.nodeRetries > maxNodeRetries_ ) {
             qWarning() << "assert-render-policy: nodeRetries" << (qint64) st.nodeRetries
                        << "exceeds" << maxNodeRetries_
@@ -342,6 +359,10 @@ void SAssertRenderPolicyAction::writeXml( QDomElement &elem ) const
         elem.setAttribute( "maxNodeRetries", QString::number( maxNodeRetries_ ) );
     if( maxMissPages_ >= 0 )
         elem.setAttribute( "maxMissPages", QString::number( maxMissPages_ ) );
+    if( maxDepthDrops_ >= 0 )
+        elem.setAttribute( "maxDepthDrops", QString::number( maxDepthDrops_ ) );
+    if( minPlanDepth_ >= 0 )
+        elem.setAttribute( "minPlanDepth", QString::number( minPlanDepth_ ) );
 }
 
 bool SAssertRenderPolicyAction::readXml( const QDomElement &elem, int )
@@ -351,6 +372,8 @@ bool SAssertRenderPolicyAction::readXml( const QDomElement &elem, int )
     minLiveOwnedRefusals_  = elem.attribute( "minLiveOwnedRefusals", "0" ).toLongLong();
     maxNodeRetries_        = elem.attribute( "maxNodeRetries", "-1" ).toLongLong();
     maxMissPages_          = elem.attribute( "maxMissPages", "-1" ).toLongLong();
+    maxDepthDrops_         = elem.attribute( "maxDepthDrops", "-1" ).toLongLong();
+    minPlanDepth_          = elem.attribute( "minPlanDepth", "-1" ).toLongLong();
     return true;
 }
 

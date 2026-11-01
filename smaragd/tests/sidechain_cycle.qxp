@@ -1,0 +1,46 @@
+<SProject fileName='' rootId='98244344613008' formatVersion='3' bpmTempo='120' sampleRate='48000' channels='2' posFactor='1/48000' candidateRates='44100,48000,88200,96000' properties='{"cycle":false,"gridVisible":true,"metronome":false,"rangeEnd":0,"rangeStart":0,"rangeValid":false,"rulerMode":"bars","snapToGrid":true,"timelineScrollX":0,"timelineZoomSecondWidth":30}'>
+<SStdMixer masterLaneId='98244344760672' id='98244344613008' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='98244349161248' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='98244349528160' hasStartTime='1' startTime='0'>
+</SLink>
+</SStdMixer>
+<STrack pluginChainId='98244344517424' systemRole='master' id='98244344760672' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' hidden='true' sName='Master'>
+<SLink objectId='98244348431392' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='98244344517424' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='98244348433088' systemRole='conductor' id='98244348431392' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Conductor'>
+</STrack>
+<SPluginChain id='98244348433088' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+<STrack pluginChainId='98244349163024' id='98244349161248' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Kick'>
+<SLink objectId='98244349371296' hasStartTime='1' startTime='0'>
+</SLink>
+</STrack>
+<SPluginChain id='98244349163024' nRefs='1' hasDuration='1' durationSec='4.16667e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+<SLink objectId='98244349374656' hasStartTime='1' startTime='0'>
+</SLink>
+<SLink objectId='98244349394128' hasStartTime='1' startTime='0'>
+</SLink>
+</SPluginChain>
+<SPlainWave filename='../tests/test_autosaw.wav' id='98244348396640' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+</SPlainWave>
+<SCut srcStart='0' startOffset='0' cutDuration='192000' loopLength='0' stretch='1' pitchCents='0' grainSizeMs='42.6667' crossfadeMs='10.6667' id='98244349371296' nRefs='1' hasDuration='1' durationSec='4' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0'>
+<SLink objectId='98244348396640' hasStartTime='1' startTime='0'>
+</SLink>
+</SCut>
+<SPluginSlot id='98244349374656' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Smaragd Test Split' bypassed='false' format='clap' uid='tw.test.clap.split' name='Smaragd Test Split' vendor='Smaragd' path='twtestclap.clap' nIn='2' nOut='2' isInstrument='false' slotId='1085896299963517257'>
+<state encoding='base64'>VFdDUAEAAAAAAAAAAADwPwAAAAAAAAAA</state>
+</SPluginSlot>
+<SPluginSlot id='98244349394128' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Smaragd Test Duck' bypassed='false' format='clap' uid='tw.test.clap.duck' name='Smaragd Test Duck' vendor='Smaragd' path='twtestclap.clap' nIn='2' nOut='2' isInstrument='false'>
+<state encoding='base64'>VFdDUAEAAAB7FK5H4XqEPwAAAAAAANA/</state>
+<sidechain source='98244349528160' tap='pre'/>
+</SPluginSlot>
+<STrack pluginChainId='98244349743984' id='98244349528160' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Kick Aux 1'>
+<auxSource track='98244349161248' slot='1085896299963517257' bus='1'/>
+</STrack>
+<SPluginChain id='98244349743984' nRefs='1' hasDuration='1' durationSec='2.08333e-05' muted='false' solo='false' armedForRecording='false' volume='0' pan='0' delay='0' sName='Effects'>
+</SPluginChain>
+</SProject>

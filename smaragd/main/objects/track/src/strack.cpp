@@ -1079,6 +1079,139 @@ bool STrack::applyRoutedAuxMasks( const QHash<quint64, std::uint32_t> &masks )
     return changed;
 }
 
+// --- SIDECHAINS (proposal 55 D5, D6, D8; M4) --------------------------------
+
+bool STrack::pluginSlotHasSidechain( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    return slot && slot->hasSidechain();
+}
+
+SObject *STrack::pluginSlotSidechainSource( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    return slot ? slot->sidechainSource() : nullptr;
+}
+
+bool STrack::pluginSlotSidechainPre( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    return slot ? slot->sidechainPreFader() : true;
+}
+
+bool STrack::anyPluginSlotKeyed() const
+{
+    if( !cpPluginChain_ ) return false;
+    const int n = cpPluginChain_->getSlotCount();
+    for( int i = 0; i < n; ++i ) {
+        SPluginSlot *slot = cpPluginChain_->getSlotAt( i );
+        if( slot && slot->hasSidechain() ) return true;
+    }
+    return false;
+}
+
+bool STrack::setPluginSlotSidechain( int slotIndex, SObject *source, bool preFader,
+                                     bool keyed )
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot ) return false;
+    if( keyed ) slot->setSidechain( source, preFader );
+    else        slot->clearSidechain();
+    requestRoutingPass( this );
+    return true;
+}
+
+bool STrack::clearPluginSlotSidechain( int slotIndex )
+{
+    return setPluginSlotSidechain( slotIndex, nullptr, true, false );
+}
+
+bool STrack::sidechainRoutable( int slotIndex, QString *why ) const
+{
+    auto refuse = [why]( const QString &w ) { if( why ) *why = w; return false; };
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot )
+        return refuse( QStringLiteral( "there is no plugin in slot %1" ).arg( slotIndex ) );
+    // D9: on DualMono "the plugin's sidechain" has one candidate per channel.
+    if( slot->getSlotMode() == audio::twPluginSlotMode::DualMono )
+        return refuse( QStringLiteral( "slot %1 runs DualMono (one plugin instance per "
+                                       "channel), so it has no single sidechain input" )
+                           .arg( slotIndex ) );
+    if( slot->getSlotState() != audio::twPluginSlotState::Active )
+        return refuse( QStringLiteral( "the plugin in slot %1 is not loaded, so it has no "
+                                       "sidechain input to key" ).arg( slotIndex ) );
+    if( slot->sidechainBusChannels() <= 0 )
+        return refuse( QStringLiteral( "the plugin in slot %1 has no sidechain input bus" )
+                           .arg( slotIndex ) );
+    return true;
+}
+
+bool STrack::wireSlotKey( int slotIndex, STrack *source, const QString &reason,
+                          bool *changed )
+{
+    if( changed ) *changed = false;
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot ) return false;
+
+    // A slot with no sidechain: unwire whatever a previous pass left, quietly.
+    if( !slot->hasSidechain() ) {
+        const bool moved = slot->applyKey( nullptr );
+        if( changed && moved ) *changed = true;
+        return false;
+    }
+
+    QString why = reason;
+    if( why.isEmpty() && !source )
+        why = QStringLiteral( "its key source is gone" );
+    std::shared_ptr<twComponent> tap;
+    if( why.isEmpty() ) {
+        tap = source->sendTapComponent( slot->sidechainPreFader() );
+        if( !tap ) why = QStringLiteral( "its key source '%1' has no %2 tap point" )
+                             .arg( source->getSName() )
+                             .arg( slot->sidechainPreFader() ? "pre" : "post" );
+    }
+    // FAIL CLOSED (D8): an unresolvable key is UNWIRED, so the plugin hears
+    // a silent sidechain -- never a stale one, never another lane's.
+    const bool moved = slot->applyKey( why.isEmpty() ? tap : nullptr );
+    if( changed && moved ) *changed = true;
+
+    // ANNOUNCED ONCE per state (47 T6), never per pass: a solo toggle re-runs
+    // the pass and must not repeat the line. A key the processor cannot use
+    // (a DualMono or Missing slot, no sidechain bus, a width with no D4 row)
+    // is announced by the processor itself, once.
+    const bool wired = why.isEmpty();
+    const QString state = wired ? QString() : why;
+    QString &last = slot->keyAnnounceState();
+    if( state != last ) {
+        if( !wired )
+            TW_LOGW( "model", "[SIDECHAIN] '%s' slot %d: the key is SILENT: %s "
+                     "(proposal 55 D8)",
+                     getSName().toUtf8().constData(), slotIndex,
+                     why.toUtf8().constData() );
+        else if( !last.isEmpty() )
+            TW_LOGI( "model", "[SIDECHAIN] '%s' slot %d: the key is wired again",
+                     getSName().toUtf8().constData(), slotIndex );
+        last = state;
+    }
+    return wired;
+}
+
+bool STrack::pluginSlotKeyWired( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    if( !slot || !slot->hasSidechain() ) return false;
+    STrack *src = dynamic_cast<STrack *>( slot->sidechainSource() );
+    if( !src ) return false;
+    std::shared_ptr<twComponent> tap = src->sendTapComponent( slot->sidechainPreFader() );
+    return tap && slot->keyWiredTo( tap.get() );
+}
+
+QString STrack::describePluginSlotKey( int slotIndex ) const
+{
+    SPluginSlot *slot = cpPluginChain_ ? cpPluginChain_->getSlotAt( slotIndex ) : nullptr;
+    return slot ? slot->describeKey() : QString();
+}
+
 void STrack::bumpRenderChainEpoch()
 {
     // Every model change that reaches this track passes through here on the
@@ -2062,8 +2195,10 @@ void STrack::onPluginSlotInserted( int index, SPluginSlot &slot )
         lastDurationValid_ = false;
         invalidateRenderPath();
         // Proposal 55 T5: an undo of remove-plugin brings a slot back under
-        // the id a return names; the pass re-finds it.
-        if( auxReferenced_ ) requestRoutingPass( this );
+        // the id a return names; the pass re-finds it. A slot that arrives
+        // KEYED (remove-plugin's inverse carries the sidechain, M4) needs the
+        // pass to wire its port 1.
+        if( auxReferenced_ || slot.hasSidechain() ) requestRoutingPass( this );
     }
 }
 
@@ -2089,8 +2224,9 @@ void STrack::onPluginSlotRemoved( int index, SPluginSlot &slot )
     lastDurationValid_ = false;
     invalidateRenderPath();
     // Proposal 55: a return of the departing slot must go silent NOW, not at
-    // the next solo toggle; its tap keeps the insert alive until then.
-    if( auxReferenced_ ) requestRoutingPass( this );
+    // the next solo toggle; its tap keeps the insert alive until then. A
+    // departing KEYED slot (M4) changes the key edges the pass accepts.
+    if( auxReferenced_ || slot.hasSidechain() ) requestRoutingPass( this );
 }
 
 void STrack::onPluginSlotAudioInvalidated()
@@ -2117,8 +2253,10 @@ void STrack::onPluginSlotsReordered( int fromIndex, int toIndex )
     invalidateRenderPath();
     // Proposal 55: a return names its slot by id, so a reorder moves nothing
     // it reads -- but the pass is cheap and keeps "all routing wiring happens
-    // in the pass" literally true (inv. 6).
-    if( auxReferenced_ ) requestRoutingPass( this );
+    // in the pass" literally true (inv. 6). Likewise for a keyed slot (M4,
+    // T4): the chain's rebuild re-wires port 0 only, and the pass re-asserts
+    // port 1 -- idempotently, so a reorder that kept the key re-wires nothing.
+    if( auxReferenced_ || anyPluginSlotKeyed() ) requestRoutingPass( this );
 }
 
 // Mute belongs to the mixer CHANNEL, not to the track: it is enforced by

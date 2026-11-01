@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 55 M4: A KEY IGNORES MUTE AND SOLO, HONOURS ITS TAP POINT, FOLLOWS
+  AN EDIT ON ITS SOURCE THROUGH TWO ROUTING EDGES, AND SURVIVES THE PASS.
+
+  Fixture as sidechain_duck_from_return: "Bass" (B) plays test_stereo.wav
+  (ch0 RMS 0.5, ch1 0.25) through tw.test.clap.duck (out = in * 0.25 while
+  the key is on, held 2048 frames); "Kick" (A) plays test_clipsaw.wav from
+  frame 24000 through tw.test.clap.split at MainLevel 0, its aux routed to the
+  return "Kick Aux 1" (R), which is MUTED. B's duck is keyed from R. The key
+  is on over [24000, 122048); the inside window is [28000, 116000).
+
+    A  AC4.2 / D6: SOLOING B keeps the ducking. Solo darkens A and R at the
+       master, but nothing about a key asks the audibility rule: B's port 1
+       still pulls R's chain, which still pulls A's insert.
+    B  AC4.2: the TAP POINT. R's fader at -1000 dB (exactly 0.0 in a float,
+       M0's lesson - a -144 dB fader flips LSBs): `post` reads the fader's
+       output and the key is silent, so B is dry; `pre` reads the chain's
+       output, before the fader, and B ducks again.
+    C  AC4.3 (T3): a KEY EDIT after the first render. A's clip moves from
+       24000 to 72000; nothing on B's containment path changed, so only the
+       D7 walk carries the edit: the AUX edge A -> R, then the KEY edge
+       R -> B. A stale B keeps ducking [28000, 70000).
+    D  T1: a solo toggle on another track re-runs the mixer pass; the key is
+       still wired, read from the LIVE plug, and the render is unchanged.
+-->
+<SActionScript version="1" name="sidechain_routing">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Bass"/>
+    <add-sample trackPath="0" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Kick"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="24000"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.split"
+                   name="Smaragd Test Split" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="1" slotIndex="0" paramId="0" value="0"/>
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <set-plugin-sidechain trackPath="0" slot="0" source="2"/>
+
+    <render filename="scr_ref.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scr_ref.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+
+    <!-- ===================== A: SOLO B (D6) ============================= -->
+    <set-track-solo trackPath="0" solo="1"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" wired="1"/>
+    <render filename="scr_solo.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="scr_solo.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+    <assert-audio-energy filename="scr_solo.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.061875" maxRms="0.063125"/>
+    <assert-file-identical actual="scr_solo.wav" expected="scr_ref.wav"/>
+    <set-track-solo trackPath="0" solo="0"/>
+
+    <!-- ===================== B: THE TAP POINT =========================== -->
+    <set-track-volume trackPath="2" volume="-1000"/>
+    <set-plugin-sidechain trackPath="0" slot="0" source="2" tap="post"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" source="2" tap="post" wired="1"/>
+    <render filename="scr_post.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- post, fader at -inf: the key is silent, B is dry. -->
+    <assert-audio-energy filename="scr_post.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="scr_post.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+
+    <set-plugin-sidechain trackPath="0" slot="0" source="2" tap="pre"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" source="2" tap="pre" wired="1"/>
+    <render filename="scr_pre.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- pre, the same fader: the chain's output is before it, B ducks. -->
+    <assert-audio-energy filename="scr_pre.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+    <assert-file-identical actual="scr_pre.wav" expected="scr_ref.wav"/>
+    <set-track-volume trackPath="2" volume="0"/>
+
+    <!-- ===================== C: A KEY EDIT (T3) ========================= -->
+    <move-clip clip="1,0" destTrack="1" startTime="72000"/>
+    <render filename="scr_moved.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- [28000, 70000): the key has left, B is dry. A stale B still ducks. -->
+    <assert-audio-energy filename="scr_moved.wav" startFrame="28000" frameCount="42000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="scr_moved.wav" startFrame="28000" frameCount="42000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+    <!-- [76000, 144000): the key's new home, B ducks. -->
+    <assert-audio-energy filename="scr_moved.wav" startFrame="76000" frameCount="68000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+    <move-clip clip="1,0" destTrack="1" startTime="24000"/>
+
+    <!-- ===================== D: A SOLO ELSEWHERE (T1) =================== -->
+    <add-track index="-1"/>
+    <set-track-solo trackPath="3" solo="1"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" source="2" wired="1"/>
+    <set-track-solo trackPath="3" solo="0"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" source="2" wired="1"/>
+    <render filename="scr_after_solo.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-file-identical actual="scr_after_solo.wav" expected="scr_ref.wav"/>
+  </actions>
+</SActionScript>
