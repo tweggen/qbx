@@ -133,9 +133,12 @@ public:
                   std::vector<twSamplerPrior> *replaced, std::string *error );
 
     // Add a zone (and up to four layers) built from attribute text, at the end,
-    // with fresh ids from nextId. An `id` attribute is REFUSED (ids are assigned,
-    // never taken), and so is any attribute the table does not know. Returns
-    // the zone's id, 0 on a refusal.
+    // with fresh ids from nextId. The ZONE may name an explicit `id` (QBX-265):
+    // accepted when it is free and was never handed out (>= nextId), and nextId
+    // then moves past it; REFUSED when it is in use or below nextId. A LAYER's
+    // `id` is always refused (layers take the ids after the zone's), and so is
+    // any attribute the table does not know. Returns the zone's id, 0 on a
+    // refusal.
     std::uint32_t addZone( const twSamplerAttrs &zone, const std::vector<twSamplerAttrs> &layers,
                            std::string *error );
     // Add a layer to a zone, the same way. 0 on a refusal (missing or full zone).

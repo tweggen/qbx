@@ -128,9 +128,15 @@ invariant 8). What it adds, because a host needs it and the core's API does not
 spell it out:
 
 - **add from attribute TEXT**, REFUSING an attribute the table does not know
-  and an `id` (assigned, never taken) — the core's `addZone()` takes a built
-  `Zone`, and a script's typo must be refused rather than kept as an "unknown
-  attribute";
+  and a LAYER's `id` (assigned, never taken) — the core's `addZone()` takes a
+  built `Zone`, and a script's typo must be refused rather than kept as an
+  "unknown attribute". A ZONE may name an explicit `id` (QBX-265, the
+  author's answer of 2026-11-01): accepted when it is free and never handed
+  out (`>= nextId`), by setting `nextId` to it before the core's `addZone()`
+  assigns it, so `nextId` moves past the zone and its layers; refused when
+  in use (`zone id N is in use`) or below `nextId` (`zone id N was handed out
+  before (nextId M); ids are never reused`). The ids a jump skips are below
+  `nextId` from then on and are never handed out;
 - **a removed zone / layer as the core's own XML** plus where it was, and its
   reinsertion VALIDATED: every id free AND already handed out (`< nextId`).
   The core's `reinsertZone()` checks only the zone id and the index;

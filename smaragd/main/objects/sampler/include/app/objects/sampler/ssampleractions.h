@@ -84,6 +84,7 @@ protected:
 };
 
 // add-zone: zone attributes on the element, up to four <layer .../> children.
+// An explicit `id` is the zone's (QBX-265), validated by tw/sampler's addZone().
 class SAddZoneAction : public SSamplerAction {
 public:
     SAddZoneAction() = default;

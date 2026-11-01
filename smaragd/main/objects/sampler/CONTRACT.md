@@ -80,6 +80,11 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
    is therefore exact in every zone, layer and parameter, and `nextId` is the
    one field that does not go back — which is what the gates assert
    (`equalsCaptured … ignoreNextId="1"` together with an explicit `nextId=`).
+   `add-zone` MAY name an explicit zone `id` (QBX-265): accepted only when
+   it is free and `>= nextId`, and `nextId` then moves past the zone and its
+   layers, so an id is still never handed out twice; refused when in use or
+   below `nextId` (the check is tw/sampler's `addZone()`). Its redo re-inserts
+   the same ids like any add.
 
 7. **EVERY REFUSAL IS ANNOUNCED AND MUTATES NOTHING**: `qWarning`,
    `<verb>: track T slot S: REFUSED: <why>`, the core's own reason where it is
@@ -193,6 +198,16 @@ absolute (there is nothing to be relative to).
   CONTAINER element kind since Q1.
 
 ## Gates
+
+- `qxa.sampler_q1_zone_id` (QBX-265) — an explicit zone id: accepted on an
+  empty program (`nextId` past zone and layer), undo leaves `nextId`, the
+  undone id is then refused as used-before, redo restores the same ids; a
+  plain add after it gets `nextId`; refusals of a taken zone id, a taken
+  LAYER id, a skipped-over id, a non-positive id and a layer `id`, each with
+  the line only that refusal writes and the program unchanged; `id == nextId`
+  and a jump. Sabotages that bite: no used-before check; no in-use check
+  (the log assertions alone see it: the id then falls to the used-before
+  refusal); `nextId` not moved past; a redo that adds afresh.
 
 - `qxa.sampler_q1_verbs` — Q1.1 (each verb, one undo, the core's equality, a
   `differsFromCaptured` before every undo so the equality is not vacuous),
