@@ -2,6 +2,7 @@
 #include "app/model/splacements.h"
 #include "app/objects/track/sremovepluginaction.h"
 #include "app/model/sproject.h"
+#include "app/model/sobject.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
@@ -35,6 +36,24 @@ SInsertPluginAction::SInsertPluginAction(
       state_(stateBase64),
       slotId_(slotId)
 {
+}
+
+SInsertPluginAction::~SInsertPluginAction()
+{
+    for (const QPointer<SObject> &c : modelChildren_)
+        if (c) c->removeRef();
+}
+
+void SInsertPluginAction::setModelChildren(const QList<SObject *> &children)
+{
+    for (const QPointer<SObject> &c : modelChildren_)
+        if (c) c->removeRef();
+    modelChildren_.clear();
+    for (SObject *c : children) {
+        if (!c) continue;
+        c->addRef();
+        modelChildren_.append(QPointer<SObject>(c));
+    }
 }
 
 // Module-path resolution lives on SPluginSlot (M4): the LOAD path needs exactly
@@ -150,6 +169,13 @@ SApplyResult SInsertPluginAction::apply(SProject *project)
         std::vector<std::uint8_t> blob(decoded.begin(), decoded.end());
         slot->restoreState(blob);
     }
+
+    // QBX-254: the removed slot's model children come back with it, in their
+    // order, BEFORE the link is parented -- adoptChild() hands each to the
+    // child-adopted hook, which binds it while the slot has no instances yet,
+    // exactly as a file load attaches a slot's <SLink> children.
+    for (const QPointer<SObject> &c : modelChildren_)
+        if (c) slot->adoptChild(*c);
 
     // Add to chain
     // IMPORTANT: SLink must be constructed with parent=NULL, then setParent() called after.
