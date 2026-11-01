@@ -924,7 +924,10 @@ and core C6. Scope: §4.12.
 
 ## 9. Open questions (for the author)
 
-* **Q-1 — Recording and playing one instance.** A track has one input, audio
+* **Q-1 — Recording and playing one instance. ANSWERED by the author,
+  2026-11-01: option (a)**, the instance carries its own record input
+  (`audio:<device>:<mask>` on the program), and an armed sampler track with a
+  MIDI input records audio into the instrument from it. The question as asked: A track has one input, audio
   or MIDI (`docs/ACTIONS.md:360`). "Speak into the mic, play it on the
   keyboard" needs both on one instrument. Options: (a) the instance carries its
   own record input (an `audio:<device>:<mask>` spelling on the program), and an
@@ -933,7 +936,10 @@ and core C6. Scope: §4.12.
   on another track (`place-sampler-recording` taking a target); (c) a track
   input that may be both. Q6 can be built with the recording on the
   instrument's own audio-input track either way.
-* **Q-2 — What is automatable.** qbx automates plugin parameters by id
+* **Q-2 — What is automatable. ANSWERED by the author, 2026-11-01:
+  program-level quantities only** (level, tune, bus drives, LFO …) as host
+  parameters with fixed, append-only ids; zones are edited with verbs, not
+  automated. The question as asked: qbx automates plugin parameters by id
   (`param:` lanes). GATES C5.4 speaks of "automating its drive above 0
   mid-note", which implies zone parameters are automatable — but zones come and
   go, and parameter ids must be append-only (R4). Are only program-level
@@ -944,7 +950,10 @@ and core C6. Scope: §4.12.
   nassau-suite submodules, like nassau-plugin-sdk; the suite passes their paths
   to the components; consumers find them by explicit dir, sibling, pinned
   fetch. `ci/release.sh` then tags them unchanged. Applied in A2, B1 and §4.1.
-* **Q-4 — "Stored as a project asset".** DESIGN §6 item 2 stores a recording
+* **Q-4 — "Stored as a project asset". ANSWERED by the author, 2026-11-01:
+  both** — the recording is written as a WAV under the project's recordings
+  folder AND registered as a qbx asset, so it can also be placed on a lane.
+  The question as asked: DESIGN §6 item 2 stores a recording
   "as a project asset". In qbx an asset is a registered body windowing a
   container (`sproject.h:230-236`). This proposal stores the recording as a
   WAV under the project's recordings folder, referenced as an extern file. Is
@@ -964,7 +973,9 @@ and core C6. Scope: §4.12.
   matters (the track never depends on the sampler). The alternative — keep the
   midi rank and have the shell install the instance initializer as a hook — is
   possible and costs indirection. Which?
-* **Q-7 — Wider than stereo.** DESIGN §9.3 says qbx "spreads them on a wider
+* **Q-7 — Wider than stereo. ANSWERED by the author, 2026-11-01: accepted
+  for now**, as for every stereo instrument; out of scope here. The question
+  as asked: DESIGN §9.3 says qbx "spreads them on a wider
   one". It does not: 0→2 on more than 2 channels is Unsupported
   (`plugins/CONTRACT.md:262`), for every stereo instrument. Accept that for the
   sampler (out of scope here), or ask for a stereo-to-N spread as qbx work of
@@ -1153,6 +1164,16 @@ built, and where the text above did not survive the build:
     neither). `sampler-test-install` (Q0's test verb) bypasses the model; the
     next model edit on the same slot replaces its initializer.
 
+
+### The author's answers to the Q1 assumptions (2026-11-01)
+
+Q1 item 9 above: (a) the selection as built, (b) `=` for a negative absolute
+value, (d) one full snapshot per edit, synchronously, and §11 Q1 item 2 (the
+program object made by the first edit) are **accepted as built**. (c) is
+**changed**: `add-zone` MAY name an explicit `id`, accepted when it is free and
+has never been used (`>= nextId`, which then moves past it), refused otherwise;
+without one the core assigns `nextId` as now. Layers stay `<layer>` children of
+`add-zone`.
 
 ### Core bump to nassau-digital 5adc61a (2026-10-27)
 
