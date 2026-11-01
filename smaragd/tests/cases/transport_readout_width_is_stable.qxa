@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE TRANSPORT READOUT'S WIDTH DOES NOT FOLLOW THE PLAYHEAD.
+
+  Reported by the author: "the bar right below the menu is jittering again as
+  the positions change", and what moves is the contents sliding sideways.
+  QBX-215 gave the readout fixed-width DIGITS, which keeps the glyphs still but
+  not the LABEL: "9.4.959" is nine characters and "10.1.000" is ten, so the
+  label's hint grew by one character the moment the playhead crossed bar 10 and
+  the tempo box, the master meter, the latency readout and every toolbar
+  sharing that row moved with it. Measured in the running app, through this
+  very seam: hint 65 px up to bar 9, 73 px from bar 10.
+
+  WHY THE ASSERTION IS A BOOLEAN AND NOT A PIXEL COUNT. A test run never
+  show()s a window (main.cpp says so), so no widget is ever mapped and its
+  rectangle describes nothing; and a px figure is a font-and-DPI number that
+  could not be asserted on another box. `posPinned=1` is the invariant itself:
+  the position label's own hint FITS inside the width it reserved, so the width
+  the layout gives it is that reserved CONSTANT whatever the playhead says.
+
+  THE FOUR POSITIONS ARE THE FOUR DIGIT COUNTS, which is the whole point — one
+  position could not tell a reserved width from a measured one. 120 BPM,
+  48 kHz, PPQ 960, 4/4: 25 frames to the tick, 96000 to the bar.
+
+      frame        bar.beat.tick    bar digits
+      0            1.1.000          1
+      912500       10.3.020         2
+      9600000      101.1.000        3
+      95904000     1000.1.000       4
+
+  The whole line is asserted, not just the flag: a build that pinned the width
+  by truncating the text would satisfy the flag alone.
+
+  WATCHED FAILING, twice. With the label's setMinimumWidth() removed all five
+  assertions fail; with the reservation cut to one bar digit the three above
+  bar 9 fail and the two at bar 1 pass. The meter half of the same report is
+  gated in levelmeter_ticks_test's testPinnedLength().
+
+  Bar 10000 is deliberately NOT here. The reservation is four digits and the
+  label is allowed to grow past it (a minimum, not a fixed width — eliding the
+  bar number would be worse than one more move), so a fifth digit is the
+  documented exception and asserting it would gate the wrong thing.
+-->
+<SActionScript version="1" name="transport_readout_width_is_stable">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+
+    <!-- ONE BAR DIGIT: the state the readout starts in. -->
+    <set-locator position="0"/>
+    <assert-transport-readout
+        contains="pos=▶ 1.1.000|sel=[ — ]|mode=bars|selFrames=-|posPinned=1"/>
+
+    <!-- TWO: the crossing that moved the toolbar in the report. -->
+    <set-locator position="912500"/>
+    <assert-transport-readout
+        contains="pos=▶ 10.3.020|sel=[ — ]|mode=bars|selFrames=-|posPinned=1"/>
+
+    <!-- THREE. -->
+    <set-locator position="9600000"/>
+    <assert-transport-readout
+        contains="pos=▶ 101.1.000|sel=[ — ]|mode=bars|selFrames=-|posPinned=1"/>
+
+    <!-- FOUR: the edge of the reservation, still pinned. -->
+    <set-locator position="95904000"/>
+    <assert-transport-readout
+        contains="pos=▶ 1000.1.000|sel=[ — ]|mode=bars|selFrames=-|posPinned=1"/>
+
+    <!-- ...AND BACK, because a reservation that only ever grew would also pass
+         every assertion above: the label must not shrink to the short reading
+         either, or the toolbar slides back the way it came. -->
+    <set-locator position="0"/>
+    <assert-transport-readout
+        contains="pos=▶ 1.1.000|sel=[ — ]|mode=bars|selFrames=-|posPinned=1"/>
+  </actions>
+</SActionScript>

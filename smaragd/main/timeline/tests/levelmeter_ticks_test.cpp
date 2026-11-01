@@ -19,6 +19,10 @@
 //   - the 0 dB tick sits exactly where a 0 dBFS peak lights up (same
 //     dbToPx mapping), measured through describe()'s peak pixel.
 //
+// testPinnedLength() is the one check here that is NOT a pixel gate, and the
+// comment above it says why: it is about the size CONSTRAINTS a layout reads,
+// which is where a mount's pinned bar length was being silently discarded.
+//
 // No display, no audio device.
 
 #include "app/timeline/slevelmeter.h"
@@ -191,6 +195,71 @@ void testOverLitBarAndAlignment()
                .arg( peakPx ).arg( a.zeroTickPx() ) );
 }
 
+// THE PINNED LENGTH SURVIVES A LANE CHANGE.
+//
+// applySizeConstraints_() sets both axes on every lane change, so a mount that
+// pinned the long axis with setMinimumWidth()/setMaximumWidth() lost the pin at
+// the next setLanes(). Measured in the transport toolbar: the master meter's
+// 96 px became min 24 / max QWIDGETSIZE_MAX on the first metering tick after
+// Play, the bar collapsed to 24 px and the latency readout moved 72 px left.
+// The Track Detail dock's 72 px went the same way whenever the project's
+// channel count changed.
+//
+// A CONSTRAINT GATE, NOT A PIXEL ONE, and that is deliberate: minimumWidth()
+// and maximumWidth() are what a LAYOUT reads, they are readable on a widget
+// that was never shown, and they are the thing that was being discarded. A
+// grab would only show a 96 px meter resized to 96 px by the test itself.
+void testPinnedLength()
+{
+    // The master meter's shape: horizontal, pinned, then metering raises the
+    // lane count from the constructor's one to the monitored pair.
+    SLevelMeter m;
+    m.setOrientation( Qt::Horizontal );
+    m.setPinnedLength( 96 );
+    check( m.minimumWidth() == 96 && m.maximumWidth() == 96,
+           QStringLiteral( "horizontal: the pin is applied (min %1 max %2)" )
+               .arg( m.minimumWidth() ).arg( m.maximumWidth() ) );
+
+    m.setLanes( 2, 2 );
+    check( m.minimumWidth() == 96 && m.maximumWidth() == 96,
+           QStringLiteral( "horizontal: the pin SURVIVES a lane change "
+                           "(min %1 max %2) -- the toolbar slide" )
+               .arg( m.minimumWidth() ).arg( m.maximumWidth() ) );
+
+    // ...and the SHORT axis is still the meter's own business, pinned to
+    // thickness(), which is what Grow mode moves.
+    const int thin = m.minimumHeight();
+    m.setGrowWithLanes( true );
+    check( m.minimumWidth() == 96 && m.maximumWidth() == 96,
+           QStringLiteral( "horizontal: Grow mode moves the thickness, not the pin" ) );
+    check( m.minimumHeight() == m.maximumHeight() && m.minimumHeight() > thin,
+           QStringLiteral( "horizontal: ...and the thickness DID grow (%1 -> %2)" )
+               .arg( thin ).arg( m.minimumHeight() ) );
+
+    // Vertical pins the other axis, through the same one member.
+    SLevelMeter v;
+    v.setOrientation( Qt::Vertical );
+    v.setPinnedLength( 120 );
+    v.setGrowWithLanes( true );
+    v.setLanes( 6, 6 );
+    check( v.minimumHeight() == 120 && v.maximumHeight() == 120,
+           QStringLiteral( "vertical: the pin is the HEIGHT and survives six lanes "
+                           "(min %1 max %2)" )
+               .arg( v.minimumHeight() ).arg( v.maximumHeight() ) );
+
+    // AND AN UNPINNED METER IS UNCHANGED: every other mount (the track heads,
+    // the mixer strips) lets the layout decide the length, and this is the
+    // behaviour they must keep.
+    SLevelMeter u;
+    u.setOrientation( Qt::Horizontal );
+    u.setLanes( 2, 2 );
+    check( u.pinnedLength() == -1 && u.minimumWidth() == 24
+               && u.maximumWidth() == QWIDGETSIZE_MAX,
+           QStringLiteral( "unpinned: the layout still decides the length "
+                           "(min %1 max %2)" )
+               .arg( u.minimumWidth() ).arg( u.maximumWidth() ) );
+}
+
 }  // namespace
 
 int main( int argc, char **argv )
@@ -204,6 +273,7 @@ int main( int argc, char **argv )
     testDensityThins();
     testHorizontal();
     testOverLitBarAndAlignment();
+    testPinnedLength();
     if( g_failures ) {
         std::printf( "\n%d check(s) FAILED\n", g_failures );
         return 1;

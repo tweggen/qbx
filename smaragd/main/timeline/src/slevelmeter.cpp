@@ -108,20 +108,40 @@ int SLevelMeter::thickness() const
 void SLevelMeter::applySizeConstraints_()
 {
     const int t = thickness();
+    // THE LONG AXIS IS THE MOUNT'S, through setPinnedLength() and nowhere else:
+    // this function owns both axes (see below), so it is the only place that
+    // can re-state a pin, and a mount that set min/max itself would lose it
+    // here on the next lane change. -1 keeps the old behaviour, a floor of
+    // 24 px and no ceiling.
+    const int lenLo = pinnedLength_ > 0 ? pinnedLength_ : 24;
+    const int lenHi = pinnedLength_ > 0 ? pinnedLength_ : QWIDGETSIZE_MAX;
     // Set BOTH axes every time: setFixedWidth pins min == max, so flipping
     // orientation without clearing the other axis leaves the bar stuck at its
     // previous thickness.
     if( orientation_ == Qt::Vertical ) {
         setMinimumWidth( t );
         setMaximumWidth( t );
-        setMinimumHeight( 24 );
-        setMaximumHeight( QWIDGETSIZE_MAX );
+        setMinimumHeight( lenLo );
+        setMaximumHeight( lenHi );
     } else {
         setMinimumHeight( t );
         setMaximumHeight( t );
-        setMinimumWidth( 24 );
-        setMaximumWidth( QWIDGETSIZE_MAX );
+        setMinimumWidth( lenLo );
+        setMaximumWidth( lenHi );
     }
+}
+
+void SLevelMeter::setPinnedLength( int px )
+{
+    const int want = px > 0 ? px : -1;
+    if( want == pinnedLength_ ) return;
+    pinnedLength_ = want;
+    applySizeConstraints_();
+    // The drawable length changed, so what was last painted describes a
+    // different bar -- the same reason setOrientation() clears it.
+    lastPainted_.assign( ballistics_.size(), LanePx() );
+    updateGeometry();
+    update();
 }
 
 void SLevelMeter::setOrientation( Qt::Orientation o )
