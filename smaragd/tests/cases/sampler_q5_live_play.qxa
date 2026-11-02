@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q5.1 (QBX-271, nassau-digital GATES Q5, DESIGN §9.4).
+  NASSAUDIGITAL IS PLAYED LIVE THROUGH THE LIVE LANE, TRANSPORT STOPPED.
+
+  The same path and the same measurement as live_instrument_play, with the
+  sampler in slot 0 instead of the test sine: CaptureMidiInput (midi-in-event)
+  -> MidiInFanout -> the consumer ring -> twLiveEventSource::collect ON THE
+  PUMP inside twPluginSlotProcessor::render -> twSamplerInstrument::process
+  -> the live ring -> the RT callback. Nothing in the live lane names the
+  sampler (proposal 56 §4.9); this case is the evidence that nothing has to.
+  sampler_q5_live_playing is the same claim with the transport running, and
+  the one in which the ownership assertion has teeth.
+
+  THE FIXTURE. One zone over every key, root 60, one-shot, one file layer:
+  ../test_stereo.wav, 3 s of a 480 Hz sine, ch0 rms 0.49999, ch1 rms 0.24999.
+  Velocity 127 plays the layer at unity, so a second after the onset the
+  capture reads the sample's own levels (Q0 measured 0.49997 / 0.24998 through
+  the offline render; here 0.499971 / 0.249976 through the live lane).
+
+  THE ONSET BOUND, 7168 frames = 7 blocks at the headless 1024-frame device
+  block. It is the live lane's own worst case, the one live_instrument_play
+  derives: the ring is twLiveMixRingDefaultDepth = 4 blocks deep, the pump
+  covers lead = 2 blocks ahead of the frame the RT pulls next (playback inv.
+  16), and that frame is one device block past the one being delivered:
+  4 + 2 + 1 = 7 blocks (proposal 21 L2 AC1). live_instrument_play asserts
+  12288 for headroom; this case asserts the derived number, because the
+  sabotage that holds the sampler's notes back three blocks lands at 8003
+  frames and would pass 12288. assert-audio-onset prints the measured lag on
+  every run.
+
+  THE REFERENCE, FROM THE SAME NOTE. Track 1 holds the test sine, armed on
+  the same MIDI input. The sampler is panned hard left and the sine hard
+  right, so the capture's channel 0 is the sampler alone and channel 1 the
+  sine alone, and one injected note plays both in the same pump blocks. The
+  difference of their onsets (refChannel) carries none of the scheduling
+  jitter each absolute lag does, so it can be bounded tightly: 64 frames, the
+  onset scan's window. A sampler one device block late (1024) passes the
+  absolute bound and fails this one. It is GATES Q5.2's comparison, made
+  headless with an instrument whose own cost is nil in place of
+  nassau-analogue.
+
+  MEASURED (QBX-271, the dev box, 12 cores, load average 5 to 15, other
+  agents' gates running): the sampler's onset lag 4646 to 4936 frames
+  (96.8 to 102.8 ms) over 25 runs, the sine's exactly one frame later in
+  every run (difference -1: the sampler's sinc reader crosses the threshold a
+  frame before the sine's first cycle does). Levels 0.499971 (the sample's
+  left channel at unity) and 0.707205 (the sine at velocity 127, amplitude
+  1). The single-track form of this case measured 4002 to 5039 at load
+  average 11 to 40. The latency is the lane's, not the sampler's.
+
+  afterMidiIn="1" maps the injection's host time to a capture frame through
+  CaptureBackend::frameAtHostTime, the audio backend's own block log, which
+  shares no code with the pump, the ring or the event source.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (smaragd/CMakeLists.txt), like the
+  live_instrument_* cases: the onset is a wall-clock latency, so it measures
+  the box as well as the code. Read /proc/loadavg before reading a failure as
+  a regression.
+-->
+<SActionScript version="1" name="sampler_q5_live_play">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <assert-instrument-slot trackPath="0" present="1" format="tw"
+                            uid="tw.native.nassaudigital" mode="DirectGen"
+                            state="Active" hasFeed="1"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1"/>
+
+    <!-- THE REFERENCE: the test sine every live_instrument_* case plays, on
+         track 1. The sampler is panned hard LEFT and the sine hard RIGHT, so
+         ONE note gives each instrument a channel of its own. -->
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <set-track-pan trackPath="0" pan="-1"/>
+    <set-track-pan trackPath="1" pan="1"/>
+
+    <!-- The live input, and the ARM with the transport stopped: Monitor Auto
+         is the tape machine, so stopped means the input is live. -->
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="1" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <wait-ms ms="600"/>
+
+    <midi-in-event kind="noteon" key="60" velocity="127" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="sq5_live.wav" minFrames="72000"/>
+
+    <!-- Q5.1: HOW LATE, in frames, against the audio block log: the
+         sampler (channel 0), then the reference (channel 1), same bound. -->
+    <assert-audio-onset filename="sq5_live.wav" afterMidiIn="1" channel="0"
+                        threshold="0.05" maxFrame="7168"/>
+    <assert-audio-onset filename="sq5_live.wav" afterMidiIn="1" channel="1"
+                        threshold="0.05" maxFrame="7168"/>
+    <!-- ...and the sampler against the reference, from the SAME note: what
+         the sampler adds over an instrument with no cost at all. 64 frames is
+         the onset scan's own window; one device block late would be 1024. -->
+    <assert-audio-onset filename="sq5_live.wav" channel="0" refChannel="1"
+                        threshold="0.05" maxFrame="64"/>
+    <!-- ...and each channel holds its own instrument alone, half a second
+         after the onset: the sample's left channel at unity (0.49999), and
+         the sine at velocity 127, amplitude 1 (rms 0.70711). -->
+    <assert-audio-energy filename="sq5_live.wav" channel="0" anchorOnset="1"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.48" maxRms="0.52"/>
+    <assert-audio-energy filename="sq5_live.wav" channel="1" anchorOnset="1"
+                         startFrame="24000" frameCount="24000"
+                         minRms="0.69" maxRms="0.72"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <arm-track trackPath="1" armed="0"/>
+    <!-- Q5.1: no ownership refusal. With the transport stopped nothing
+         demands a freeze of the track, so this is a necessary condition
+         here and a real one in sampler_q5_live_playing. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

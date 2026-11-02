@@ -457,6 +457,10 @@ const Fixture kFixtures[] = {
       "<assert-audio-onset filename='cap.wav' channel='1' startFrame='4096'"
       " threshold='0.05' window='128' minFrame='0' maxFrame='12288'"
       " afterMidiIn='1'/>" },
+    // ...and its two-channel form (QBX-271): exclusive with afterMidiIn.
+    { "assert-audio-onset",
+      "<assert-audio-onset filename='cap.wav' channel='0' startFrame='0'"
+      " threshold='0.05' window='64' maxFrame='64' refChannel='1'/>" },
     { "assert-render-policy",
       "<assert-render-policy liveThreadRefusals='0' liveOwnedRefusals='64'"
       " minLiveOwnedRefusals='1' maxNodeRetries='0' maxMissPages='0'"

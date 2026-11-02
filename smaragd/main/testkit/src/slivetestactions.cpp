@@ -451,13 +451,20 @@ QStringList SAssertAudioOnsetAction::knownAttributes() const
     return { QStringLiteral( "filename" ),   QStringLiteral( "channel" ),
              QStringLiteral( "startFrame" ), QStringLiteral( "threshold" ),
              QStringLiteral( "window" ),     QStringLiteral( "minFrame" ),
-             QStringLiteral( "maxFrame" ),   QStringLiteral( "afterMidiIn" ) };
+             QStringLiteral( "maxFrame" ),   QStringLiteral( "afterMidiIn" ),
+             QStringLiteral( "refChannel" ) };
 }
 
 SApplyResult SAssertAudioOnsetAction::apply( SProject *project )
 {
     if( filename_.isEmpty() ) {
         qWarning() << "assert-audio-onset: filename is required";
+        return { false, nullptr };
+    }
+    // Two references for one difference would be a question nobody asked.
+    if( afterMidiIn_ && refChannel_ >= 0 ) {
+        qWarning() << "assert-audio-onset: afterMidiIn and refChannel are"
+                      " exclusive - the bounds apply to ONE difference";
         return { false, nullptr };
     }
     QString path;
@@ -515,12 +522,41 @@ SApplyResult SAssertAudioOnsetAction::apply( SProject *project )
                    .arg( refFrame );
     }
 
+    // ONE NOTE, TWO CHANNELS (QBX-271). The onset of `channel` RELATIVE to the
+    // onset of `refChannel` in the SAME file, found by the same scan with the
+    // same threshold and window. Two instruments panned apart and played by one
+    // live note are rendered by the same pump blocks, so the difference is what
+    // one instrument adds over the other and carries none of the box's
+    // scheduling jitter that an absolute lag does.
+    if( refChannel_ >= 0 ) {
+        int64_t refOnsetRaw = -1;
+        if( !audio::findOnsetFrame( path.toStdString(), startFrame_, refChannel_,
+                                    threshold_, window_, refOnsetRaw, err ) ) {
+            qWarning() << "assert-audio-onset: cannot read" << path
+                       << QString::fromStdString( err );
+            return { false, nullptr };
+        }
+        if( refOnsetRaw < 0 ) {
+            qWarning() << "assert-audio-onset:" << filename_ << "refChannel"
+                       << refChannel_ << "never reaches RMS" << threshold_
+                       << "- no reference onset from frame" << startFrame_;
+            return { false, nullptr };
+        }
+        measured = absOnset - (qint64) refOnsetRaw;
+        what = QStringLiteral( "onset of channel %1 at frame %2 minus channel %3's at"
+                               " frame %4" )
+                   .arg( channel_ ).arg( absOnset ).arg( refChannel_ ).arg( refOnsetRaw );
+    }
+
     const double ms = rate > 0 ? ( 1000.0 * (double) measured / rate ) : 0.0;
     qInfo().noquote() << QStringLiteral(
         "assert-audio-onset: %1 %2 = %3 frames (%4 ms at %5 Hz)" )
         .arg( filename_ ).arg( what ).arg( measured )
         .arg( QString::number( ms, 'f', 2 ) ).arg( rate );
 
+    // With refChannel the difference may have either sign, so `maxFrame`
+    // bounds its MAGNITUDE (minFrame keeps its meaning on that magnitude).
+    if( refChannel_ >= 0 && measured < 0 ) measured = -measured;
     if( minFrame_ >= 0 && measured < minFrame_ ) {
         qWarning() << "assert-audio-onset:" << measured << "<" << minFrame_;
         return { false, nullptr };
@@ -542,6 +578,7 @@ void SAssertAudioOnsetAction::writeXml( QDomElement &elem ) const
     if( minFrame_ >= 0 ) elem.setAttribute( "minFrame", QString::number( minFrame_ ) );
     if( maxFrame_ >= 0 ) elem.setAttribute( "maxFrame", QString::number( maxFrame_ ) );
     if( afterMidiIn_ ) elem.setAttribute( "afterMidiIn", "1" );
+    if( refChannel_ >= 0 ) elem.setAttribute( "refChannel", refChannel_ );
 }
 
 bool SAssertAudioOnsetAction::readXml( const QDomElement &elem, int )
@@ -554,6 +591,7 @@ bool SAssertAudioOnsetAction::readXml( const QDomElement &elem, int )
     minFrame_    = elem.attribute( "minFrame", "-1" ).toLongLong();
     maxFrame_    = elem.attribute( "maxFrame", "-1" ).toLongLong();
     afterMidiIn_ = elem.attribute( "afterMidiIn", "0" ).toInt() != 0;
+    refChannel_  = elem.attribute( "refChannel", "-1" ).toInt();
     return true;
 }
 

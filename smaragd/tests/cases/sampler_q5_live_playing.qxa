@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q5.1 (QBX-271), THE TRANSPORT RUNNING: NASSAUDIGITAL PLAYED LIVE
+  ALONG TO PLAYBACK, AND A GENERATION INSTALLED WHILE THE CHAIN IS LIVE-OWNED.
+
+  WHY A SECOND Q5.1 CASE. With the transport stopped nothing demands a freeze
+  of the armed track, so "the lane reports no ownership refusal" holds there
+  even on a live lane that does not exclude the track from the frozen sum
+  (measured: that sabotage passes sampler_q5_live_play and live_instrument_play
+  alike). With the transport RUNNING the readahead freezes root pages, and a
+  root page that still contained the live-owned track would run the sampler's
+  processor from a revalidation worker. The guard answers that with silence
+  and counts it (twPluginSlotProcessor::liveOwnedRefusals), and the sabotage
+  that skips the exclusion makes this case count 8 (2 without the install:
+  the install's stale is re-frozen by the readahead). So this is the case in
+  which liveOwnedRefusals="0" can fail.
+
+  THE INSTALL. 300 ms into the note the layer is swapped to
+  ../test_autosaw.wav, and the case waits for generation 2 to be installed
+  while the chain is live-owned and the transport runs. The install goes
+  through SPluginSlot::applyToInstances, under the processor's mutex, the
+  same mutex the pump's render holds (proposal 56 invariant 3), and stales the
+  track's pages (objects/sampler inv. 14) - which, while playing, is exactly
+  the moment the readahead would re-freeze them. The sounding voice keeps
+  playing the buffer it started with (DESIGN §6.1 rule 4): the window a
+  second after the onset still reads the sine's levels, not the saw's 0.230.
+
+  Arming AFTER Play, and Monitor ON, as live_instrument_merge does: ON is the
+  mode in which a live instrument is played along to a running transport
+  (Auto under a playing transport gives the track's own material), and
+  arming after the playhead moved keeps the arm out of the start-of-playback
+  window.
+
+  THE ONSET BOUND is sampler_q5_live_play's, 7168 frames (4 ring blocks +
+  2 lead blocks + 1 device block). Under a running transport the pump paces on
+  the clock and the lag is shorter.
+
+  MEASURED (QBX-271, the dev box, load average 5 to 40): onset lag 2324 to
+  2774 frames (48.4 to 57.8 ms) over 20 runs; the voice a second in reads
+  0.499971 / 0.249976 (A) after the install of B; liveOwnedRefusals 0 in
+  every run.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (smaragd/CMakeLists.txt).
+-->
+<SActionScript version="1" name="sampler_q5_live_playing">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <wait-ms ms="600"/>
+
+    <midi-in-event kind="noteon" key="60" velocity="127" channel="0"/>
+    <wait-ms ms="300"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:../test_autosaw.wav"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="2"/>
+    <wait-ms ms="1500"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="sq5_play.wav" minFrames="96000"/>
+
+    <assert-audio-onset filename="sq5_play.wav" afterMidiIn="1" channel="0"
+                        threshold="0.05" maxFrame="7168"/>
+    <assert-audio-energy filename="sq5_play.wav" channel="0" anchorOnset="1"
+                         startFrame="43200" frameCount="24000"
+                         minRms="0.48" maxRms="0.52"/>
+    <assert-audio-energy filename="sq5_play.wav" channel="1" anchorOnset="1"
+                         startFrame="43200" frameCount="24000"
+                         minRms="0.24" maxRms="0.26"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -844,6 +844,10 @@ onsets aspect from proposal 27 M1. Scope: §4.8.
   perform or to claim.
 * **Q5.q1** A generation installed while a live voice sounds does not change
   that voice; the next note plays the new one (DESIGN §6.1 rule 4).
+* *As built (§11 "Q5 as built"): the bound is read as 7168 frames; the
+  sampler is also measured against a reference instrument from the same
+  note; the ownership half is asserted with the transport running, where it
+  can fail. The Q5.2 procedure is item 6 there.*
 
 ### Q6 — Recording into the instrument
 **Depends on:** Q1, Q2; and an answer to Q-1 for the dual-input case. Scope:
@@ -1690,3 +1694,179 @@ build:
     a small discontinuity at the wrap is possible and was not measured);
     `tune` and LFO pitch in tempo modes (DESIGN §13: they still move the
     read rate, accepted for now).
+
+### Q5 as built (QBX-271, 2026-11-02)
+
+Built: no product code. Three cases, one testkit attribute
+(`assert-audio-onset refChannel`), the CMake registration (RUN_SERIAL at
+`SMARAGD_CAPTURE_SPEED=1`, with the `live_instrument_*` six) and the docs.
+§4.9's "nothing new in the live lane" held: an armed NassauDigital track
+plays through the LiveGraphPump exactly as the test CLAP sine does, with the
+first build. Gated: Q5.1, and Q5.q1. Not an agent's: Q5.2 (the procedure is
+item 6). Where the text above did not survive the build, or needed reading:
+
+1. **"The live lane's block-plus-lead bound" is read as 7168 frames** (§6
+   Q5.1, GATES Q5.1). Neither GATES nor this proposal gives the number, and
+   the literal reading (one block plus the two-block lead, 3072 frames at the
+   headless block) is a bound NO instrument meets: the test sine measures
+   4025–5008 frames here and 4544 in live_instrument_play's first run, the
+   sampler 4002–5039. The lane's own worst case, as live_instrument_play
+   derives it, is ring depth + lead + one device block = 4 + 2 + 1 = 7 blocks
+   = 7168 frames (proposal 21 L2 AC1: the pump covers `lead` past the frame
+   the RT pulls next, which is one device block past the one being
+   delivered, and the ring is four blocks deep). live_instrument_play asserts
+   12288 for headroom; Q5.1 asserts 7168, because the sabotage that holds the
+   sampler's notes back three blocks measures 8003 and would pass 12288. *An
+   author's reading, recorded as an open question in the PR: if "block plus
+   lead" meant something else, the number is one attribute.*
+2. **The sampler is measured against a reference from the SAME note**
+   (not in §4.9, which measures it against nassau-analogue by hand only).
+   The sampler (panned hard left) and the test sine (hard right), both armed
+   on one MIDI input, play one injected note-on; both are rendered by the same
+   pump blocks, so the difference of their onsets carries none of the box's
+   scheduling jitter that each absolute lag does. Measured: the sampler 1
+   frame EARLIER than the sine in every run (−1; the sinc reader's first
+   samples cross the onset threshold a frame before the sine's ramp), asserted
+   as |difference| <= 64 frames (the onset scan's window). A sampler that cost
+   ONE device block more (1024 frames) passes the absolute bound and fails
+   this one (sabotage S2b). It is Q5.2's comparison made headless, with an
+   instrument whose cost is nil in place of nassau-analogue. The testkit
+   gained `assert-audio-onset refChannel="N"` for it (docs/ACTIONS.md).
+3. **The ownership half of Q5.1 needs the transport RUNNING to mean
+   anything.** With the transport stopped nothing demands a freeze of the
+   armed track, so `liveOwnedRefusals="0"` holds even on a live lane that does
+   not exclude the track from the frozen sum: that sabotage passes
+   `sampler_q5_live_play` and `live_instrument_play` alike (measured). With
+   the transport running the readahead freezes root pages, and without the
+   exclusion one of them runs the sampler's live-owned processor and is
+   refused: `sampler_q5_live_playing` counts 8 there (2 with the install
+   taken out: the install's stale is re-frozen by the readahead). That case plays
+   along to a running transport (Monitor ON, armed after Play, as
+   live_instrument_merge does) and installs a generation while the chain is
+   live-owned. Its onset lag is shorter (2324–2774 frames): a playing pump
+   paces on the clock (playback inv. 16).
+4. **Q5.q1 is gated live** (`sampler_q5_live_generation`): a swap waited for
+   300 ms into a one-shot note leaves that voice on the old buffer (0.499971
+   / 0.249976, the sine's balance, measured a second after the onset), and
+   the next note plays the new one (0.230373 / 0.230373, the saw's). The
+   mechanism is the core's (A7: a voice keeps its generation; the replaced
+   buffer is parked) behind `applyToInstances`, whose mutex the pump's render
+   holds, so the install lands between two live blocks. objects/sampler
+   invariant 28 states it.
+5. **Measured** (the dev box, 12 cores, other agents' gates running; the
+   final form of each case 20 times in a row at load average 5–15, plus the
+   sabotage harness's unaffected runs):
+   - `sampler_q5_live_play` (stopped): the sampler's onset lag 4646–4936
+     frames (96.8–102.8 ms, 25 runs) against 7168; the sine's, same note,
+     one frame later in every run (difference −1); channel levels 0.499971
+     (the sample's left channel at unity) and 0.707205 (the sine at velocity
+     127). The single-track form during development: 4002–5039 frames at
+     load average 11–40, live_instrument_play alternating with it 4025–5008.
+   - `sampler_q5_live_playing` (running): 2324–2774 frames (48.4–57.8 ms).
+   - `sampler_q5_live_generation`: 0.499971 / 0.249976 then 0.230373 /
+     0.230373 in every run.
+   - `liveOwnedRefusals` 0 and `liveThreadRefusals` 0 in every run of all
+     three.
+6. **Q5.2, the author's procedure** (Windows 11, the USB keyboard; never an
+   agent's to perform or claim). It measures both instruments from ONE key
+   press, in ONE take, by ONE clock, so the comparison does not depend on how
+   exact any latency compensation is:
+   1. *Build.* qbx at a commit with this section (`./ci/build.sh`, or the
+      suite's build that pins it), and nassau-analogue's VST3 from the same
+      suite build the author played it from before. Note qbx's
+      `git rev-parse HEAD` and nassau-analogue's version.
+   2. *Device.* The interface and driver nassau-analogue was judged on (ASIO
+      if that is what it was), at **48000 Hz** in the driver panel and in the
+      project (the live lane refuses a device rate that differs, playback
+      inv. 18), buffer **256 frames**. Note the driver name, the buffer the
+      panel shows and the output latency qbx's latency readout shows.
+   3. *Loopback.* A cable from output 1 to input 1 and output 2 to input 2
+      (or the interface's own loopback channel). Input gain so a note peaks
+      near −12 dBFS.
+   4. *Project.* Run `smaragd --run-actions q5_2_setup.qxa` with the script
+      below (track 1: NassauDigital, one one-shot zone over every key, root
+      60, layer `smaragd/tests/test_stereo.wav` by absolute path, panned hard
+      left; the editor arrives with Q7, so a script is the way to make a
+      zone today). Check the project rate is 48000 Hz. Add track 2 by hand: nassau-analogue in slot 0, VCA attack
+      at its minimum (1 ms), sustain full, filter open, chorus Off; pan hard
+      right. Both tracks: input = the keyboard's MIDI port, any channel;
+      Monitor Auto; ARMED. Track 3: an audio track, input = interface inputs
+      1+2 (stereo), Monitor **Off** (or it feeds back), armed. Before the
+      take, play a key with the transport stopped: both instruments sound,
+      one per side (one MIDI input feeding two armed tracks, hard-panned, is
+      what `sampler_q5_live_play` does headless).
+
+      ```xml
+      <?xml version="1.0" encoding="UTF-8"?>
+      <SActionScript version="1" name="q5_2_setup">
+        <setup project="new"/>
+        <actions>
+          <add-track index="-1"/>
+          <insert-plugin trackPath="0" slotIndex="0"
+                         format="tw" uid="tw.native.nassaudigital"
+                         name="NassauDigital" vendor="Nassau"
+                         path="" nIn="0" nOut="2"/>
+          <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127"
+                    rootKey="60" mode="oneshot">
+            <layer src="file:C:/path/to/qbx/smaragd/tests/test_stereo.wav"/>
+          </add-zone>
+          <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+          <set-track-pan trackPath="0" pan="-1"/>
+        </actions>
+      </SActionScript>
+      ```
+   5. *Take.* Record; after two seconds play C4 ten times, about a second
+      apart, short notes; stop. Tracks 1 and 2 now hold the same ten MIDI
+      notes, and track 3 a stereo take with the sampler on the left and
+      nassau-analogue on the right.
+   6. *Read.* Open the take's WAV (the project's recordings folder) in an
+      audio editor. For each press i, read Lᵢ and Rᵢ: the first sample at
+      which that channel reaches 10 % of its own peak for that note. The
+      press is the note's start in track 1's clip: at 120 BPM and 960 ppq a
+      tick is exactly 25 frames at 48 kHz, so its frame is 25 × tick, and
+      the take's frame 0 is its clip's start on the timeline. Then
+      Sᵢ = takeStart + Lᵢ − 25·tickᵢ (the sampler's onset) and
+      Aᵢ = takeStart + Rᵢ − 25·tickᵢ (nassau-analogue's), in frames.
+      Sᵢ − Aᵢ = Lᵢ − Rᵢ needs no MIDI at all, and is the number the criterion
+      is about.
+   7. *Record in GATES Q5.2:* the two numbers, median S and median A, in
+      frames and ms; beside them the largest |Sᵢ − Aᵢ| of the ten, the buffer
+      size, the driver and both commits. Q5.2 holds when |median S −
+      median A| ≤ the buffer size (one device block, 256 frames = 5.3 ms).
+      Expected from the headless measurement: S slightly EARLIER than A by
+      nassau-analogue's 1 ms attack and its 32-frame control block (its
+      DESIGN: an event lands in [s, s + 31]), i.e. well under a block. A
+      difference near a whole block or more means the sampler is a block
+      late, which no headless case has seen.
+7. **Sabotages that bite** (each watched failing; the harness writes every
+   file from its own saved bytes, touches each file it writes, rebuilds, runs
+   the three cases plus `live_instrument_play`, restores and touches again;
+   the clean rebuild after the last passes all four; `live_instrument_play`
+   passed under every one):
+   (S1) the instrument translating no events while the transport is stopped
+   — `…_live_play` (no onset on channel 0) and `…_live_generation`;
+   (S2) a block's events held back three process() calls — `…_live_play`
+   (7991 > 7168; it would pass live_instrument_play's 12288);
+   (S2b) held back ONE call — `…_live_play` only by the reference
+   comparison (1023 > 64; the absolute lag 5865 passes 7168);
+   (S3) `setSample` resetting the core — `…_live_generation` and
+   `…_live_playing` (the sounding voice cut: window rms 0);
+   (S4) `setSample` dropped while a voice sounds — `…_live_generation` only
+   (the next note reads A's 0.499971);
+   (S5) the live lane not excluding the arriving track from the frozen sum
+   — `…_live_playing` only (`liveOwnedRefusals` 8).
+   **Did not bite**: (S6) the live lane not retiring the arriving track's
+   queued freeze nodes. Nothing was queued for it in any of the cases; the
+   race it closes is not reproduced here.
+   S2 and S2b do not bite `…_live_playing`, whose only bound is the
+   absolute 7168 (5519 and 3612 under them): the latency claim lives in the
+   stopped case, where the reference is.
+8. **Not gated**: Q5.2 itself; a block other than the capture backend's
+   fixed 1024 frames (ASIO's 256 or 128 are seen only by the author's hand
+   check); the rate refusal with a sampler (the capture backend has only the
+   project rate; the refusal is the lane's and is gated for every
+   instrument); an install on a playing track that is NOT armed (its pages
+   are re-frozen by the readahead); live play of a TEMPO-mode zone (its
+   stretch generations install like any other; no case plays one); the
+   sampler's per-block cost at a large polyphony (C2.6 budgets it in the
+   core; the headless notes are single voices).

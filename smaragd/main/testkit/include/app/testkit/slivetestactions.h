@@ -215,6 +215,7 @@ private:
     qint64  minFrame_   = -1;
     qint64  maxFrame_   = -1;
     bool    afterMidiIn_ = false;
+    int     refChannel_  = -1;   // >= 0: bound onset(channel) - onset(refChannel)
 };
 
 /**

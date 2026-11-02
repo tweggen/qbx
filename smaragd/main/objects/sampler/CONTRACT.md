@@ -23,6 +23,11 @@ plays its source STRETCHED to the project tempo by qbx's phase vocoder, as a
 generation, re-rendered on a tempo change and once more when the source's onset
 analysis completes (proposal 56 §4.8, DESIGN §5, §13; invariants 23–27).
 
+Since Q5 (QBX-271) an armed sampler track is PLAYED LIVE through the live
+lane (proposal 56 §4.9, DESIGN §9.4). No line of this slice, of tw/sampler or
+of the live lane changed for it: the sampler is a generator in slot 0 and
+takes the path every instrument takes (invariant 28).
+
 Public headers: app/objects/sampler/*.h
 
 Depends on (engine): tw/core, tw/graph, **tw/sampler** (the editable program
@@ -333,6 +338,24 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     stretch runs on the audio thread: the worker renders, the main thread
     installs (invariants 13–15).
 
+28. **LIVE PLAY IS THE LIVE LANE'S, AND AN INSTALL NEVER TOUCHES A SOUNDING
+    VOICE** (proposal 56 §4.9, Q5; DESIGN §6.1 rule 4, §9.4). An armed (or
+    monitoring) NassauDigital track is played by the LiveGraphPump like any
+    instrument: the live event source is collected inside the slot
+    processor's render (plugins inv. 46), the block is the device's, and the
+    rate refusal is the lane's (playback inv. 18). Nothing here or in
+    tw/sampler knows whether a block is live or frozen, and nothing may start
+    to: a sampler-specific live path would be a second latency to keep equal
+    to nassau-analogue's. While the chain is live-owned a generation install
+    still goes through `applyToInstances` (under the mutex the pump's render
+    holds, so it lands between two live blocks) and stales the track as
+    always (invariant 14); the live lane's exclusion keeps that stale from
+    becoming a freeze of the live-owned processor. A voice already sounding
+    keeps the buffer it started on (the core parks the replaced one, invariant
+    5 of proposal 56); the next note plays the new generation. Neither the
+    install nor `setSample` may reset the instance or drop a swap while a
+    voice sounds.
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -475,7 +498,34 @@ absolute (there is nothing to be relative to).
   120 BPM generation 7 is unstretched.
 - Sabotages that bite (QBX-268): see proposal 56 §11 "Q4 as built".
 
+- `qxa.sampler_q5_live_play` (QBX-271) — Q5.1, transport stopped: the
+  sampler (panned left) and the test sine (panned right) armed on one MIDI
+  input, one injected note-on. The sampler's onset lag 4646–4936 frames over
+  25 runs against the live lane's bound of 7168 (4 ring + 2 lead + 1 device
+  block); the sine's, from the same note, one frame later in every run,
+  asserted as `refChannel` difference <= 64; each channel its own instrument
+  at its closed-form level; `liveOwnedRefusals` 0.
+- `qxa.sampler_q5_live_playing` — Q5.1 with the transport running (Monitor
+  ON, armed after Play): onset lag 2324–2774 frames; a generation installed
+  while the chain is live-owned and the transport runs; the sounding voice
+  keeps its buffer; `liveOwnedRefusals` 0 — the case in which that bound can
+  fail (a live lane without the exclusion counts 8 here, 2 without the
+  install, and 0 in the stopped cases).
+- `qxa.sampler_q5_live_generation` — Q5.q1: a generation installed under a
+  sounding live voice leaves that voice on the old buffer (0.499971 /
+  0.249976, the sine's balance) and the next note plays the new one
+  (0.230373 / 0.230373, the saw's).
+- Sabotages that bite (QBX-271): see proposal 56 §11 "Q5 as built".
+
 ## Not gated / known limits
+
+- Q5.2 (the sampler's live onset against nassau-analogue's on the author's
+  Windows 11 machine and USB keyboard) is a hand check by the author, never a
+  gate; the procedure is in proposal 56 §11 "Q5 as built". Headless, the
+  device block is the capture backend's fixed 1024 frames, so no case shows
+  the latency at ASIO's 256 or 128; and the capture backend has no device
+  rate other than the project's, so the lane's rate refusal is not exercised
+  with a sampler (it is the lane's, gated for every instrument).
 
 - Q4: a stretch DURING PLAYBACK (a tempo change while playing) installs like
   any generation and stales the track; no case plays. An analysis during a
@@ -508,7 +558,10 @@ absolute (there is nothing to be relative to).
   gate (measured, QBX-263). Q2.q1 is therefore not gated.
 - Q2.q2 (round-robin page independence through qbx's page renders) is not
   part of QBX-263.
-- An install during PLAYBACK stales the track (rule 14) but no case plays.
+- An install during PLAYBACK stales the track (rule 14). Gated only for a
+  LIVE-OWNED track (`sampler_q5_live_playing`, QBX-271); an install on a
+  playing track that is not armed, whose pages the readahead re-freezes, is
+  still not played by any case.
 
 - `sampler-test-install` (testkit, Q0) bypasses the model: it sets its own
   instance initializer, and the next model edit on the same slot replaces it.
