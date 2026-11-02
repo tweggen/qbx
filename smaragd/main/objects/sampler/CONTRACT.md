@@ -12,13 +12,20 @@ Since Q2 (QBX-263) it also owns each layer's GENERATIONS (proposal 56 §4.6,
 DESIGN §6.1): the jobs that decode a `file:` layer, their install, and the
 bounded settle the offline render's barrier makes (invariants 12–16).
 
+Since Q3 (QBX-266) a layer may LINK a qbx asset (proposal 56 §4.7, DESIGN
+§6.2): the program holds the link (an `SLink` to the asset body), bounces the
+asset into a generation when the asset's own content epoch moves, and refuses
+a link that would be a render cycle (invariants 17–21).
+
 Public headers: app/objects/sampler/*.h
 
 Depends on (engine): tw/core, tw/graph, **tw/sampler** (the editable program
 `twSamplerProgramModel` and the snapshot it hands the instrument), **tw/plugins**
 (the `twPlugin &` the instance initializer takes, reached as a `twSamplerHost`
 by capability), **tw/sources** (since Q2: `twSampleSource`, the decoder every
-sample in the app goes through, on a generation job's worker). App edges: {actions, model, persistence} — **the RANK of
+sample in the app goes through, on a generation job's worker), **tw/pages**
+(since Q3: the asset bounce freezes the content component's pages,
+`twOutputPage`). App edges: {actions, model, persistence} — **the RANK of
 `objects/midi`** (DESIGN §9.2; proposal 56 Q-6, answered by the author
 2026-10-27). It does NOT depend on `objects/track`, although the slot it
 configures lives there, and `objects/track` never depends on it (proposal 56
@@ -123,8 +130,8 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     layer's `src` with what is installed and what is on its way: a new
     `file:<path>` starts a JOB with the layer's next generation number (a
     per-layer counter that never goes back, so an undo that writes the old
-    `src` back is a NEW generation); a `src` that is not `file:` (`test:…`,
-    empty, a future `link:…`) REMOVES the layer's buffer (installed as a
+    `src` back is a NEW generation); a `link:<n>` is fed by bounces
+    (invariants 17–20); any other `src` (`test:…`, empty) REMOVES the layer's buffer (installed as a
     change too); a removed layer takes its buffer and its job with it; a job
     whose `src` was edited again before it finished is CANCELLED and its
     result never installed. The path resolves as the MIDI-file verbs resolve
@@ -175,6 +182,70 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     Q2.3 asserts (`shell/CONTRACT.md`); `wait-sampler-generations` calls it
     without a render.
 
+17. **AN ASSET LINK IS AN `SLink` TO THE BODY, NAMED BY A LINK ID** (proposal
+    56 invariant 9). `set-layer src="asset:<name>"` resolves the name once and
+    hands the core `link:<n>`, `<n>` an id of THIS program object (minted from
+    `nextLinkId`, never reused) whose record is an `SLink` child targeting the
+    asset BODY. The src text alone therefore says which body a layer plays,
+    and every text-carrying inverse (restore-sampler-values, the core's zone
+    and layer XML in reinsert-zone / reinsert-layer) carries a link exactly as
+    it carries a file — no inverse names an asset. A rename moves only the
+    registry's name; the link holds the body (GATES Q3.4). A link is PINNED
+    (the `SLink` exists, and is saved) only while a layer names it; one no
+    layer names keeps a WEAK pointer to its body, so an undo can name it again
+    but it holds nothing — a pin nobody uses kept a refcount cycle (asset →
+    track → slot → program → asset) alive and `~SProject` cannot order a cycle
+    (measured: a teardown SEGFAULT). The redo of a `set-layer` names the link
+    its first apply minted. A literal `link:` src is refused on every forward
+    verb, and `asset:` on `add-zone` / `add-layer` (ASSUMPTION: link with
+    `set-layer` once the layer exists).
+
+18. **ONLY THE ASSET'S OWN CONTENT EPOCH TRIGGERS A BOUNCE, DEBOUNCED**
+    (DESIGN §6.2, GATES Q3.2). The program listens to
+    `SProject::arrangementChanged` (after every action) and, per linked layer,
+    compares a KEY — the asset content's root component (identity), its
+    `contentEpochNow()`, the window (start, length) and the rate — with the key
+    its newest generation (installed or on its way) was bounced from. Equal: no
+    work beyond the compare. Different: the layer is marked DUE and a trailing
+    debounce (re)starts; when it fires, every due layer is bounced. The
+    interval is 150 ms (`SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS` overrides it): a
+    gesture's burst of actions (16–60 ms apart) costs one bounce, and a 1 s
+    asset bounces in 1–11 ms on the dev box (measured, `sampler_q3_asset_link`),
+    so the debounce, not the bounce, is the latency a player hears. A NEW link
+    (or one an undo writes back) bounces at once, without the debounce; a link
+    read from a file is DUE at bind, because a load keeps invalidating after it
+    binds (measured: two bounces per load otherwise).
+
+19. **THE BOUNCE IS A GENERATION JOB** (DESIGN §6.1). It runs on the job's
+    `std::thread` like a decode and installs exactly as one (invariants
+    13–16): the worker freezes the content component's pages over the window
+    — the `SCut::buildCapture_` pattern, `freezePage` positions the component
+    itself under its own cursor mutex, nothing else is touched — into an
+    immutable `twSamplerSample` at the project rate (the first two channels).
+    It renders the asset's CONTENT over the asset's window (`windowStep(0)`,
+    `getDurationBlocking()`), never the body's own reader, which plays a
+    capture rebuilt asynchronously that may be stale. A bounce is cancelled
+    between pages when superseded. `rendering` (DESIGN §6.2's mark) is a job
+    outstanding OR a bounce due; the previous generation plays meanwhile.
+
+20. **AN OFFLINE RENDER HEARS THE ASSET AS IT IS** (GATES Q3.1). `settle()`
+    and the shell's `settleBeforeRender()` first call `flushDueBounces()`,
+    which starts every due bounce at once (the debounce cut short), and then
+    wait for it like any outstanding generation; the barrier's line names it.
+    The debounce never starts a bounce while an offline render runs.
+
+21. **A LINK THAT WOULD BE A RENDER CYCLE IS REFUSED WHEN IT IS MADE**
+    (DESIGN §6.2, GATES Q3.3, Q3.q1). `set-layer` refuses an asset from
+    which the sampler's own track is reachable, by
+    `ssampler::assetReachesTrack`: child and content links (what
+    `sarrangements::reaches` walks) PLUS, for every lane passed, the asset
+    links of the NassauDigital programs on its slots — a plugin chain is not a
+    child link, so without that hop a cycle through a second sampler is
+    invisible. Which programs a lane holds is objects/track's knowledge: the
+    shell installs `ssampler::setLaneProgramsHook`. A cycle built AFTER the
+    link (a track moved into the linked asset's container) is not refused —
+    see "Not gated".
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -189,6 +260,14 @@ absolute (there is nothing to be relative to).
 - **Save**: the slot writes an `<SLink>` per model child (its existing loop);
   the program, a QObject child of the project like every `SObject`, writes its
   own top-level element.
+- **Asset links** (Q3): `<SSamplerProgram … assetLinks='<n>=<objectId>;…'
+  nextLinkId='…'>` and one `<SLink objectId=…>` child per link a layer names,
+  after `<program>`. Both attributes are written only when a layer names a
+  link, so every Q1/Q2 file is byte-unchanged. The element kind is CONTAINER:
+  a body the file lost costs its link (the layer then plays nothing,
+  announced), never the program. The loader builds the asset body first (the
+  `<SLink>` children order it); a track references its slots by attribute,
+  not by `<SLink>`, so a program's links cannot close a loader cycle.
 - **Load**: the loader builds `<SSamplerProgram>` first (it has no links), then
   the slot, whose `instantiateFromDomElement` now attaches its `<SLink>`
   children and hands each to `SPluginSlot`'s child-adopted hook. The shell's
@@ -253,7 +332,43 @@ absolute (there is nothing to be relative to).
   does not settle; a settle that does not install; a bound that does not
   refuse; the barrier line written when nothing was outstanding.
 
+- `qxa.sampler_q3_asset_link` (QBX-266) — Q3.1: an edit inside the linked
+  arrangement is a new generation, heard by the next render (rms 0.5 -> 0.25
+  -> 0.5, two-sided bands), both by the debounce (`rendering="1"` right after
+  the edit, `renders` up after a wait with no settle) and by an immediate
+  render (the barrier starts the due bounce: its line, generation 3); Q3.2:
+  three actions that miss the asset (a master lane, a note on the sampler's
+  own clip, a clip trim in ANOTHER arrangement) leave `renders` and the
+  generation unchanged, after the debounce and after a settle; Q3.4:
+  `rename-asset` changes `asset=` and nothing else (no bounce), and after a
+  save and a reload the link names the renamed asset, bounces it, and an edit
+  of it after the reload is heard; and a bounce held by the render gate is
+  SUPERSEDED by a second edit (cancelled, never installed: installs 2 -> 3
+  with generation 4, the render hears the second edit).
+- `qxa.sampler_q3_link_cycle` — Q3.3: refused for an asset over the master
+  root and for one over an arrangement holding the sampler's track, each with
+  its line, the src and the generation state unchanged; Q3.q1: refused through
+  a second sampler (the message names the hop), accepted once that sampler
+  lets go; positive controls (an unknown asset refused as unknown, a link that
+  is no cycle accepted), the link's undo (buffer gone) and redo (same
+  `link:1`, a new generation), and a literal `link:` refused.
+- Sabotages that bite (QBX-266): see proposal 56 §11 Q3.
+
 ## Not gated / known limits
+
+- A render cycle made AFTER the link (the sampler's track moved into the
+  linked asset's container, or an asset over it placed inside) is not
+  refused: DESIGN §6.2 refuses at link time, and the freeze-cycle silence is
+  the backstop. Such a cycle is also a refcount cycle, which `~SProject`
+  cannot order.
+- A link no layer names holds its body weakly: `remove-asset`, an undo of
+  the unlink and an undo of the removal bring back a NEW body, which the old
+  link does not name; the layer then plays nothing, announced.
+- The bounce reads the asset's window as start + length in the content: a
+  stretched, warped or looped asset window is bounced unstretched and
+  unlooped (no qbx verb makes one today).
+- A bounce during PLAYBACK stales the sampler's track (invariant 14) but no
+  case plays.
 
 - Rule 15 (no install during a render) — see the invariant: no scripted case
   can make a job finish during a render, so removing the check passes every

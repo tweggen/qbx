@@ -1,6 +1,8 @@
 #include "app/objects/sampler/ssampleractions.h"
 
 #include "app/actions/sactionregistry.h"
+#include "app/model/splacements.h"
+#include "app/model/sproject.h"
 #include "app/objects/sampler/ssamplerprogram.h"
 #include "app/objects/sampler/ssamplerslots.h"
 
@@ -82,6 +84,23 @@ bool parseIdList( const QString &text, std::vector<std::uint32_t> &out )
         out.push_back( (std::uint32_t)v );
     }
     return true;
+}
+
+// A `src` a FORWARD verb may not take literally (Q3): `link:` names a link of
+// one program object and is written only by an inverse; `asset:` is resolved
+// by set-layer alone. Empty when the attribute list is fine.
+QString linkSrcRefusal( const SSamplerAttrList &attrs, bool assetAllowed )
+{
+    for( const auto &a : attrs ) {
+        if( a.first != QLatin1String( "src" ) ) continue;
+        if( a.second.startsWith( QLatin1String( "link:" ) ) )
+            return QStringLiteral( "src=\"%1\": a link is made with set-layer "
+                                   "src=\"asset:<name>\", never written literally" ).arg( a.second );
+        if( !assetAllowed && a.second.startsWith( QLatin1String( "asset:" ) ) )
+            return QStringLiteral( "src=\"%1\": link an asset with set-layer "
+                                   "src=\"asset:<name>\" once the layer exists" ).arg( a.second );
+    }
+    return QString();
 }
 
 QString idListText( const QVector<std::uint32_t> &ids )
@@ -220,6 +239,11 @@ SApplyResult SAddZoneAction::apply( SProject *project )
             return refuse( why.isEmpty() ? QString::fromStdString( err ) : why );
         SAction *inv = new SRemoveZoneAction( trackPath_, slotIndex_, createdId_ );
         return { true, inv };
+    }
+
+    for( const SSamplerAttrList &l : layers_ ) {
+        const QString r = linkSrcRefusal( l, false );
+        if( !r.isEmpty() ) return refuse( r );
     }
 
     // Validate on a scratch copy first, so the program OBJECT is created only
@@ -379,6 +403,10 @@ SApplyResult SAddLayerAction::apply( SProject *project )
     std::vector<std::uint32_t> zone;
     if( !parseIdList( zone_, zone ) || zone.size() != 1 )
         return refuse( QStringLiteral( "zone=\"%1\" is not one zone id" ).arg( zone_ ) );
+    {
+        const QString r = linkSrcRefusal( layer_, false );
+        if( !r.isEmpty() ) return refuse( r );
+    }
 
     std::uint32_t id = 0;
     std::string   err;
@@ -535,24 +563,69 @@ SApplyResult SSetSamplerValuesAction::apply( SProject *project )
         }
     }
 
+    {
+        const QString r = linkSrcRefusal( values_, scope_ == Scope::Layer );
+        if( !r.isEmpty() ) return refuse( r );
+    }
+
+    SSamplerProgram *prog = program( project, false, &why );
+    if( !prog ) return refuse( why );
+
+    // THE ASSET LINK (proposal 56 §4.7, Q3): src="asset:<name>" becomes
+    // `link:<n>`. The name is resolved NOW; the link then holds the body, so a
+    // later rename changes nothing (Q3.4).
+    SSamplerAttrList values = values_;
+    std::uint32_t mintedLink = 0;
+    bool mintedNew = false;
+    for( auto &a : values ) {
+        if( a.first != QLatin1String( "src" ) || !a.second.startsWith( QLatin1String( "asset:" ) ) )
+            continue;
+        const QString assetName = a.second.mid( 6 );
+        SObject *body = project ? project->asset( assetName ) : nullptr;
+        if( !body ) return refuse( QStringLiteral( "there is no asset \"%1\"" ).arg( assetName ) );
+        // DESIGN §6.2: a link whose asset contains the sampler's own track is
+        // a render cycle, refused when it is made (Q3.3) -- through other
+        // samplers' links too (Q3.q1).
+        QString root = pathRoot();
+        SObject *track = splacements::laneBySpec( project, trackPath_, root );
+        if( !track ) return refuse( QStringLiteral( "no track at \"%1\"" ).arg( trackPath_ ) );
+        QString via;
+        if( ssampler::assetReachesTrack( body, track, &via ) )
+            return refuse( QStringLiteral( "asset \"%1\" contains this sampler's own track \"%2\"%3: "
+                                           "linking it would render the instrument into its own "
+                                           "sample (a cycle)" )
+                               .arg( assetName, track->getSName(),
+                                     via.isEmpty() ? QString()
+                                                   : QStringLiteral( " (%1)" ).arg( via ) ) );
+        mintedNew  = prog->linkTarget( linkId_ ) != body;
+        mintedLink = prog->linkAsset( body, linkId_ );
+        a.second   = QStringLiteral( "link:%1" ).arg( mintedLink );
+    }
+
     // The edits.
     std::vector<twSamplerEdit> edits;
-    for( const auto &a : values_ ) {
+    for( const auto &a : values ) {
         twSamplerEdit e;
         if( !toEdit( scope, a.first, a.second, e, &why ) ) return refuse( why );
         edits.push_back( std::move( e ) );
     }
     if( edits.empty() ) return refuse( QStringLiteral( "nothing to set" ) );
 
-    SSamplerProgram *prog = program( project, false, &why );
-    if( !prog ) return refuse( why );
-
     std::vector<twSamplerPrior> prior;
     std::string err;
     if( !prog->edit( [&]( twSamplerProgramModel &m ) {
             return m.set( scope, all, ids, edits, &prior, &err );
-        }, &why ) )
+        }, &why ) ) {
+        if( mintedNew ) prog->forgetLink( mintedLink );   // a refusal mutates nothing
         return refuse( why.isEmpty() ? QString::fromStdString( err ) : why );
+    }
+    if( mintedLink ) {
+        linkId_ = mintedLink;
+        qInfo().noquote() << QStringLiteral( "set-layer: track %1 slot %2: layer(s) %3 linked to "
+                                             "link %4" )
+                                 .arg( trackPath_ ).arg( slotIndex_ ).arg( selector_ )
+                                 .arg( mintedLink );
+    }
 
     return { true, new SRestoreSamplerValuesAction( trackPath_, slotIndex_, scopeText( scope ),
                                                     fromCore( prior ) ) };

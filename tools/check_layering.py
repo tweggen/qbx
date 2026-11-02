@@ -391,7 +391,11 @@ APP_ENG = {
     # generation job decodes a `file:` layer with twSampleSource, the decoder
     # every sample in the app goes through. render, schedule, pages and
     # sidecar arrive with the asset bounce (Q3) and stretch (Q4).
-    'objects/sampler': _ENG_BASE | {'plugins', 'sampler', 'sources'},
+    # + pages since Q3 (QBX-266): the asset bounce freezes the asset content
+    # component's pages on a worker (twOutputPage, twPageClampChannel), the
+    # SCut::buildCapture_ pattern. Q3 needed neither render nor schedule: the
+    # bounce is a page loop, not a RenderSession (proposal 56 §11 Q3).
+    'objects/sampler': _ENG_BASE | {'pages', 'plugins', 'sampler', 'sources'},
     # objects/track + events since proposal 37 P1: STrack owns the per-track
     # twEventClipSet and the twEventMerge feed (3.2.1).
     # objects/track + render + sidecar + sources since proposal 40 M1b:

@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q3_link_cycle">
+
+  <!-- PROPOSAL 56 Q3 (QBX-266): A LINK THAT WOULD BE A RENDER CYCLE IS REFUSED
+       WHEN IT IS MADE (DESIGN §6.2).
+
+       Q3.3   Linking an asset that contains the sampler's own track is
+              refused: an asset over the MASTER root, and one over an
+              arrangement that holds the sampler's track.
+       Q3.q1  A cycle through a SECOND sampler is refused: A's sampler links
+              an asset over B, then B's sampler asks for an asset over A. A
+              plain childLinks walk from A never reaches B's track (an
+              instrument is not a child link); only the walk that follows
+              sampler links does.
+
+       Every refusal is checked three ways: the verb is refused, the line
+       only that refusal writes is in the log, and the layer is untouched
+       (its src and its generation state). A positive control on each shape
+       (the same kind of link, made where it is no cycle) keeps the refusals
+       from being a walk that refuses everything. The positive control also
+       carries the link's undo and redo: the undo removes the buffer, the
+       redo names the SAME link again (link:1) and bounces it anew.
+
+       Ids: add-zone gives each program zone 1 and layer 2. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ======================================== the sampler on master lane 0 -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_stereo.wav" timePos="0"/>
+
+    <!-- Q3.3 (a): an asset over the MASTER root holds every master lane. -->
+    <create-asset container="" startOffset="0" duration="48000" assetName="Whole"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Whole" expectReject="true"/>
+    <assert-log contains="asset &quot;Whole&quot; contains this sampler's own track" minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="test:none"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
+                          rendering="0" renders="0"/>
+
+    <!-- ================================ Q3.3 (b): a sampler inside "Inst" -->
+    <create-arrangement name="Inst"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <insert-plugin trackPath="Inst:0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="Inst:0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-track arrangement="Inst" index="-1"/>
+    <add-sample trackPath="Inst:1" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="Inst:" startOffset="0" duration="48000" assetName="InstAsset"/>
+    <set-layer trackPath="Inst:0" slotIndex="0" layer="2" src="asset:InstAsset"
+               expectReject="true"/>
+    <assert-log contains="asset &quot;InstAsset&quot; contains this sampler's own track" minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="Inst:0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="test:none"/>
+    <assert-sampler-layer trackPath="Inst:0" slotIndex="0" layer="2" generation="0"
+                          rendering="0" renders="0"/>
+
+    <!-- The POSITIVE CONTROL: the master sampler may link InstAsset (Inst does
+         not hold master lane 0), and an unknown asset is refused for being
+         unknown, not for a cycle. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Nope" expectReject="true"/>
+    <assert-log contains="there is no asset &quot;Nope&quot;" minCount="1" maxCount="1"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:InstAsset"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" renders="1" src="link:1" asset="InstAsset"/>
+    <!-- Its undo writes the old src back: the buffer goes. -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="test:none"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0" renders="1"/>
+    <!-- Its redo names the SAME link, and bounces it as a new generation. -->
+    <redo/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="link:1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          renders="2" src="link:1" asset="InstAsset"/>
+    <!-- A literal link is never a forward verb's to write. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="link:1" expectReject="true"/>
+    <assert-log contains="a link is made with set-layer" minCount="1" maxCount="1"/>
+
+    <!-- ================== Q3.q1: the cycle that runs through a second sampler -->
+    <create-arrangement name="A"/>
+    <add-track arrangement="A" index="-1"/>
+    <insert-plugin trackPath="A:0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="A:0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-track arrangement="A" index="-1"/>
+    <add-sample trackPath="A:1" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="A:" startOffset="0" duration="48000" assetName="AssetA"/>
+
+    <create-arrangement name="B"/>
+    <add-track arrangement="B" index="-1"/>
+    <insert-plugin trackPath="B:0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="B:0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-track arrangement="B" index="-1"/>
+    <add-sample trackPath="B:1" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="B:" startOffset="0" duration="48000" assetName="AssetB"/>
+
+    <!-- A's sampler links B: no cycle (B holds no track of A). -->
+    <set-layer trackPath="A:0" slotIndex="0" layer="2" src="asset:AssetB"/>
+    <wait-sampler-generations trackPath="A:0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="A:0" slotIndex="0" layer="2" generation="1"
+                          renders="1" asset="AssetB"/>
+    <!-- B's sampler asks for A: A holds A:0, whose sampler links AssetB, which
+         holds B:0 — B's own track. -->
+    <set-layer trackPath="B:0" slotIndex="0" layer="2" src="asset:AssetA" expectReject="true"/>
+    <assert-log contains="asset &quot;AssetA&quot; contains this sampler's own track" minCount="1" maxCount="1"/>
+    <assert-log contains="links &quot;AssetB&quot;" minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="B:0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="test:none"/>
+    <assert-sampler-layer trackPath="B:0" slotIndex="0" layer="2" generation="0"
+                          rendering="0" renders="0"/>
+    <!-- The positive control for the hop: once A's sampler lets go of AssetB,
+         the same link is no cycle and is accepted. -->
+    <set-layer trackPath="A:0" slotIndex="0" layer="2" src="test:none"/>
+    <set-layer trackPath="B:0" slotIndex="0" layer="2" src="asset:AssetA"/>
+    <wait-sampler-generations trackPath="B:0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="B:0" slotIndex="0" layer="2" generation="1"
+                          renders="1" asset="AssetA"/>
+  </actions>
+
+</SActionScript>

@@ -703,6 +703,12 @@ GUI never sees it (`SMainWindow::openProjectFile` builds a fresh `SProject` per
 open). It is why the two collect cases are separate case FILES rather than two
 phases of one.
 
+The ASSET NAMES no longer have that limitation (QBX-266): `load-project` calls
+`SProject::clearAssets()` beside `clearArrangements()`, because `SCut`
+re-registers a loaded asset body only under a FREE name — with the previous
+document's names still held, a loaded body came back UNNAMED (measured: a
+sampler's asset link read back fine but named no asset).
+
 ## The generic take seam is TOTAL, and it answers a different question from
 ## `SClipWindow::parametersOf()`
 

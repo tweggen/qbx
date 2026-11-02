@@ -1,6 +1,8 @@
 #ifndef _SSAMPLERPROGRAM_H_
 #define _SSAMPLERPROGRAM_H_
 
+#include <QList>
+#include <QPointer>
 #include <QString>
 #include <QVector>
 
@@ -8,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "app/model/sobject.h"
@@ -19,6 +22,7 @@ class SObjectRenderer;
 class SProject;
 class SProjectLoader;
 class QTimer;
+class SLink;
 class twComponent;
 
 namespace audio {
@@ -84,7 +88,24 @@ class twSamplerSample;
  * is the synchronous, bounded wait the run barrier makes before an offline
  * render (B8, invariant 7): it blocks the main thread on the jobs themselves,
  * never on the event loop, because the render verb sleeps on the main thread.
- * Any other `src` (`test:…`, empty, a future `link:…`) loads nothing.
+ * Any other `src` (`test:…`, empty) loads nothing.
+ *
+ * LIVE ASSET LINKS (proposal 56 §4.7, Q3; DESIGN §6.2). A layer whose `src` is
+ * `link:<n>` plays a BOUNCE of a qbx asset. <n> names an ASSET LINK of this
+ * object: an SLink child targeting the asset BODY (invariant 9), minted by
+ * `set-layer src="asset:<name>"` and never reused, so the src text alone says
+ * which body a layer plays and the text-based undo machinery (restore, the
+ * core's zone/layer XML) carries a link exactly as it carries a file. A link
+ * whose layer stops naming it stays in memory (an undo may name it again) and
+ * is not saved. The link holds the body by object, so renaming the asset
+ * changes nothing it holds. What triggers a bounce is the asset's OWN
+ * content epoch: on every arrangementChanged each linked layer compares the
+ * epoch (and the window) of the body's content component with the one its
+ * current generation was bounced from; only a moved one schedules a bounce,
+ * debounced. The bounce is a generation job like a file's (Job, below): a
+ * worker freezes the content component's pages over the asset's window into
+ * an immutable twSamplerSample, and the install, the render pin and the settle
+ * are the file layer's.
  */
 class SSamplerProgram : public SObject {
     Q_OBJECT
@@ -153,8 +174,12 @@ public:
         QString       installedSrc;             // the src that buffer came from
         std::uint64_t pendingGeneration   = 0;  // 0 = no job outstanding
         QString       pendingSrc;
-        bool          rendering() const { return pendingGeneration != 0; }
+        // A linked layer whose asset moved, waiting for its debounce (Q3).
+        bool          bounceDue = false;
+        // DESIGN §6.2's "rendering" mark: a job outstanding, or a bounce due.
+        bool          rendering() const { return pendingGeneration != 0 || bounceDue; }
         int           installs = 0;             // generations installed so far
+        int           renders  = 0;             // asset bounces STARTED so far (Q3.2)
     };
     LayerState layerState( std::uint32_t layerId ) const;
     // Jobs started and not yet installed (finished ones a render kept back
@@ -175,6 +200,25 @@ public:
     void holdNextJob( std::uint32_t layerId, int holdMs );
     void releaseHeldJob( std::uint32_t layerId );
 
+    // --- asset links (proposal 56 §4.7, Q3) -----------------------------------------
+    // Mint a link to `body` (a registered asset's body) and return its id, the
+    // <n> of `link:<n>`. `reuse` != 0 hands back that id when it is this
+    // object's link to the same body (a redo re-applies the forward action and
+    // must name the link it made the first time); otherwise a new id. Never 0.
+    std::uint32_t linkAsset( SObject *body, std::uint32_t reuse );
+    // Drop link <n> again when no layer names it (a refused set-layer).
+    void forgetLink( std::uint32_t linkId );
+    // The body link <n> targets, or null when there is no such link.
+    SObject *linkTarget( std::uint32_t linkId ) const;
+    // The bodies the layers link NOW (each once): what the cycle walk follows.
+    QList<SObject *> liveLinkTargets() const;
+    // Start, now, every bounce a moved asset made due (the debounce cut
+    // short). settle() calls it first; so does the shell before it asks
+    // outstandingGenerations().
+    void flushDueBounces();
+    // The debounce between an asset's epoch moving and its bounce starting.
+    static int bounceDebounceMs();
+
     struct Job;    // Qt-free state shared with one worker (ssamplerprogram.cpp)
     struct Gate;
 
@@ -187,7 +231,7 @@ signals:
 
 private:
     void publish_();
-    void reconcileSamples_();
+    void reconcileSamples_( bool atBind = false );
     void startJob_( std::uint32_t layerId, const QString &src );
     void cancelJob_( std::uint32_t layerId );
     // Install every finished job (`force` ignores the render pin: settle()).
@@ -195,6 +239,14 @@ private:
     int  installFinished_( bool force );
     void installChanged_( const std::vector<std::uint32_t> &layers );
     void pollJobs_();
+    // The asset-link half (Q3).
+    struct LinkKey;
+    bool linkKeyOf_( const QString &src, LinkKey &out, QString *why ) const;
+    void startBounce_( std::uint32_t layerId, const QString &src, const LinkKey &key );
+    // Compare every linked layer with its asset; `start` starts the due
+    // bounces now, otherwise they are marked due and the debounce (re)armed.
+    void checkLinks_( bool start );
+    void onArrangementChanged_();
     void ensurePolling_();
     InstanceInitializer futureInitializer_() const;
 
@@ -210,6 +262,7 @@ private:
         std::uint64_t                                 generation = 0;
         QString                                       src;
         std::shared_ptr<const audio::twSamplerSample> sample;
+        std::shared_ptr<const LinkKey>                key;   // a bounce's, else null
     };
     std::map<std::uint32_t, Installed>              installed_;
     std::map<std::uint32_t, std::uint64_t>          lastGeneration_;  // never reset
@@ -219,6 +272,24 @@ private:
     std::map<std::uint32_t, std::shared_ptr<Gate>>  armedGates_;      // for the next job
     std::map<std::uint32_t, std::shared_ptr<Gate>>  liveGates_;       // held by a job now
     QTimer                                         *poll_ = nullptr;
+
+    // A link is PINNED (an SLink child, saved) only while a layer names it.
+    // One no layer names keeps only a WEAK pointer to its body, so an undo
+    // can name it again but it holds nothing: a pin nobody uses would keep a
+    // reference cycle (asset -> track -> slot -> program -> asset) alive after
+    // its layer let go, and ~SProject cannot order a cycle (measured: a
+    // teardown SEGFAULT, QBX-266).
+    struct LinkRec {
+        QPointer<SObject> body;
+        SLink            *pin = nullptr;
+    };
+    std::map<std::uint32_t, LinkRec>                links_;
+    std::set<std::uint32_t> namedLinks_() const;
+    void syncLinkPins_();
+    std::uint32_t                                   nextLinkId_ = 1; // never reused
+    std::map<std::uint32_t, int>                    renders_;
+    std::set<std::uint32_t>                         due_;            // bounce waiting
+    QTimer                                         *debounce_ = nullptr;
 };
 
 #endif
