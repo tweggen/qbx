@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_late_cycle_dissolve_replay">
+
+  <!-- QBX-267 (proposal 56 §11 Q3, objects/sampler CONTRACT inv. 22):
+       DISSOLVE-ARRANGEMENT ASKS ABOUT THE CONTAINER A TRACK WILL ACTUALLY
+       LAND IN.
+
+       A restore plan's paths are resolved at each track's TURN: after the
+       teardown has removed the placement's lane, and after the earlier
+       tracks went back. "Mover" was extracted from the folder "Fold" (master
+       lane 2) together with "Lead" (lane 0); the extraction put its asset
+       lane at 0, so the recorded plan "2@1" names Fold only once that lane is
+       gone AND Lead is back at 0. While Mover sits in "Ex", its sampler may
+       link "FoldAsset" (Fold no longer holds it). Dissolving Ex would put
+       Mover back into Fold: Fold -> Mover -(sampler)-> FoldAsset -> Fold.
+       On main the dissolve is accepted and the case dies at teardown.
+
+       Positive control: once Mover lets go, the dissolve restores both
+       tracks to the exact slots they came from (the move loop reads the
+       guard's own answers), with undo and redo. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- master: 0 Lead, 1 Other, 2 Fold { FIn, Mover } -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Lead"/>
+    <set-track-name trackPath="1" name="Other"/>
+    <set-track-name trackPath="2" name="Fold"/>
+    <set-track-name trackPath="3" name="FIn"/>
+    <set-track-name trackPath="4" name="Mover"/>
+    <insert-plugin trackPath="4" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="4" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <reparent-track source="3" destParent="2" destIndex="-1"/>
+    <reparent-track source="3" destParent="2" destIndex="-1"/>
+    <assert-track-count count="3"/>
+    <assert-track-name trackPath="2,1" name="Mover"/>
+    <add-sample trackPath="0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_stereo.wav" timePos="0"/>
+    <add-sample trackPath="2,0" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="2" startOffset="0" duration="48000" assetName="FoldAsset"/>
+
+    <extract-arrangement trackPaths="0;2,1" rangeStart="0" rangeEnd="48000"
+                         name="Ex" window="range" placeAt="0" snippets="0"/>
+    <assert-track-count count="3"/>
+    <assert-track-name trackPath="0" name="Ex"/>
+    <assert-track-count arrangement="Ex" count="2"/>
+    <assert-track-name trackPath="Ex:1" name="Mover"/>
+
+    <!-- In Ex, Mover may link FoldAsset: Fold no longer holds it. -->
+    <set-layer trackPath="Ex:1" slotIndex="0" layer="2" src="asset:FoldAsset"/>
+    <wait-sampler-generations trackPath="Ex:1" slotIndex="0" timeoutMs="15000"/>
+
+    <dissolve-arrangement name="Ex" expectReject="true"/>
+    <assert-log contains="dissolve-arrangement: refused, moving 'Mover' into 'Fold' would close a sampler asset-link cycle (the sampler on &quot;Mover&quot; links &quot;FoldAsset&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-track-count arrangement="Ex" count="2"/>
+    <assert-track-name trackPath="0" name="Ex"/>
+
+    <!-- POSITIVE CONTROL: Mover lets go; both tracks go back where they were. -->
+    <set-layer trackPath="Ex:1" slotIndex="0" layer="2" src="test:none"/>
+    <dissolve-arrangement name="Ex"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-track-count count="3"/>
+    <assert-arrangements names=""/>
+    <assert-track-name trackPath="0" name="Lead"/>
+    <assert-track-name trackPath="1" name="Other"/>
+    <assert-track-name trackPath="2" name="Fold"/>
+    <assert-track-name trackPath="2,0" name="FIn"/>
+    <assert-track-name trackPath="2,1" name="Mover"/>
+    <undo/>
+    <assert-track-count arrangement="Ex" count="2"/>
+    <assert-track-name trackPath="0" name="Ex"/>
+    <redo/>
+    <assert-track-name trackPath="0" name="Lead"/>
+    <assert-track-name trackPath="2,1" name="Mover"/>
+  </actions>
+
+</SActionScript>

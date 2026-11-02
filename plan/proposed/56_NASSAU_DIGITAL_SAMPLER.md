@@ -1447,6 +1447,8 @@ build:
    `QPointer` to the body and are re-pinned when an undo names them again.
    A render cycle built AFTER the link is a refcount cycle too, and is not
    refused (DESIGN §6.2 refuses at link time) — recorded in the CONTRACT.
+   *Corrected by QBX-267 (below): on the author's ruling of 2026-11-01 such
+   an edit IS refused, by the same walk.*
 6. **`load-project` had to drop the asset names** (not in §4.7; Q3.4's
    reload). `SLoadProjectAction` loads INTO the live project and dropped the
    arrangements (proposal 09 M1) but not the asset names, and `SCut`
@@ -1485,12 +1487,120 @@ build:
    the name in use; `rename-asset` dropping the old pin before taking the new
    one (bites only through `SObject::event`'s "resurrected" warning, which
    the case asserts absent: that guard makes the order otherwise harmless).
-9. **Not gated**: a cycle built after the link (item 5); a bounce during
+9. **Not gated**: a cycle built after the link (item 5; refused and gated
+   since QBX-267, below); a bounce during
    playback (it stales the track, invariant 14, but no case plays); the
    cancellation of a superseded bounce BETWEEN PAGES (a held bounce is
    superseded before its first page; no case can land an edit inside a
    1–11 ms bounce deterministically).
 
+### QBX-267: a cycle closed AFTER the link is refused, by the same walk (2026-11-02)
+
+The author's ruling (2026-11-01, on QBX-266): an edit that would close a
+sampler asset-link cycle after the link exists is REFUSED, with a reason,
+using the same check as at link time. Standing rule: any qbx verb that
+changes containment or placement refuses such an edit.
+
+1. **One walk, installed into model.** `sarrangements::reaches` — the
+   whole-graph guard every containment and placement verb asks — takes a
+   hook (`sarrangements::setReachWalk`), and the shell installs
+   `ssampler::assetReachesTrack` as it (`ssamplerwiring::install`, beside
+   QBX-266's lane-programs hook). The link-time check and the late-edit check
+   are therefore one function. It gained two arguments: `via` comes back
+   EMPTY when the path took no sampler hop (a plain reference cycle, worded
+   differently), and `pending` lists edges the edit is about to add.
+2. **The question is the same for every verb**: attaching X under Y closes a
+   cycle exactly when Y is reachable from X, asked before anything mutates.
+   A cycle has to use the new edge, and the graph had none before.
+3. **The verbs that ask** (each refusal writes a line only it writes,
+   "…would close a sampler asset-link cycle (<hops>)" or "…would close a
+   reference cycle"):
+   - `place-asset` — always asked `placementWouldCycle`; now sees sampler
+     hops (and through a SECOND sampler, both hops named). `duplicate-asset-
+     here` places through it.
+   - `reparent-track` — asked only `isSelfOrDescendant` (the tree): it now
+     asks the walk, which also refuses a PLAIN cycle it never saw (a track
+     holding a placement of an asset over the destination folder).
+   - `move-clip` (to another lane), `duplicate-clip`, `link-clip` — asked
+     nothing; the plain cycle (an asset placement moved or copied into its
+     own container) was a hole of its own, closed by the same check.
+   - `dissolve-arrangement` — asked nothing, and is the one verb that moves
+     SEVERAL objects: an unplaced arrangement's tracks are reachable from
+     nothing in the master, so a sampler on one may link an asset over the
+     master, and its dissolve then closes the cycle; and two moves can close
+     one together that neither closes alone. So it asks about the graph it
+     LEAVES (every move a pending edge), and it decides each landing BEFORE
+     the teardown, by replaying the plan on virtual child lists: a plan path
+     means the tree as it is at that track's turn (the placement's lane gone,
+     the earlier tracks back), which today's tree does not answer. The move
+     loop uses the replayed landings, so the guard and the move cannot
+     disagree.
+4. **The verbs that cannot close one, and why.**
+   - New empty containers (`add-track`, `create-arrangement`,
+     `add-return-track`, `add-send-lane`) and new content that is a file, a
+     recording or a sequence (`add-sample`, `place-clip`, `add-take`,
+     `place-recording`, `place-midi-recording`, `insert-midi-clip`,
+     `add-midi-take`, `import-midi-file`): nothing reaches back out of them.
+   - `create-asset`: a new body over an existing container, which nothing
+     places or links yet. `rename-asset`: no edge at all.
+   - Moves that keep every old reachability: `move-track` (a reorder within
+     one parent), `merge-columns`/`unmerge-columns`, `split-clip`,
+     `resize-clip` and the other one-lane edits, `pack-clips` /
+     `pack-selection` (a fragment per lane, placed on that lane — they
+     interpose a container), `unpack-clips` (the children land on the lane
+     that held the fragment), `extract-arrangement` (the tracks leave the
+     master for a root placed once ON the master: the master reaches what it
+     reached, everything else reaches less). `pack-clips` keeps its own
+     `reaches` check, which now follows sampler links too.
+   - Every `remove-*` verb: removes edges only.
+   - Undo and redo: an undo returns the project to a state it was in, which
+     had no cycle because every forward edit was asked; a redo re-runs the
+     forward verb's `apply()`, which asks again. The inverse-only verbs
+     (`restore-*`, `reinsert-*`, `remove-asset-placement`, `unplace-clip`,
+     `restore-sampler-values` writing a `link:` back) write a past state.
+     `insert-plugin` of a fresh NassauDigital holds no link; one carrying a
+     state that names links is `remove-plugin`'s inverse.
+   - `set-layer` is the link-time check itself (QBX-266, Q3.3).
+5. **Gates** (each refusal: the verb refused, its line, the tree unchanged;
+   a positive control where the same edit closes nothing, with undo and
+   redo; the refused edit accepted once the sampler lets go):
+   `qxa.sampler_late_cycle_place_asset` (also through a second sampler),
+   `qxa.sampler_late_cycle_move_clip`, `qxa.sampler_late_cycle_duplicate_clip`
+   (both verbs), `qxa.sampler_late_cycle_reparent_track` (the ticket's own
+   example), `qxa.sampler_late_cycle_dissolve` (an unplaced arrangement over
+   the master; its plain form; two moves that close a cycle together),
+   `qxa.sampler_late_cycle_dissolve_replay` (a recorded plan that names the
+   right folder only after the teardown and the earlier move). The move-clip,
+   duplicate/link and reparent cases carry the plain cycle too, and the
+   place-asset and reparent cases end on the link-time refusal of the same
+   cycle from the other side.
+6. **Sabotages** — **Sabotages that bite** (each watched failing; the harness writes every
+   file from its own saved bytes, touches every file it writes, rebuilds,
+   runs the six cases plus `sampler_q3_link_cycle`, `sampler_q3_asset_link`,
+   `extract_arrangement_undo` and `extract_arrangement_roundtrip`, restores
+   and touches again; the clean rebuild after the last passes all ten):
+   (S0) all of QBX-267's source reverted to main — all six fail, five of them
+   by SEGFAULT (the accepted cycle), place-asset by its refusal and line
+   assertions: this is the "watched failing on main" for every case;
+   (S1) the shell not installing the walk — place-asset, move-clip and
+   duplicate-clip fail on their sampler refusals (their plain ones still
+   pass), reparent and both dissolve cases SEGFAULT; (S2) reparent-track's
+   check off — only its case (SEGFAULT); (S3) move-clip's — only its case;
+   (S4) duplicate-clip's, (S5) link-clip's — only their case; (S6)
+   dissolve's guard off — both dissolve cases; (S7) the walk ignoring
+   pending edges — only `…_dissolve` (the two-move cycle); (S8) the landing
+   replay ignoring the teardown's lane removal, and (S9) not replaying the
+   earlier moves — only `…_dissolve_replay` (accepted, and the tracks land
+   elsewhere); (S10) place-asset wording a sampler cycle as a plain one —
+   only its line assertions. The four bystander cases passed under every
+   sabotage.
+7. **Not gated / not covered**: a project FILE that already holds such a
+   cycle (hand-edited, or saved before QBX-267) loads as it is; the walk
+   follows containment, content and sampler links but not ROUTING (a return
+   or a sidechain tapping a lane), which is the link-time check's limit too.
+   Found on the way and not fixed: `dissolve-arrangement` of an arrangement
+   made by `create-arrangement` (no asset named after it) hands back an
+   extraction over an empty window, which is refused, so its undo fails.
 
 ### Q4 as built (QBX-268, 2026-11-02)
 

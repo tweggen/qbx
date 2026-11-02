@@ -23,6 +23,8 @@
 
 #include <functional>
 
+#include "app/model/sarrangements.h"
+
 class SObject;
 class SProject;
 class SSamplerProgram;
@@ -61,7 +63,15 @@ void setLaneProgramsHook( LanePrograms hook );
 // True when `track` is reachable from `body` through child links, content
 // links and sampler asset links. `via`, when given, names the sampler hops the
 // path took ("" when it took none), for the refusal's message. Main thread.
-bool assetReachesTrack( SObject *body, const SObject *track, QString *via = nullptr );
+//
+// It is ALSO the walk every containment and placement verb asks (QBX-267):
+// the shell installs it as sarrangements' reach walk, so a cycle a later edit
+// would close (reparent-track, move-clip, place-asset, ...) is refused by the
+// same check as a link that would close one. For that use `body` and `track`
+// are any two objects ("is `track` reachable from `body`"), and `pending`
+// lists edges the edit is about to add (dissolve-arrangement's several moves).
+bool assetReachesTrack( SObject *body, const SObject *track, QString *via = nullptr,
+                        const sarrangements::PendingEdges *pending = nullptr );
 
 }  // namespace ssampler
 

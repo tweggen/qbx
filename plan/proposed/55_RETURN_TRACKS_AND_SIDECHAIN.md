@@ -918,6 +918,16 @@ the build found that this document did not say:
   **M1's `setRoutedOutBuses` has the same shape** (re-prepare, no reset) and
   was left as it is: a routed aux bus changes no DSP state in any fixture, so
   nothing measures it. Recorded here for whoever touches it next.
+  *Correction (2026-11-02, QBX-264):* fixed as the key was. The routing change
+  is worse than "no reset": it also clears `haveLastEnd_`, and on the effect
+  path that makes the next page NOT a discontinuity, so it disarms the reset a
+  page at another position would have had. `setRoutedOutBuses` now resets
+  every instance when the applied mask changes. The fixture that measures it
+  is `tw.test.clap.splittail`, the split with a decaying-envelope main out
+  (input silent over `[0, 16384)`, a sine after): on `main` the re-render at 0
+  after routing bus 1 carried the tail, peak 0.49796 and 32768 of 32768
+  silent-head samples non-zero, and the same after unrouting; with the reset
+  both are 0, and the main page is memcmp-equal to a fresh instance's.
 - **AC3.3's "gate with teeth" is an env knob**, invariant 31's pattern:
   `SMARAGD_VST3_NO_SIDECHAIN_BUS=1` makes `prepare()` skip the activation of a
   fed input while still handing it the key, and `TestDuck` (which reads its

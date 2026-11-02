@@ -22,6 +22,27 @@ Invariants:
    order survives only through SObject::event's resurrection guard, whose
    warning `rename_asset.qxa` asserts absent). Gated by `rename_asset.qxa`
    and `sampler_q3_asset_link.qxa`.
+   **A verb here that attaches X under Y asks `sarrangements::reaches(X, Y)`
+   BEFORE it mutates, and refuses with the reason** (QBX-267): `place-asset`
+   (which always asked), `reparent-track` (which asked only
+   `isSelfOrDescendant`, the tree, and so also missed a PLAIN cycle through a
+   placement the moved track holds) and `dissolve-arrangement` (which asked
+   nothing). With the shell's walk installed the question follows
+   NassauDigital sampler asset links too, so a late edit cannot close the
+   cycle `set-layer` refuses when a link is made (objects/sampler inv. 22).
+   Each refusal writes a line only it writes: "…would close a sampler
+   asset-link cycle (<hops>)" or "…would close a reference cycle".
+   `dissolve-arrangement` asks about the graph it LEAVES — its moves are
+   `PendingEdges` — and decides each track's landing BEFORE the teardown by
+   replaying the plan on virtual child lists (the plan's paths mean the tree
+   as it is at that track's turn, after the placement's lane went and the
+   earlier tracks came back); the move loop uses those landings, so the
+   guard and the move cannot disagree. `extract-arrangement`, `pack-clips`,
+   `pack-selection` and `unpack-clips` cannot close a cycle (they only
+   interpose or remove a container on paths that already existed: nothing
+   old becomes reachable from anything old); `pack-clips` keeps its own
+   `reaches` check, which now follows sampler links as well. Gated by
+   `sampler_late_cycle_{place_asset,reparent_track,dissolve,dissolve_replay}.qxa`.
 3. SPluginChain mirrors its model into tw/plugins chain components; wiring
    rebuilds go through rebuildWiring() after input changes.
 4. Track selection is a SET with one distinguished PRIMARY, and both are

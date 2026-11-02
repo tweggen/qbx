@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_late_cycle_dissolve">
+
+  <!-- QBX-267 (proposal 56 §11 Q3, objects/sampler CONTRACT inv. 22):
+       DISSOLVE-ARRANGEMENT REFUSES A DISSOLVE THAT WOULD CLOSE A CYCLE.
+
+       (1) An UNPLACED arrangement's tracks are reachable from nothing in the
+       master, so a sampler on one may link "Whole", an asset over the master
+       root: no cycle while it sits in "Box". Dissolving Box moves it INTO
+       the master: master -> BoxSynth -(sampler)-> Whole -> master. On main
+       the dissolve is accepted and the case dies at teardown.
+
+       (2) The PLAIN form of (1), which dissolve never refused before either:
+       "Hold"'s lane holds a placement of Whole (a different line).
+
+       (3) Two moves that close a cycle only TOGETHER: P1's sampler links
+       "FoldB" (over folder FB), P2's links "FoldA" (over FA), and the plan
+       sends P1 into FA and P2 into FB: FA -> P1 -> FoldB -> FB -> P2 ->
+       FoldA -> FA. Neither move alone closes anything, so a guard that asked
+       about each move against today's graph would accept it; the guard asks
+       about the graph the dissolve LEAVES (every move a pending edge).
+
+       Positive controls: Box dissolved once BoxSynth lets go of Whole; Pair
+       dissolved with P2 sent to the master instead. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- master: 0 Keep, 1 FA { FAin }, 2 FB { FBin } -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Keep"/>
+    <set-track-name trackPath="1" name="FA"/>
+    <set-track-name trackPath="2" name="FAin"/>
+    <set-track-name trackPath="3" name="FB"/>
+    <set-track-name trackPath="4" name="FBin"/>
+    <reparent-track source="2" destParent="1" destIndex="-1"/>
+    <reparent-track source="3" destParent="2" destIndex="-1"/>
+    <assert-track-count count="3"/>
+    <assert-track-name trackPath="2,0" name="FBin"/>
+    <add-sample trackPath="0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-sample trackPath="1,0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-sample trackPath="2,0" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="" startOffset="0" duration="48000" assetName="Whole"/>
+    <create-asset container="1" startOffset="0" duration="48000" assetName="FoldA"/>
+    <create-asset container="2" startOffset="0" duration="48000" assetName="FoldB"/>
+
+    <!-- ============================ (1) Box: BoxSynth links Whole, unplaced -->
+    <create-arrangement name="Box"/>
+    <add-track arrangement="Box" index="-1"/>
+    <set-track-name trackPath="Box:0" name="BoxSynth"/>
+    <insert-plugin trackPath="Box:0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="Box:0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <set-layer trackPath="Box:0" slotIndex="0" layer="2" src="asset:Whole"/>
+    <wait-sampler-generations trackPath="Box:0" slotIndex="0" timeoutMs="15000"/>
+
+    <dissolve-arrangement name="Box" expectReject="true"/>
+    <assert-log contains="dissolve-arrangement: refused, moving 'BoxSynth' into '" minCount="1" maxCount="1"/>
+    <assert-log contains="would close a sampler asset-link cycle (the sampler on &quot;BoxSynth&quot; links &quot;Whole&quot;)" minCount="1" maxCount="1"/>
+    <assert-track-count arrangement="Box" count="1"/>
+    <assert-track-count count="3"/>
+
+    <!-- ===================================== (2) the PLAIN form: Hold holds Whole -->
+    <create-arrangement name="Hold"/>
+    <add-track arrangement="Hold" index="-1"/>
+    <set-track-name trackPath="Hold:0" name="H0"/>
+    <place-asset assetName="Whole" trackPath="Hold:0" timePos="0"/>
+    <dissolve-arrangement name="Hold" expectReject="true"/>
+    <assert-log contains="dissolve-arrangement: refused, moving 'H0' into '" minCount="1" maxCount="1"/>
+    <assert-log contains="would close a reference cycle" minCount="1" maxCount="1"/>
+    <assert-track-count arrangement="Hold" count="1"/>
+    <assert-track-count count="3"/>
+
+    <!-- ==================== (3) Pair: two moves that close a cycle together -->
+    <create-arrangement name="Pair"/>
+    <add-track arrangement="Pair" index="-1"/>
+    <set-track-name trackPath="Pair:0" name="P1"/>
+    <insert-plugin trackPath="Pair:0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="Pair:0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-track arrangement="Pair" index="-1"/>
+    <set-track-name trackPath="Pair:1" name="P2"/>
+    <insert-plugin trackPath="Pair:1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="Pair:1" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <set-layer trackPath="Pair:0" slotIndex="0" layer="2" src="asset:FoldB"/>
+    <wait-sampler-generations trackPath="Pair:0" slotIndex="0" timeoutMs="15000"/>
+    <set-layer trackPath="Pair:1" slotIndex="0" layer="2" src="asset:FoldA"/>
+    <wait-sampler-generations trackPath="Pair:1" slotIndex="0" timeoutMs="15000"/>
+
+    <dissolve-arrangement name="Pair" restorePlan="1@0;2@0" expectReject="true"/>
+    <assert-log contains="dissolve-arrangement: refused, moving 'P1' into 'FA' would close a sampler asset-link cycle (the sampler on &quot;P1&quot; links &quot;FoldB&quot;, the sampler on &quot;P2&quot; links &quot;FoldA&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-track-count arrangement="Pair" count="2"/>
+    <assert-track-count count="3"/>
+    <assert-track-name trackPath="1,0" name="FAin"/>
+
+    <!-- ...and its POSITIVE CONTROL: P2 to the master instead closes nothing. -->
+    <dissolve-arrangement name="Pair" restorePlan="1@0;@-1"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-track-count count="4"/>
+    <assert-track-name trackPath="1,0" name="P1"/>
+    <assert-track-name trackPath="1,1" name="FAin"/>
+    <assert-track-name trackPath="3" name="P2"/>
+
+    <!-- =========== (1)'s POSITIVE CONTROL: BoxSynth lets go, Box dissolves.
+         (Its undo is not exercised here: Box was made by create-arrangement,
+         so no asset is named after it and the dissolve's inverse extraction
+         gets an empty window and is refused — a defect of its own, older
+         than QBX-267. sampler_late_cycle_dissolve_replay carries the undo
+         and redo of a dissolve, of an arrangement made by extraction.) -->
+    <set-layer trackPath="Box:0" slotIndex="0" layer="2" src="test:none"/>
+    <dissolve-arrangement name="Box"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-track-count count="5"/>
+    <assert-track-name trackPath="4" name="BoxSynth"/>
+  </actions>
+
+</SActionScript>

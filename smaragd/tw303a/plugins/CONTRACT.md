@@ -1292,9 +1292,18 @@ different views of the same type.
     the slot actually renders -- none on DualMono (55 D9: "the plugin's bus b"
     has N candidates), Transparent, Unsupported or Missing. A change of the
     applied mask re-prepares every instance (VST3 may activate a bus only
-    there) and bumps the insert's epoch, so the next render hears it from its
-    first frame. A rebuilt slot tells its new instances BEFORE their first
-    `prepare()`.
+    there) and RESETS it, and bumps the insert's epoch, so the next render
+    hears it from its first frame. The reset is inv. 66's, for the same
+    reason: a `prepare()` at an unchanged rate is a no-op in CLAP, and the
+    `haveLastEnd_ = false` the change also sets makes the next effect page
+    NOT a discontinuity, so without it the DSP state of the last render runs
+    into the first frames of the next (QBX-264; gated by `plugins_test` over
+    `tw.test.clap.splittail`, a split whose main out is a decaying envelope:
+    routed and then unrouted, its silent head is exact zeros and the whole
+    main page is byte-identical to a fresh instance's; and by a counting
+    double that sees the `reset()`). A change of the ROUTED mask that leaves
+    the applied one alone (a DualMono slot) re-prepares and resets nothing.
+    A rebuilt slot tells its new instances BEFORE their first `prepare()`.
 
 61. **A BACKEND READS `outBuses[b]` FOR A ROUTED BUS ONLY, AND EVERY CALLER
     PASSES A FULL-LENGTH ARRAY ONCE ONE IS ROUTED.** The ABI always said the

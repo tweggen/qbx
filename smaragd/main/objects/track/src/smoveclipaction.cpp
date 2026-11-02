@@ -1,5 +1,6 @@
 #include "app/objects/track/smoveclipaction.h"
 #include "app/model/splacements.h"
+#include "app/model/sarrangements.h"
 #include "app/model/seditgroups.h"
 #include "app/actions/scompositeaction.h"
 #include "app/objects/track/strackpath.h"
@@ -8,6 +9,7 @@
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "tw/core/twfraction.h"
+#include <QDebug>
 #include <QDomElement>
 
 using namespace strackpath;
@@ -72,6 +74,31 @@ SApplyResult SMoveClipAction::apply(SProject *project)
     STrack *destTrack = dynamic_cast<STrack*>(destObj);
     if (!destTrack) {
         return {false, nullptr};
+    }
+
+    // QBX-267: THE WHOLE-GRAPH CYCLE GUARD, for a move to ANOTHER lane. The
+    // clip lands under destTrack, which closes a cycle exactly when destTrack
+    // is reachable from what the clip places: an asset placement moved into
+    // its own container's tree (a plain reference cycle, which nothing here
+    // refused before), or one whose asset reaches a NassauDigital sampler
+    // whose asset link reaches the destination (proposal 56 Q3; the walk is
+    // the one set-layer makes a link under). Asked before the link moves.
+    if (destObj != srcTrack) {
+        QString via;
+        if (sarrangements::placementWouldCycle(&link->getSObject(), destTrack, &via)) {
+            if (!via.isEmpty()) {
+                qWarning().noquote()
+                    << QStringLiteral("move-clip: refused, moving \"%1\" onto \"%2\" would "
+                                      "close a sampler asset-link cycle (%3)")
+                           .arg(link->getSObject().getSName(), destTrack->getSName(), via);
+            } else {
+                qWarning().noquote()
+                    << QStringLiteral("move-clip: refused, moving \"%1\" onto \"%2\" would "
+                                      "close a reference cycle")
+                           .arg(link->getSObject().getSName(), destTrack->getSName());
+            }
+            return {false, nullptr};
+        }
     }
 
     // Capture the pre-move placement for the inverse.

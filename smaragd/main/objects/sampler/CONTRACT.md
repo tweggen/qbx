@@ -15,12 +15,13 @@ bounded settle the offline render's barrier makes (invariants 12–16).
 Since Q3 (QBX-266) a layer may LINK a qbx asset (proposal 56 §4.7, DESIGN
 §6.2): the program holds the link (an `SLink` to the asset body), bounces the
 asset into a generation when the asset's own content epoch moves, and refuses
-a link that would be a render cycle (invariants 17–21).
+a link that would be a render cycle (invariants 17–21). Since QBX-267 the
+same walk refuses a LATER edit that would close such a cycle (invariant 22).
 
 Since Q4 (QBX-268) a layer of a tempo-mode zone whose method is `stretch`
 plays its source STRETCHED to the project tempo by qbx's phase vocoder, as a
 generation, re-rendered on a tempo change and once more when the source's onset
-analysis completes (proposal 56 §4.8, DESIGN §5, §13; invariants 22–26).
+analysis completes (proposal 56 §4.8, DESIGN §5, §13; invariants 23–27).
 
 Public headers: app/objects/sampler/*.h
 
@@ -251,10 +252,23 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     child link, so without that hop a cycle through a second sampler is
     invisible. Which programs a lane holds is objects/track's knowledge: the
     shell installs `ssampler::setLaneProgramsHook`. A cycle built AFTER the
-    link (a track moved into the linked asset's container) is not refused —
-    see "Not gated".
+    link is invariant 22's.
+22. **AN EDIT THAT WOULD CLOSE A CYCLE AFTER THE LINK IS REFUSED, BY THE SAME
+    WALK** (QBX-267; the author's ruling of 2026-11-01). The shell installs
+    `ssampler::assetReachesTrack` as model's whole-graph walk
+    (`sarrangements::setReachWalk`), so `sarrangements::reaches` — which
+    every containment and placement verb asks — follows sampler asset links
+    too: the check a link is made under and the check a later move is made
+    under are ONE function. A verb that attaches X under Y asks "is Y
+    reachable from X" before it mutates and refuses with the hops in its
+    reason: `place-asset`, `reparent-track`, `move-clip`, `duplicate-clip`,
+    `link-clip`, `dissolve-arrangement` (which asks about the graph it LEAVES:
+    its several moves are pending edges, `sarrangements::PendingEdges`, that
+    the walk follows as child links). Proposal 56 §11 "QBX-267" lists the
+    verbs that cannot close one, and why. Without the shell's hook (a unit
+    test) the walk is the plain child-link one.
 
-22. **A STRETCH LAYER'S GENERATION IS ITS SOURCE STRETCHED TO THE PROJECT
+23. **A STRETCH LAYER'S GENERATION IS ITS SOURCE STRETCHED TO THE PROJECT
     TEMPO** (DESIGN §5, §13; proposal 56 §4.8). A layer WANTS a stretch when
     its zone's `mode` is `tempo-loop` or `tempo-oneshot`, its `tempoMethod` is
     `stretch`, its `beats` > 0 and the project has a tempo
@@ -272,7 +286,7 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     host's decision. Numbers are parsed with `QString::toDouble` (C locale;
     `strtod` reads "1.5" as 1 under a German LC_NUMERIC, measured).
 
-23. **THE SOURCE IS KEPT, AND EVERY CHANGE OF THE WANT IS A NEW GENERATION**.
+24. **THE SOURCE IS KEPT, AND EVERY CHANGE OF THE WANT IS A NEW GENERATION**.
     A stretch layer's generation keeps its unstretched source (planar, with its
     content hash) beside it. `checkStretch_()` compares each layer's want (the
     mode / method / beats / positions / tempo above) with the want of its
@@ -284,7 +298,7 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     generation too (the source, unstretched). A layer with no kept source
     (it did not want a stretch before) starts from its `src`.
 
-24. **ONSETS: FROM THE SIDECAR STORE, ELSE AN ANALYSIS THIS OBJECT STARTS**
+25. **ONSETS: FROM THE SIDECAR STORE, ELSE AN ANALYSIS THIS OBJECT STARTS**
     (DESIGN §5: the vocoder places its transient keyframes from the source's
     onsets). The job's worker asks the sidecar store for the source's `onsets`
     aspect by content hash (params-agnostic, as twGrainSource does). With none,
@@ -300,7 +314,7 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     that finds no onsets changes nothing (the fixed grid is what an empty list
     means) and makes no generation.
 
-25. **THE BARRIER WAITS FOR GENERATIONS, NOT FOR ANALYSES.** `settle()` first
+26. **THE BARRIER WAITS FOR GENERATIONS, NOT FOR ANALYSES.** `settle()` first
     acts on analyses that have FINISHED (their re-stretch is then outstanding
     and waited for), never on one still running: a render after a tempo change
     hears the stretch (Q4.q1, Q2.3's mechanism), and a render before the
@@ -311,7 +325,7 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     `wait-sampler-generations analysis="1"`) is the bounded wait that a case
     uses to place itself after the completion.
 
-26. **THE STRETCH IS DETERMINISTIC.** `twSamplerStretch` runs
+27. **THE STRETCH IS DETERMINISTIC.** `twSamplerStretch` runs
     `twPagedVocoder::warpOffline` (single-threaded, double math, fft 2048, hop
     512, pitch ratio 1 — the twGrainSource configuration) over the whole
     source into exactly llround(frames · s) frames; the same source, factor and
@@ -426,6 +440,17 @@ absolute (there is nothing to be relative to).
   is no cycle accepted), the link's undo (buffer gone) and redo (same
   `link:1`, a new generation), and a literal `link:` refused.
 - Sabotages that bite (QBX-266): see proposal 56 §11 Q3.
+- `qxa.sampler_late_cycle_place_asset`, `…_move_clip`, `…_duplicate_clip`
+  (duplicate-clip and link-clip), `…_reparent_track`, `…_dissolve`,
+  `…_dissolve_replay` (QBX-267, invariant 22) — each verb refused for the
+  cycle it would close after the link, with the line only that refusal
+  writes and the tree unchanged; a positive control where the same edit
+  closes nothing, with undo and redo; the refused edit accepted once the
+  sampler lets go of the asset; `place-asset` also through a SECOND sampler
+  (both hops named); `dissolve-arrangement` also for two moves that close a
+  cycle only together, and for a plan that names the right folder only once
+  the teardown and the earlier moves have run. Sabotages: proposal 56 §11
+  "QBX-267".
 
 - `qxa.sampler_q4_stretch` (QBX-268) — Q4.1: tests/sampler_q4_loop.wav (2
   beats at 120 BPM, a 1 kHz carrier under four hits, the first accented), zone
@@ -454,7 +479,7 @@ absolute (there is nothing to be relative to).
 
 - Q4: a stretch DURING PLAYBACK (a tempo change while playing) installs like
   any generation and stales the track; no case plays. An analysis during a
-  render is not waited for (invariant 25) and no case races one. The loop's
+  render is not waited for (invariant 26) and no case races one. The loop's
   SEAM is stretched as part of the whole buffer, not circularly: the vocoder
   sees no material across the wrap, so a seam can carry a small discontinuity
   the source did not have (not measured as a click; the period and pitch gates
@@ -463,11 +488,12 @@ absolute (there is nothing to be relative to).
   tune ≠ 0 drifts off the tempo. A kept source doubles a stretch layer's
   memory (the source beside its generation).
 
-- A render cycle made AFTER the link (the sampler's track moved into the
-  linked asset's container, or an asset over it placed inside) is not
-  refused: DESIGN §6.2 refuses at link time, and the freeze-cycle silence is
-  the backstop. Such a cycle is also a refcount cycle, which `~SProject`
-  cannot order.
+- A render cycle made AFTER the link is refused since QBX-267 (invariant
+  22), by the verbs that can build one. What still is not: a project FILE
+  that already holds such a cycle (hand-edited, or saved by a build before
+  QBX-267) loads as it is; and the walk follows containment, content and
+  sampler links but not ROUTING (a return or sidechain tapping a lane), the
+  link-time check's limit too.
 - A link no layer names holds its body weakly: `remove-asset`, an undo of
   the unlink and an undo of the removal bring back a NEW body, which the old
   link does not name; the layer then plays nothing, announced.

@@ -189,6 +189,16 @@ Invariants (normative detail: CLIP_MODEL.md):
    the barrier a dangling pointer — and the walk runs once per transport start,
    never per page, per block or per edit.
 
+`move-clip` TO ANOTHER LANE asks the whole-graph cycle guard before the link
+moves (QBX-267): `sarrangements::placementWouldCycle( clip's object, dest )`,
+which with the shell's walk installed follows NassauDigital sampler asset
+links too (objects/sampler inv. 22). It refuses an asset placement moved into
+its own container's tree — a PLAIN reference cycle move-clip never refused
+before — and one whose asset reaches a sampler that links an asset over the
+destination, each with its own line. A same-lane move (the edit-group
+broadcast's only kind) changes no containment and is not asked. Gated by
+`sampler_late_cycle_move_clip.qxa`.
+
 Self-registration (Phase 5): strack.cpp registers "STrack" and
 spluginslot.cpp registers "SPluginSlot" with SProjectLoader from a static
 initializer (spluginchain.cpp registers "SPluginChain").

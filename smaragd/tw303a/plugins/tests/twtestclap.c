@@ -11,7 +11,7 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * TEN entry points:
+ * ELEVEN entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
@@ -23,6 +23,7 @@
  *   tw.test.clap.split        stereo in / stereo main + stereo AUX out   (55 M1)
  *   tw.test.clap.monosplit    split with every port MONO                 (55 M2)
  *   tw.test.clap.duck         stereo in + stereo SIDECHAIN in / stereo out (55 M3)
+ *   tw.test.clap.splittail    split whose main out is a DECAYING ENVELOPE  (QBX-264)
  *
  * --- tw.test.clap.duck (proposal 55 §5, M3) ------------------------------------
  *
@@ -57,6 +58,20 @@
  * MONO: 1 in / 1 main out + 1 aux out. On a stereo track a 1->1 plugin runs
  * DualMono (one instance per channel), which is what the return verbs must
  * REFUSE (55 D9) -- the fixture exists so that refusal has a case.
+ *
+ * --- tw.test.clap.splittail (QBX-264) -------------------------------------------
+ *
+ * The split with STATE, for the gate that a change of routed aux outputs resets
+ * the plugin. Same ports and parameter as tw.test.clap.split, and the aux is
+ * the same plain copy; the MAIN out is a peak envelope with a slow release:
+ *
+ *   env[c]     = max( |in[c][i] * MainLevel|, env[c] * TW_TAIL_DECAY )
+ *   main[c][i] = env[c]
+ *
+ * TW_TAIL_DECAY is 0.999 per frame, so a loud input leaves a tail that is still
+ * 1.7 % of its peak 4096 frames later and only underflows after ~100k frames.
+ * reset() zeroes env, so after a reset a SILENT input renders exactly 0.0f, and
+ * a tail carried across a reconfiguration is visible as non-zero samples there.
  *
  * --- tw.test.clap.gain -------------------------------------------------------
  *
@@ -181,6 +196,7 @@
 #define TW_TESTCLAP_SPLIT_ID   "tw.test.clap.split"
 #define TW_TESTCLAP_MONOSPLIT_ID "tw.test.clap.monosplit"
 #define TW_TESTCLAP_DUCK_ID    "tw.test.clap.duck"
+#define TW_TESTCLAP_SPLITTAIL_ID "tw.test.clap.splittail"
 
 /* Which behaviour this instance has. tw.test.clap.gui and
  * tw.test.clap.restart share GAIN's, and are told apart by hasGui /
@@ -190,6 +206,9 @@ enum tw_kind { TW_KIND_GAIN = 0, TW_KIND_SKEW = 1, TW_KIND_SINE = 2, TW_KIND_ARP
 
 /* tw.test.clap.duck: frames the key stays on after its last hit. */
 #define TW_DUCK_HOLD 2048u
+
+/* tw.test.clap.splittail: the main envelope's release per frame. */
+#define TW_TAIL_DECAY 0.999f
 
 #define TW_SINE_VOICES 16
 #define TW_ARP_GRID    4096u
@@ -257,6 +276,19 @@ static const clap_plugin_descriptor_t s_desc_monosplit = {
    .support_url  = "",
    .version      = "1.0.0",
    .description  = "Test fixture: the split with every port mono (a DualMono slot on a stereo track)",
+   .features     = s_features,
+};
+
+static const clap_plugin_descriptor_t s_desc_splittail = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_SPLITTAIL_ID,
+   .name         = "Smaragd Test Split Tail",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: the split whose main out is a decaying envelope (state that reset() clears)",
    .features     = s_features,
 };
 
@@ -447,6 +479,10 @@ typedef struct {
 
    /* tw.test.clap.monosplit: every SPLIT port is mono (proposal 55 M2) */
    int      monoPorts;
+
+   /* tw.test.clap.splittail (QBX-264): the main out is env[], see the header */
+   int      tailMain;
+   float    tailEnv[2];
 
    /* tw.test.clap.duck (proposal 55 M3) */
    double   duckThreshold;
@@ -1104,6 +1140,8 @@ static void tc_reset( const clap_plugin_t *p )
    self->arpOffAt      = 0;
    self->arpNextId     = 0;
    self->duckSince     = TW_DUCK_HOLD + 1u;   /* the gate starts open */
+   self->tailEnv[0]    = 0.0f;
+   self->tailEnv[1]    = 0.0f;
    tc_request_restart_if_asked( self );
 }
 
@@ -1502,7 +1540,25 @@ static clap_process_status tc_process( const clap_plugin_t *p, const clap_proces
       }
       /* The main out is the gain effect's arithmetic with MainLevel as the
        * gain: same segmenting, same params, same blob. */
-      return tc_process_effect( self, proc );
+      const clap_process_status st = tc_process_effect( self, proc );
+      /* splittail: that product, run through the decaying envelope. */
+      if( self->tailMain && st != CLAP_PROCESS_ERROR && proc->audio_outputs_count > 0 ) {
+         clap_audio_buffer_t *ob = &proc->audio_outputs[0];
+         for( uint32_t c = 0; c < ob->channel_count && c < 2; ++c ) {
+            float *o = ob->data32 ? ob->data32[c] : NULL;
+            if( !o )
+               continue;
+            float e = self->tailEnv[c];
+            for( uint32_t i = 0; i < proc->frames_count; ++i ) {
+               const float a = fabsf( o[i] );
+               e    = e * TW_TAIL_DECAY;
+               e    = a > e ? a : e;
+               o[i] = e;
+            }
+            self->tailEnv[c] = e;
+         }
+      }
+      return st;
    }
    return tc_process_effect( self, proc );
 }
@@ -1743,7 +1799,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 10;
+   return 11;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1760,6 +1816,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 7 ) return &s_desc_split;
    if( index == 8 ) return &s_desc_monosplit;
    if( index == 9 ) return &s_desc_duck;
+   if( index == 10 ) return &s_desc_splittail;
    return NULL;
 }
 
@@ -1781,6 +1838,8 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    else if( !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID ) )
                                                  { kind = TW_KIND_SPLIT; desc = &s_desc_monosplit; }
    else if( !strcmp( id, TW_TESTCLAP_DUCK_ID ) )  { kind = TW_KIND_DUCK; desc = &s_desc_duck; }
+   else if( !strcmp( id, TW_TESTCLAP_SPLITTAIL_ID ) )
+                                                 { kind = TW_KIND_SPLIT; desc = &s_desc_splittail; }
    /* GUI behaves as GAIN in every respect that is not the gui extension - same
     * params, same ports, same DSP - so it reuses the kind rather than adding a
     * fifth branch to every switch in the file. hasGui is the only difference. */
@@ -1812,6 +1871,7 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
                       self->zeroOnReattach;
    self->guiScale   = 1.0;
    self->monoPorts  = !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID );
+   self->tailMain   = !strcmp( id, TW_TESTCLAP_SPLITTAIL_ID );
    self->duckThreshold = 0.01;
    self->duckGain      = 0.25;
    self->duckSince     = TW_DUCK_HOLD + 1u;
