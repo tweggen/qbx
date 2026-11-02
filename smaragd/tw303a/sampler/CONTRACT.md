@@ -50,10 +50,9 @@ through its own verbatim `cmake/NassauDSP.cmake`: `-DNASSAU_DSP_DIR`, then
 `NASSAU_DSP_GIT_REF`; it logs `nassau-dsp: <route>, <dir> at <commit>`. qbx
 carries nothing for it. A bare clone fetches both.
 
-**The pin, as of 2026-11-02: nassau-digital 4167ab5** (the branch of
-nassau-digital#27, the sample's time scale for Q4; to be re-pinned to that
-PR's merge commit on nassau-digital main before this pin can be relied on,
-because a PR branch is deleted on merge). What it adds: `nd::Sample::
+**The pin, as of 2026-11-02: nassau-digital a82a698** (the merge of
+nassau-digital#27 on main, the sample's time scale for Q4; its code is
+identical to the PR branch's 4167ab5, which it replaced). What it adds: `nd::Sample::
 timeScale()` (a trailing default argument on its factories), which
 `twSamplerSample::fromPlanar( …, timeScale )` passes through; nothing else in
 the API moved, and no program is written differently.
