@@ -2365,7 +2365,7 @@ public:
             for( std::uint32_t i = 0; i < n; ++i ) outBuses[2][0][i] = 5.0f * in[0][i];
         }
     }
-    void reset() override {}
+    void reset() override { ++resets_; }
     std::size_t       paramCount() const override { return 0; }
     twPluginParamInfo paramInfo( std::size_t ) const override { return {}; }
     double getParam( std::uint32_t ) const override { return 0.0; }
@@ -2385,7 +2385,7 @@ public:
     void setRoutedOutBuses( std::uint32_t m ) override { mask_ = m; ++maskCalls_; }
 
     std::atomic<int> legacyCalls_{ 0 }, busCalls_{ 0 }, aux1Writes_{ 0 };
-    int              prepares_ = 0, maskCalls_ = 0;
+    int              prepares_ = 0, maskCalls_ = 0, resets_ = 0;
     std::uint32_t    mask_ = 0;
 
 private:
@@ -2542,12 +2542,16 @@ static int testAuxBuses()
 
         // ---- AC1.4: changing the mask stales the insert's pages ----------
         const std::uint64_t e0 = r.insert->contentEpochNow();
+        const int           resets0 = mock ? mock->resets_ : 0;
         r.proc->setRoutedOutBuses( 1u << 1 );
         check( r.insert->contentEpochNow() > e0,
                "AC1.4 setting the mask bumps the insert's content epoch (its pages are stale)" );
         check( mock && mock->mask_ == ( 1u << 1 ) && mock->prepares_ >= 2,
                "AC1.4 ...the plugin learns the mask and is RE-PREPARED, where a format "
                "activates buses" );
+        check( mock && mock->resets_ > resets0,
+               "QBX-264 ...and RESET: a re-prepare at an unchanged rate resets nothing "
+               "in CLAP, so the routing change must say it" );
         auto routed = freezeInsert( r.insert, 0, rate );
         check( routed && routed != page && routed->aux,
                "AC1.4 the next render at the same position is a NEW page, with a side page" );
@@ -3415,6 +3419,150 @@ static int testSidechain()
     return 0;
 }
 
+#ifdef TW_TESTCLAP_PATH
+// ===========================================================================
+// QBX-264: a change of routed aux outputs RESETS the plugin, as a key change
+// does (proposal 55 "M3 as built"). The re-prepare it also does is a no-op in
+// CLAP at an unchanged rate, and the change clears haveLastEnd_, which on the
+// effect path means the next page is NOT treated as a discontinuity -- so
+// without an explicit reset the DSP state of the last render runs straight
+// into the first frames of the next one.
+//
+// tw.test.clap.splittail's main out is a decaying peak envelope (0.999 per
+// frame). Its input is silent over [0, 16384) and a sine after it, so a render
+// ends with the envelope near its peak; a reset plugin renders the silent head
+// as exact zeros, a carried one as a tail.
+// ===========================================================================
+namespace {
+
+constexpr offset_t kTailSilent = 16384;
+
+float tailInput( idx_t c, offset_t p )
+{
+    if( p < kTailSilent ) return 0.0f;
+    return mainSine( c, p );
+}
+
+struct HeadNumbers {
+    double      peak    = 0.0;   // max |s| over [0, kTailSilent), both channels
+    std::size_t nonZero = 0;     // samples != 0 there, both channels
+};
+
+HeadNumbers headOf( const twOutputPage &pg )
+{
+    HeadNumbers h;
+    for( idx_t c = 0; c < 2; ++c )
+        for( offset_t i = 0; i < kTailSilent; ++i ) {
+            const float v = pg.channelPtr( c )[i];
+            if( v != 0.0f ) ++h.nonZero;
+            h.peak = std::max( h.peak, (double)std::fabs( v ) );
+        }
+    return h;
+}
+
+bool sameMain( const twOutputPage &a, const twOutputPage &b )
+{
+    for( idx_t c = 0; c < 2; ++c )
+        if( std::memcmp( a.channelPtr( c ), b.channelPtr( c ),
+                         twOutputPage::FRAME_CAPACITY * sizeof( float ) ) != 0 )
+            return false;
+    return true;
+}
+
+}  // namespace
+
+static int testRoutedOutReset()
+{
+    std::cout << "=== QBX-264: a routed-output change resets the plugin ===" << std::endl;
+    tw303aEnvironment env;
+    const int rate = env.getSRate();
+
+    twPluginDescriptor desc;
+    desc.format = "clap";
+    desc.uid    = "tw.test.clap.splittail";
+    desc.path   = TW_TESTCLAP_PATH;
+    desc.name   = "Smaragd Test Split Tail";
+
+    // The fixture first: it HAS state, and reset() clears it. Without this, a
+    // fixture that silently lost its envelope would pass the gate below.
+    {
+        auto p = pluginRegistry().instantiate( desc );
+        if( !check( p != nullptr, "tw.test.clap.splittail instantiates" ) ) return 0;
+        check( p->audioOutBusCount() == 2 && p->audioOutBus( 1 ).channels == 2,
+               "...with the split's stereo AUX output as bus 1" );
+        p->prepare( (std::uint32_t)rate, twPluginInsert::kChunkFrames );
+        const std::uint32_t n = 256;
+        std::vector<float> loud( n, 0.5f ), quiet( n, 0.0f ), o0( n ), o1( n );
+        const float *in[2]  = { loud.data(), loud.data() };
+        float       *out[2] = { o0.data(), o1.data() };
+        p->process( in, out, n );
+        const float *qin[2] = { quiet.data(), quiet.data() };
+        p->process( qin, out, n );
+        check( o0[0] > 0.49f && o0[n - 1] > 0.0f,
+               "fixture: silence after a loud block is a DECAYING TAIL, not silence" );
+        p->reset();
+        p->process( qin, out, n );
+        bool zero = true;
+        for( std::uint32_t i = 0; i < n; ++i ) zero = zero && o0[i] == 0.0f && o1[i] == 0.0f;
+        check( zero, "fixture: ...and after reset() the same silence is exact zeros" );
+    }
+
+    auto &registry = pluginRegistry();
+    auto proc = std::make_shared<twPluginSlotProcessor>(
+        env, [&registry, desc]() { return registry.instantiate( desc ); },
+        twPluginIoLayout{ 2, 2 } );
+    proc->setChannelCount( 2 );
+    auto insert = std::make_shared<twPluginInsert>( env, proc );
+    insert->init();
+    auto src = makeFn( env, 2, tailInput );
+    insert->setInput( 0, src->linkOutput( 0 ) );
+    check( proc->mode() == twPluginSlotMode::Direct,
+           "a 2->2 split tail on a stereo page is Direct" );
+
+    auto fresh = freezeInsert( insert, 0, rate );
+    if( !check( fresh && fresh->validFrames >= twOutputPage::FRAME_CAPACITY,
+                "the fresh render is a full page" ) )
+        return 0;
+    const HeadNumbers h0 = headOf( *fresh );
+    check( h0.nonZero == 0, "a FRESH instance renders the silent head as exact zeros" );
+    const float endLevel = fresh->channelPtr( 0 )[twOutputPage::FRAME_CAPACITY - 1];
+    std::cout << "       fresh: envelope at the page's last frame " << endLevel << std::endl;
+    check( endLevel > 0.4f, "...and ends the page with the envelope near its 0.5 peak" );
+
+    // Route bus 1: the applied mask changes, the slot re-prepares (a no-op in
+    // CLAP at this rate) and must reset.
+    proc->setRoutedOutBuses( 1u << 1 );
+    auto routed = freezeInsert( insert, 0, rate );
+    check( routed && routed != fresh && routed->aux, "routed: a NEW page at 0, with a side page" );
+    if( routed ) {
+        const HeadNumbers h = headOf( *routed );
+        std::cout << "       routed: silent head peak " << h.peak << ", non-zero samples "
+                  << h.nonZero << " of " << 2 * kTailSilent << std::endl;
+        check( h.nonZero == 0,
+               "QBX-264 routing an aux bus RESETS the plugin: the silent head is exact "
+               "zeros, no tail carried from the render before it" );
+        check( sameMain( *routed, *fresh ),
+               "QBX-264 ...and the whole main page is byte-identical to the fresh render" );
+    }
+
+    // ...and back: unrouting is the same kind of change.
+    proc->setRoutedOutBuses( 0 );
+    auto unrouted = freezeInsert( insert, 0, rate );
+    check( unrouted && unrouted != routed && !unrouted->aux,
+           "unrouted: a NEW page at 0, with no side page" );
+    if( unrouted ) {
+        const HeadNumbers h = headOf( *unrouted );
+        std::cout << "       unrouted: silent head peak " << h.peak << ", non-zero samples "
+                  << h.nonZero << " of " << 2 * kTailSilent << std::endl;
+        check( h.nonZero == 0,
+               "QBX-264 unrouting the aux bus RESETS the plugin too: exact zeros" );
+        check( sameMain( *unrouted, *fresh ),
+               "QBX-264 ...and the whole main page is byte-identical to the fresh render" );
+    }
+    return 0;
+}
+#endif
+
 int testPluginInsert()
 {
     testBuiltinPlugin();
@@ -3430,6 +3578,7 @@ int testPluginInsert()
 #ifdef TW_TESTCLAP_PATH
     testClapBackend();
     testClapEditor();
+    testRoutedOutReset();
 #else
     std::cout << "=== CLAP backend: SKIPPED (built without TW_HAVE_CLAP) ===" << std::endl;
 #endif
