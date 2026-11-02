@@ -165,4 +165,39 @@ private:
     bool    analysis_  = false;
 };
 
+// assert-sampler-recording-level — GATES Q6.1's "the next note plays the
+// recording at its RMS ± 2 %", measured directly (proposal 56 Q6, QBX-272).
+//
+//   trackPath, slotIndex, layer   the layer that holds the recording; its src
+//                                 must be `file:<path>`, which is read here
+//   filename                      the render (resolved as assert-audio-energy
+//                                 resolves it)
+//   noteFrame                     the render frame the note starts at
+//   offset = 0, frameCount        the window, `offset` frames into the note
+//   tolerance = 0.02              |render RMS / recording RMS - 1| allowed
+//
+// For each of the render's first two channels (the recording's channel c, or
+// its only one), the RMS of the render over [noteFrame + offset, +frameCount)
+// is compared with the RMS of the recording over [layer start + offset,
+// +frameCount) — the frames that note plays there at rate 1. Both numbers and
+// the ratio are logged.
+class SAssertSamplerRecordingLevelAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-sampler-recording-level" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    QString trackPath_ = QStringLiteral( "0" );
+    int     slotIndex_ = 0;
+    int     layer_     = 0;
+    QString filename_;
+    qint64  noteFrame_  = 0;
+    qint64  offset_     = 0;
+    qint64  frameCount_ = 0;
+    double  tolerance_  = 0.02;
+};
+
 #endif

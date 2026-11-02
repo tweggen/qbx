@@ -7,6 +7,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 
 #include "app/shell/srecordplacement.h"
@@ -17,6 +18,7 @@ class SApplication;
 class SCut;
 class SLink;
 class SRecordingContent;
+class SSamplerProgram;
 class STrack;
 
 namespace audio {
@@ -183,6 +185,13 @@ private:
         SLink            *link  = nullptr;   // its placement (borrowed)
         QString           file;
         std::uint32_t     mask  = 0;
+        // RECORDING INTO THE INSTRUMENT (proposal 56 Q6): set when the track
+        // holds a NassauDigital instance with a record input. The take then
+        // lands IN that instance (place-sampler-recording) instead of on the
+        // lane: no growing clip, no snap, no edit-group plan, and `mask` is
+        // the instance's record-input mask.
+        QPointer<SSamplerProgram> sampler;
+        int               samplerSlot = -1;
     };
 
     bool collectArmed_();

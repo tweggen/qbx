@@ -5,6 +5,8 @@
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/cut/scut.h"
+#include "app/objects/cut/screatefileassetaction.h"
+#include "app/model/sexternfile.h"
 #include "app/actions/sactionregistry.h"
 #include <QDomElement>
 
@@ -43,6 +45,19 @@ SApplyResult SRemoveAssetAction::apply( SProject *project )
         // Ask the registry first. A registered root addresses itself as
         // "<name>:" with an empty index path, which is exactly the spelling
         // create-asset now parses.
+        // A FILE-BACKED asset (proposal 56 Q6: a recording made in the
+        // sampler is registered as one, create-file-asset) windows an extern
+        // file, not a container: the inverse registers the same window of the
+        // same file under the same name. Without this branch the walk below
+        // finds no path to the file and refuses the removal outright.
+        if( SExternFile *ef = dynamic_cast<SExternFile *>( &content ) ) {
+            inverse = new SCreateFileAssetAction( ef->getFileName(),
+                                                  (offset_t) cut->getStartOffset().frames(),
+                                                  cut->getDurationBlocking(),
+                                                  assetName_ );
+            project->unregisterAsset( assetName_ );
+            return { true, inverse };
+        }
         QString containerRoot = project->arrangementNameOf( &content );
         QList<int> containerPath;
         if( containerRoot.isEmpty() ) {

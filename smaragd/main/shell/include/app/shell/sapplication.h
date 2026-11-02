@@ -31,6 +31,7 @@ class SAutomationRecorder;
 class SLiveMonitor;
 class SAudioRecorder;
 class SMidiRecorder;
+class SSamplerKeyTaps;
 class SMediaAccountManager;
 class QTimer;
 
@@ -239,6 +240,7 @@ public:
     // AUDIO RECORDING (proposal 21 L3b). One recorder per app; it owns the
     // take, the growing clip and the placement. Never null after construction.
     SAudioRecorder *audioRecorder() const { return audioRecorder_.get(); }
+    SSamplerKeyTaps *samplerKeyTaps() const { return samplerKeyTaps_.get(); }
     // MIDI RECORDING (proposal 21 L4 = 37 P8b). The SECOND recorder, and the
     // split between them is by TRACK INPUT rather than by two record buttons:
     // an armed track whose `trackInput` is `midi:`/`keyboard` belongs to this
@@ -648,6 +650,9 @@ private:
     std::unique_ptr<audio::RenderSession> renderSession_;
     std::unique_ptr<SAudioRecorder> audioRecorder_;
     std::unique_ptr<SMidiRecorder>  midiRecorder_;   // proposal 21 L4
+    // Every NassauDigital instance's tap of its track's MIDI input: the last
+    // key played (proposal 56 Q6). After the input hub, destroyed before it.
+    std::unique_ptr<SSamplerKeyTaps> samplerKeyTaps_;
     // True while a MIDI-only take is running, i.e. one that the AUDIO recorder
     // did not start the transport for. It decides who stops the transport at
     // the end, and it is a flag rather than a re-derivation because the armed

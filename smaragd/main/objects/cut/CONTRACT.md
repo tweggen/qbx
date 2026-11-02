@@ -1799,3 +1799,15 @@ run. If a capture-staleness defect is reproduced, the case to write is one
 whose SECOND pass reads a position the FIRST pass froze — that shape is in
 QBX-258's log chain — and it has to be watched failing on something no render
 case catches.
+
+## An audio FILE as a registered asset (proposal 56 Q6, QBX-272)
+
+`create-file-asset` registers an SCut over a file's extern-file object as a
+named asset, windowing `[srcOffset, srcOffset + length)`. It is how a recording
+made in the NassauDigital sampler is ALSO an asset (the author's Q-4 answer),
+so it places on a lane like any other. `objects/sampler` emits it through the
+registry. The first apply remembers the name it generated ("Recording N"),
+so a redo registers the same name. Its inverse is `remove-asset` (objects/
+mixer, built through the registry), which inverts a file-backed asset back to
+this verb. Gated by `sampler_q6_record` (the asset exists, windows the take's
+file, places on a lane, and the undo removes it) and `sampler_q6_land_pad`.

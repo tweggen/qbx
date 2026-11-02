@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 56 Q6 (QBX-272): GATES Q6.1, recording into the instrument.
+
+    record-start, stop, place-sampler-recording: the next note plays the
+    recording at its RMS within 2 %; one undo removes it.
+
+  Env, set on the CTest entry (smaragd/CMakeLists.txt): RUN_SERIAL,
+  SMARAGD_CAPTURE_SPEED=1, SMARAGD_AUDIO_INPUT_BACKEND=file:../test_stereo.wav,
+  a looping 480 Hz sine at RMS 0.5 (left) and 0.25 (right). Constant RMS on
+  both channels, so where in the file the capture happens to start does not
+  move the number: the case measures the recording itself anyway
+  (assert-sampler-recording-level reads the layer's own file).
+
+  THE SHAPE IS THE AUTHOR'S Q-1 ANSWER: the track's input is MIDI (it is the
+  instrument's keyboard), and the instance carries its OWN record input,
+  `audio:qxa-record-input:3` (both channels, so the sample is stereo and the
+  core's stereo pan is a balance: unity at centre; a mono sample would sit
+  3 dB down per side by the constant-power law and could not meet 2 %). The
+  device name is the one the record cases use, a name no real device has.
+
+  The take lands in the Key view on an EMPTY program, so DESIGN 7's rule makes
+  it a zone over the whole keyboard (sampler_q6_land_key_empty gates that
+  rule on its own). The note is the clip's: tick 40 = frame 1000, held 960
+  ticks = 24000 frames, velocity 127 (full level, velToLevel 1).
+
+  ONE UNDO REMOVES IT: the press is one undo step (Q6.q1, the commit scope
+  shared with every lane), and that step takes the zone AND the asset (Q-4)
+  away; the program equals the one captured before the press (nextId apart:
+  ids are never reused). The redo brings back the same zone and asset.
+-->
+<SActionScript version="1" name="sampler_q6_record">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <set-sampler-record-input trackPath="0" slotIndex="0" input="audio:qxa-record-input:3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1" zones="0" view="key"
+                            recordInput="audio:qxa-record-input:3" capture="before"/>
+
+    <!-- ............................................................ THE TAKE -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <!-- The track stays armed: arm-track is an undo step of its own, and the
+         undo below must be the press's. -->
+    <assert-log contains="place-sampler-recording: track 0 slot 0: key view, empty program" minCount="1"/>
+
+    <!-- It landed IN the instrument: a zone over the whole keyboard, one
+         layer whose src is the take's own file; and as an asset over it. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="1" zoneIds="1" recordedLayer="2"
+                            recordedAsset="Recording 1" differsFromCaptured="before"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyLo" value="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyHi" value="127"/>
+    <!-- ...and not on the lane: the lane still holds only the MIDI clip. -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1" rendering="0"
+                          installs="1"/>
+
+    <!-- ...................................................... Q6.1: THE NOTE -->
+    <render filename="sq6_rec.wav" format="wav" quality="10" durationSec="1.5"/>
+    <!-- Silent before the note. -->
+    <assert-audio-energy filename="sq6_rec.wav" startFrame="0" frameCount="1000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <!-- THE GATE: render RMS over 20000 frames of the note against the
+         recording's own RMS over the frames that note plays, per channel,
+         within 2 %. -->
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="2" filename="sq6_rec.wav"
+                                    noteFrame="1000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+    <!-- ...and the absolute levels the fixture predicts, as a cross-check that
+         the recording is the fixture and the render is not the input
+         monitored through: 0.5 and 0.25, each within 2 %. -->
+    <assert-audio-energy filename="sq6_rec.wav" startFrame="1000" frameCount="20000"
+                         channel="0" minRms="0.49" maxRms="0.51"/>
+    <assert-audio-energy filename="sq6_rec.wav" startFrame="1000" frameCount="20000"
+                         channel="1" minRms="0.245" maxRms="0.255"/>
+
+    <!-- ................................................. ONE UNDO REMOVES IT -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="0" equalsCaptured="before"
+                            ignoreNextId="1" assetAbsent="Recording 1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq6_undo.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sq6_undo.wav" startFrame="1000" frameCount="20000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <!-- The undo took the press, not something before it: the record input
+         set before the take is still there. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" recordInput="audio:qxa-record-input:3"/>
+
+    <!-- ...................................... the redo puts the same back -->
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="1" zoneIds="1" recordedLayer="2"
+                            recordedAsset="Recording 1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq6_redo.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="2" filename="sq6_redo.wav"
+                                    noteFrame="1000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+    <assert-file-identical actual="sq6_redo.wav" expected="sq6_rec.wav"/>
+
+    <!-- The asset is a real one: it places on a lane (Q-4). -->
+    <add-track index="-1"/>
+    <place-asset assetName="Recording 1" trackPath="1" timePos="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

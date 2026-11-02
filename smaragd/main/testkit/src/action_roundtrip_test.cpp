@@ -110,6 +110,21 @@ const Fixture kFixtures[] = {
       " captureTrackEpoch='e1' trackEpochAdvancedSince='e0' renders='3' asset='Src asset'/>" },
     { "wait-sampler-generations",
       "<wait-sampler-generations trackPath='0' slotIndex='0' timeoutMs='5000'/>" },
+    // Proposal 56 Q6 (QBX-272): recording into the instrument, and the state
+    // the landing reads.
+    { "set-sampler-view",
+      "<set-sampler-view trackPath='0' slotIndex='0' view='pad' padBank='1' pad='5'/>" },
+    { "set-sampler-record-input",
+      "<set-sampler-record-input trackPath='0' slotIndex='0' input='audio:dev:3'/>" },
+    { "place-sampler-recording",
+      "<place-sampler-recording trackPath='Drums:0' slotIndex='1' filePath='take.wav'"
+      " srcOffset='480' length='96000' target='key' key='67'/>" },
+    { "create-file-asset",
+      "<create-file-asset filePath='take.wav' srcOffset='480' length='96000'"
+      " assetName='Recording 2'/>" },
+    { "assert-sampler-recording-level",
+      "<assert-sampler-recording-level trackPath='0' slotIndex='0' layer='2' filename='r.wav'"
+      " noteFrame='1000' offset='0' frameCount='20000' tolerance='0.02'/>" },
     { "assert-audio-energy",
       "<assert-audio-energy filename='r.wav' minRms='0.09' maxRms='0.11'"
       " startFrame='48000' frameCount='96000' channel='1'/>" },
@@ -1184,6 +1199,11 @@ const LaneRow kLaneRows[] = {
     { "set-sampler-render-gate", Accept, "a test seam on a NassauDigital program, which a system lane cannot hold" },
     { "assert-sampler-layer",   Accept, "read-only" },
     { "wait-sampler-generations", Accept, "waits on a NassauDigital program, which a system lane cannot hold" },
+    // Proposal 56 Q6: aimed at a NassauDigital program as the Q1 verbs are.
+    { "set-sampler-view",         Accept, "as add-zone; instance state only" },
+    { "set-sampler-record-input", Accept, "as add-zone; instance state only" },
+    { "place-sampler-recording",  Accept, "lands in a NassauDigital program, which a system lane cannot hold; never on the lane" },
+    { "assert-sampler-recording-level", Accept, "read-only" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
     { "remove-automation-lane", Accept, "the inverse of the above" },
     { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },
