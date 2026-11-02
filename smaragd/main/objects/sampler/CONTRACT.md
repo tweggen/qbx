@@ -15,7 +15,8 @@ bounded settle the offline render's barrier makes (invariants 12–16).
 Since Q3 (QBX-266) a layer may LINK a qbx asset (proposal 56 §4.7, DESIGN
 §6.2): the program holds the link (an `SLink` to the asset body), bounces the
 asset into a generation when the asset's own content epoch moves, and refuses
-a link that would be a render cycle (invariants 17–21).
+a link that would be a render cycle (invariants 17–21). Since QBX-267 the
+same walk refuses a LATER edit that would close such a cycle (invariant 22).
 
 Public headers: app/objects/sampler/*.h
 
@@ -243,8 +244,21 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     child link, so without that hop a cycle through a second sampler is
     invisible. Which programs a lane holds is objects/track's knowledge: the
     shell installs `ssampler::setLaneProgramsHook`. A cycle built AFTER the
-    link (a track moved into the linked asset's container) is not refused —
-    see "Not gated".
+    link is invariant 22's.
+22. **AN EDIT THAT WOULD CLOSE A CYCLE AFTER THE LINK IS REFUSED, BY THE SAME
+    WALK** (QBX-267; the author's ruling of 2026-11-01). The shell installs
+    `ssampler::assetReachesTrack` as model's whole-graph walk
+    (`sarrangements::setReachWalk`), so `sarrangements::reaches` — which
+    every containment and placement verb asks — follows sampler asset links
+    too: the check a link is made under and the check a later move is made
+    under are ONE function. A verb that attaches X under Y asks "is Y
+    reachable from X" before it mutates and refuses with the hops in its
+    reason: `place-asset`, `reparent-track`, `move-clip`, `duplicate-clip`,
+    `link-clip`, `dissolve-arrangement` (which asks about the graph it LEAVES:
+    its several moves are pending edges, `sarrangements::PendingEdges`, that
+    the walk follows as child links). Proposal 56 §11 "QBX-267" lists the
+    verbs that cannot close one, and why. Without the shell's hook (a unit
+    test) the walk is the plain child-link one.
 
 ## Value syntax (the front end's, DESIGN §2.1)
 
@@ -353,14 +367,26 @@ absolute (there is nothing to be relative to).
   is no cycle accepted), the link's undo (buffer gone) and redo (same
   `link:1`, a new generation), and a literal `link:` refused.
 - Sabotages that bite (QBX-266): see proposal 56 §11 Q3.
+- `qxa.sampler_late_cycle_place_asset`, `…_move_clip`, `…_duplicate_clip`
+  (duplicate-clip and link-clip), `…_reparent_track`, `…_dissolve`,
+  `…_dissolve_replay` (QBX-267, invariant 22) — each verb refused for the
+  cycle it would close after the link, with the line only that refusal
+  writes and the tree unchanged; a positive control where the same edit
+  closes nothing, with undo and redo; the refused edit accepted once the
+  sampler lets go of the asset; `place-asset` also through a SECOND sampler
+  (both hops named); `dissolve-arrangement` also for two moves that close a
+  cycle only together, and for a plan that names the right folder only once
+  the teardown and the earlier moves have run. Sabotages: proposal 56 §11
+  "QBX-267".
 
 ## Not gated / known limits
 
-- A render cycle made AFTER the link (the sampler's track moved into the
-  linked asset's container, or an asset over it placed inside) is not
-  refused: DESIGN §6.2 refuses at link time, and the freeze-cycle silence is
-  the backstop. Such a cycle is also a refcount cycle, which `~SProject`
-  cannot order.
+- A render cycle made AFTER the link is refused since QBX-267 (invariant
+  22), by the verbs that can build one. What still is not: a project FILE
+  that already holds such a cycle (hand-edited, or saved by a build before
+  QBX-267) loads as it is; and the walk follows containment, content and
+  sampler links but not ROUTING (a return or sidechain tapping a lane), the
+  link-time check's limit too.
 - A link no layer names holds its body weakly: `remove-asset`, an undo of
   the unlink and an undo of the removal bring back a NEW body, which the old
   link does not name; the layer then plays nothing, announced.

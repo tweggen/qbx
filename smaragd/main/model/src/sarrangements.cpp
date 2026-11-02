@@ -12,8 +12,6 @@ ReachWalk &walkSlot()
 
 void setReachWalk( ReachWalk walk ) { walkSlot() = std::move( walk ); }
 
-bool hasReachWalk() { return static_cast<bool>( walkSlot() ); }
-
 bool reaches( SObject *from, const SObject *to, QString *via, const PendingEdges *pending )
 {
     if( via ) via->clear();

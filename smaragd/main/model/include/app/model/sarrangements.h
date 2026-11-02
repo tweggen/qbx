@@ -93,7 +93,6 @@ inline bool reachesRec( SObject *from, const SObject *to, QSet<const SObject *> 
 using ReachWalk = std::function<bool( SObject *from, const SObject *to,
                                       const PendingEdges *pending, QString *via )>;
 void setReachWalk( ReachWalk walk );
-bool hasReachWalk();
 
 /** True if `to` is `from` itself or reachable from it through any chain of
  *  child links (containment), content links (windowing) and — with the
