@@ -1690,3 +1690,109 @@ build:
     a small discontinuity at the wrap is possible and was not measured);
     `tune` and LFO pitch in tempo modes (DESIGN §13: they still move the
     read rate, accepted for now).
+
+### Q8 as built (QBX-273, 2026-11-02)
+
+Built: the sampler's side of §4.12 and nothing else, because proposal 55
+already routes any plugin's aux buses. The instrument reports nine stereo
+output buses (descriptor and instance: main, then "Aux 1".."Aux 8"),
+overrides `twPlugin::setRoutedOutBuses` to hand the core `busMask >> 1`, and
+renders through the core's bus-aware `process()` whenever a bus is routed.
+`add-return-track`, the routed mask (`SPluginSlot::routedOutBuses()`, the
+processor's `setRoutedOutBuses()`), the side page, the tap, the reset on a
+mask change (QBX-264) and the sidechain are proposal 55's, unchanged. One
+defect of proposal 55's found on the way is fixed (item 4). Gated: Q8.1,
+Q8.2, Q8.3, Q8.q1. Three cases (`sampler_q8_reference`,
+`sampler_q8_outputs`, `sampler_q8_duck`), three goldens, `sampler_test`
+part H. Where the text above did not survive the build:
+
+1. **No `set-sampler-routing` verb** (§4.5 lists it for Q8; §4.12 "when the
+   mask is set explicitly"). The mask is derived from the return tracks that
+   name the slot, so an explicit verb would be a second writer of the same
+   state, and which one wins is a design question nobody has answered; the
+   GATES ACs do not need it. `twSamplerHost::setRoutedOutputs()` stays in the
+   host interface and sets the same core mask; called directly it can only
+   NARROW what is heard (an aux bit the host gave no bus for has no buffer,
+   which the core treats as unrouted), and the next host mask replaces it.
+   Open for the author: build the verb (and decide its precedence over the
+   returns), or strike it from §4.5.
+2. **The host's mask is the only thing that says which `outBuses[b]` may be
+   read** (plugins inv. 61), not `setRoutedOutputs()`. An unrouted bus is
+   handed to the core as null, and the legacy three-argument `process()`
+   hands the event-aware one a full nine-entry array. With nothing routed
+   the instrument makes exactly the pre-Q8 main-only core call, so every
+   existing render is byte-identical by construction (the committed goldens
+   are, and the suite agrees).
+3. **A routed bus with no buffer renders into scratch** (not in §4.12). The
+   processor's pre-roll and a bypass render with the side page absent, so a
+   routed aux bus gets a null `outBuses[b]`. The core decides a voice's output
+   AT ITS NOTE-ON and treats a missing buffer as "not routed" (C6, accepted as
+   built), so a kick whose note-on fell in a pre-roll would have sounded on
+   MAIN for its whole life, in the very page it was rolled for. The
+   instrument substitutes its own scratch (allocated in the constructor,
+   16 KiB per bus channel; segments capped at 4096 frames) for a routed bus
+   without a buffer. Measured in `sampler_test` H: a cold page 1 whose
+   note-on lies 1000 frames before it, main peak **0**, aux 1 peak
+   **0.499982**; without the scratch, main carries the kick.
+4. **Proposal 55: an UNROUTED return did not stale what it keys** (mixer
+   CONTRACT inv. 31). `clear-return-source` re-wires the former return to its
+   own `twTrackMix` (re-stamping its own chain) but did not
+   `invalidateRenderPath()` on it, so the walk never followed its KEY edge:
+   the bass keyed from it kept ducking from its cached pages, **0.124997**
+   (0.25 × dry) on the render after the unroute, and the same through
+   `tw.test.clap.split`, so not the sampler's. The pass now invalidates an
+   unwired return as it does a re-pointed one.
+5. **A routing change resets the instrument** (QBX-264's reset on a mask
+   change), so DESIGN §13's "a sounding voice keeps the route it started on"
+   is never exercised by an offline render in qbx: a mask change stales every
+   page and the next render re-renders from its pre-roll, where the voice is
+   started again under the new mask. The rule matters for the live path,
+   which Q8 does not touch (proposal 55 Q1 (a): an armed source's returns are
+   silent).
+6. **The kit for the cases** (not in §6): kick zone on aux 1 (`level` −15 dB,
+   `test_clipsaw.wav`), hat zone on main (−12 dB, `test_autosaw.wav`); kicks
+   at frames 0 and 60000 (the second crosses the 65536 page boundary), hats at
+   30000 and 90000. The levels keep the mix below full scale: at unity two
+   overlapping kicks clipped the 16-bit render (peak 1.0) and the mixed golden
+   was not the sum of the other two; at these levels it is, to 1 LSB (peak
+   0.580).
+7. **Measured.** Q8.1 (`sampler_q8_outputs`): the return soloed is
+   byte-identical to `sampler_q8_kick.wav` (768044 bytes), the kick alone on
+   main of a slot with no return; the return muted, the file (Drums alone) is
+   byte-identical to `sampler_q8_hat.wav`, and frames [0, 24000), where only
+   the kick plays, measure RMS **0**. Q8.2 (`sampler_q8_duck`): the bass
+   inside the kick `[28000, 116000)` **0.124997 / 0.062499** (ch 0 / ch 1)
+   against a dry **0.499987 / 0.24999** before and after: out/dry **0.25000**
+   on both channels, band ±1 %; the Drums track is NOT muted, so any kick left
+   on main would be in the file. Unrouted (`clear-return-source`, Drums muted
+   because the kick is back on its main): **0.499987 / 0.24999**, dry; undo:
+   ducked again. Q8.3: the render right after `clear-return-source` is
+   byte-identical to `sampler_q8_mixed.wav` from frame 0 (RMS 0.101313 over
+   the first 1024 frames, the first kick), and again after removing the
+   return track; the Drums track's content epoch advanced across each unroute
+   (**17 → 18**, **21 → 22**). Q8.q1: `sampler_test` A, nine stereo buses.
+   `sampler_test` H: routed, main exactly silent and the aux 1 tap page
+   memcmp-equal to the zone's unrouted main render (C6.1 through the host);
+   the core saw mask 0x1 for the host's 0x2; unrouted again, main
+   memcmp-equal to a never-routed slot from the page's first frame.
+   `sampler_q8_reference` renders the three goldens with nothing routed and
+   pins that they differ pairwise.
+8. **Sabotages that bite** (each watched failing; the harness restores every
+   file from its saved bytes and touches it): the core mask never set from
+   the host mask (outputs, duck, H); the mask not shifted, bus 1 → aux 2
+   (outputs, duck, H); one bus reported by descriptor and instance (both
+   cases: `add-return-track` refused; H); no scratch for a routed bus without
+   a buffer (H only, see item 9); the unwired return not invalidated (duck's
+   unrouted window); the mask change made no state change — the processor's
+   epoch bump and the pass's track invalidation both removed (outputs' two
+   epoch assertions, H's re-render); host aux buffers ignored on the bus path
+   (outputs, duck, H).
+9. **Not gated**: the pre-roll scratch through the app — the qxa renders run
+   their pages contiguously, so no case pre-rolls across an aux note-on, and
+   only `sampler_test` H bites that sabotage. The state-change sabotage moves
+   no qxa render either, because the run barrier invalidates every instrument
+   track from the render's start (Q2's note); the epoch assertions are what
+   bite. Per-output `busDrive<k>` / `outputLevel<k>` heard through qbx (the
+   core's C6.3 gates them; no qbx case drives an aux bus). The live path
+   (proposal 55 Q1 (a)). More than one aux bus routed at once (proposal 55's
+   gates route one bus of the split; the sampler's mask path is generic).

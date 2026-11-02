@@ -538,7 +538,13 @@ what feeds it.
     RETURN.** Re-pointing re-stamps the return up to its own rewire and NOT
     the master lane chain and mixer rewire downstream. Measured: a return whose
     source track was deleted rendered byte-identical to the routed render
-    until this was added (inv. 24's lesson, for the aux edge).
+    until this was added (inv. 24's lesson, for the aux edge). **An UNWIRED
+    return's route moved too** (QBX-273): a track handed back to its own
+    `twTrackMix` (inv. 30) is invalidated the same way, and the walk follows
+    its routing edges -- a slot KEYED from the former return kept ducking from
+    its cached pages on the render after `clear-return-source` (measured: 0.25
+    x dry, through both `tw.test.clap.split` and the sampler) until this was
+    added. Gated by `sampler_q8_duck`.
 32. **IT FAILS CLOSED, AND SAYS SO ONCE PER STATE.** No route -- a source that
     is gone, not in this tree, the master, a dropped cycle edge, a second
     return of the same `(source, slot, bus)` (the first in tree order wins,
