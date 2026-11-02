@@ -1218,6 +1218,68 @@ change between the two refs, so qbx's verbatim copy stands.
    the slot processor's `setRoutedOutBuses` mask (main = bit 0) shifted right
    by one.
 
+### Core bump to nassau-digital 793f4ce (2026-11-01)
+
+`NASSAU_DIGITAL_GIT_REF` moved from 5adc61a to 793f4ce (nassau-digital main,
+the merge of nassau-digital#24). The core gained the author's decisions of
+2026-11-01 (its DESIGN §13, GATES C5–C8): an asymmetric tube and a 10 Hz DC
+blocker on driven voices, oversampling as a zone attribute, drive / cutoff /
+resonance following a sounding voice (C5); each aux output's own bus drive
+and level, and a sounding voice keeping its route (C6); `beats` spanning the
+loop and tempo modes ignoring the key (C7); `libraryVersion`, overlay
+set-program / add / hide, and the overlay id range (C8). The canonical
+`cmake/bootstrap/NassauDigital.cmake` did not change, so qbx's verbatim copy
+stands; the core's `NASSAU_DSP_GIT_REF` stays 76e38fb.
+
+1. **No golden or bound moved.** `sampler_q0_note.wav` and
+   `goldens/sampler_q2_b.wav` are byte-identical (`qxa.sampler_q0_engine_seam`,
+   `qxa.sampler_q2_generations`), and `sampler_test` D still reads
+   L 0.000782686, R 0.000391343. Expected: every qbx program is undriven with
+   the filter `off` (the default since 5adc61a), and the C5 changes act only on
+   a driven voice or a moving parameter; C7 touches only tempo modes; C6 only
+   aux outputs, which qbx does not feed (item 3 of the 5adc61a entry, B7).
+2. **The API qbx must not call** lost nothing it used: `setOversampling()` /
+   `oversampling()` are gone (tw/sampler never called them) and
+   `kRouteFadeFrames` is deprecated (never named).
+3. **Programs qbx writes carry 17 more attributes**: the core's writer writes
+   every attribute with its default, so the program gains `busDrive1..8` and
+   `outputLevel1..8` (between `masterTune` and `nextId`) and each zone
+   `oversample="4"` (after `pad`); `libraryVersion` only when set. Unknown
+   attributes still follow every known one, in document order. One gate's
+   byte-level expectation moved for that reason:
+   `qxa.sampler_q1_newer_program`'s zone check now reads `pad="-1"
+   oversample="4" yCurve="exp" bWeight="0.5">` (was `pad="-1" yCurve=…`), and
+   the case now also asserts `masterTune="0" busDrive1="0"` and
+   `outputLevel8="0" nextId="3" zeta="z" alpha="a">`. The refused (version 2,
+   polyphony 12) program is kept verbatim, so its byte checks did not move.
+   The new attributes are in the core's tables, so `set-sampler-program` and
+   `set-zone` reach them with no qbx change.
+4. **The explicit-id add-zone (QBX-265) meets the overlay range.** Ids from
+   1,000,000 belong to what a library overlay adds; the core's `addZone()` /
+   `addLayer()` refuse to hand one out (returning 0, no reason) and its reader
+   refuses a program `nextId` above 1,000,000. Under 5adc61a qbx accepted
+   `add-zone id="1000000"`; now `twSamplerProgramModel::addZone()` refuses,
+   before the core, when the last id the zone and its layers would take
+   reaches the range (`zone id N with K layer(s) reaches the ids reserved for
+   library overlays (from 1000000)`), and `addZone()` without an id and
+   `addLayer()` refuse once `nextId` has reached it (`no ids left below the
+   ids reserved for library overlays (nextId M, overlays from 1000000)`).
+   Gated in `qxa.sampler_q1_zone_id`: 1000000 refused, 999999 with a layer
+   refused, 999999 alone accepted (`nextId` 1000000), then a plain add-zone
+   and an add-layer refused with nothing changed, and the used-up program
+   saved and loaded back equal. Watched failing: with qbx's two checks
+   removed the core still refuses all four adds, but with "the core refused
+   the zone / layer", and the four `assert-log` lines fail. A project saved
+   between QBX-265 and this bump with an explicit id of 1000000 or more has a
+   `nextId` above the range, which the core's reader now refuses: it should load as
+   an unreadable program, kept verbatim and silent (Q1's newer-program path),
+   not lost (the same reader refusal as that case's; not gated). QBX-265 was
+   never released, so no migration is built.
+5. **Not gated here**: the aux bus drives and levels (B7: qbx renders main
+   only until Q8), per-zone `oversample` 2 vs 4 on a driven zone, the C5
+   follow-glide, C7's loop-spanning `beats` (Q4) and the overlay verbs (no
+   qbx verb applies a library overlay yet). The core gates them itself.
+
 
 ### Q2 (QBX-263, 2026-11-01)
 

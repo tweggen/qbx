@@ -430,6 +430,26 @@ std::uint32_t twSamplerProgramModel::addZone( const twSamplerAttrs &zone,
             return 0;
         }
     }
+    // THE OVERLAY RANGE (nassau-digital C8, DESIGN §8, decided 2026-11-01):
+    // ids from nd::kOverlayIdFirst (1,000,000) on belong to the zones and
+    // layers a library overlay adds, and a program never hands one out. The
+    // zone and its layers take 1 + n consecutive ids from wantId (or nextId),
+    // so the LAST of them must stay below the range. The core refuses such an
+    // add too (nd::addZone returns 0); it is refused here first so the
+    // refusal can say why, in a line no other path writes.
+    const std::uint64_t first = wantId != 0 ? wantId : p.nextId;
+    if( first + z.layers.size() >= (std::uint64_t)nd::kOverlayIdFirst ) {
+        if( wantId != 0 )
+            setError( error, "zone id " + std::to_string( wantId ) + " with " +
+                                 std::to_string( z.layers.size() ) +
+                                 " layer(s) reaches the ids reserved for library overlays (from " +
+                                 std::to_string( nd::kOverlayIdFirst ) + ")" );
+        else
+            setError( error, "no ids left below the ids reserved for library overlays (nextId " +
+                                 std::to_string( p.nextId ) + ", overlays from " +
+                                 std::to_string( nd::kOverlayIdFirst ) + ")" );
+        return 0;
+    }
     const std::uint32_t before = p.nextId;
     if( wantId != 0 ) p.nextId = wantId;
     const std::uint32_t id = nd::addZone( p, std::move( z ) );
@@ -455,6 +475,13 @@ std::uint32_t twSamplerProgramModel::addLayer( std::uint32_t zoneId, const twSam
     }
     nd::Layer l;
     if( !fillFromAttrs( nd::layerParams(), layer, l, "layer", error ) ) return 0;
+    // The overlay range, as in addZone(): the core refuses this add too.
+    if( impl_->program.nextId >= nd::kOverlayIdFirst ) {
+        setError( error, "no ids left below the ids reserved for library overlays (nextId " +
+                             std::to_string( impl_->program.nextId ) + ", overlays from " +
+                             std::to_string( nd::kOverlayIdFirst ) + ")" );
+        return 0;
+    }
     const std::uint32_t id = nd::addLayer( impl_->program, zoneId, std::move( l ) );
     if( id == 0 ) setError( error, "the core refused the layer" );
     return id;

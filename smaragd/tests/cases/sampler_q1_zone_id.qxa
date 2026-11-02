@@ -99,6 +99,45 @@
     <assert-log contains="REFUSED: zone id 15 was handed out before (nextId 22)"
                 minCount="1" maxCount="1"/>
     <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11;20;21" nextId="22"/>
+
+    <!-- ================================================ the overlay range
+         Since the core bump to nassau-digital 793f4ce (its C8, DESIGN §8,
+         decided 2026-11-01) ids from 1,000,000 on belong to what a library
+         OVERLAY adds, and a program never hands one out: the core's addZone /
+         addLayer refuse it, and its reader refuses a nextId above 1,000,000.
+         qbx refuses first, with a line only this refusal writes. The zone AND
+         its layers need ids below the range: 999999 alone fits, 999999 with
+         a layer does not. -->
+    <add-zone trackPath="0" slotIndex="0" id="1000000" keyLo="96" expectReject="true"/>
+    <assert-log contains="REFUSED: zone id 1000000 with 0 layer(s) reaches the ids reserved for library overlays (from 1000000)"
+                minCount="1" maxCount="1"/>
+    <add-zone trackPath="0" slotIndex="0" id="999999" keyLo="96" expectReject="true">
+      <layer src="test:a"/>
+    </add-zone>
+    <assert-log contains="REFUSED: zone id 999999 with 1 layer(s) reaches the ids reserved for library overlays (from 1000000)"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11;20;21" nextId="22"/>
+    <!-- The last id below the range: accepted, and nextId reaches 1000000,
+         a program that has used up its ids (the core's reader accepts it). -->
+    <add-zone trackPath="0" slotIndex="0" id="999999" keyLo="96" keyHi="107"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="7;9;11;20;21;999999"
+                            nextId="1000000" installed="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="usedUp"/>
+    <!-- Nothing more can be handed out: a plain add-zone and an add-layer
+         are refused, and change nothing. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="108" expectReject="true"/>
+    <assert-log contains="add-zone: track 0 slot 0: REFUSED: no ids left below the ids reserved for library overlays (nextId 1000000, overlays from 1000000)"
+                minCount="1" maxCount="1"/>
+    <add-layer trackPath="0" slotIndex="0" zone="999999" src="test:a" expectReject="true"/>
+    <assert-log contains="add-layer: track 0 slot 0: REFUSED: no ids left below the ids reserved for library overlays (nextId 1000000, overlays from 1000000)"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="usedUp" nextId="1000000"/>
+    <!-- ...and the used-up program saves and loads back (load-project
+         replaces the project, so this is last). -->
+    <save-project path="../../build/sampler_q1_zone_id.qxp"/>
+    <load-project path="../../build/sampler_q1_zone_id.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" readable="1" equalsCaptured="usedUp"
+                            nextId="1000000" installed="1"/>
   </actions>
 
   <assertions>

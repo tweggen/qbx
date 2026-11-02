@@ -29,7 +29,16 @@
        polyphony="12", which this core refuses. The program is KEPT VERBATIM
        (written back on save, character for character), the instrument plays
        nothing, and every edit is refused, announced: losing a newer build's
-       program on the next save would be worse than not playing it. -->
+       program on the next save would be worse than not playing it.
+
+       Core bump to nassau-digital 793f4ce (2026-11-01): the core's writer
+       writes every attribute, defaults included, and its tables grew. The
+       program now writes busDrive1..8 and outputLevel1..8 (C6) after
+       masterTune and before nextId, and every zone writes oversample="4"
+       (C5) after pad. Unknown attributes still follow ALL known ones, in
+       document order, so the zone check reads 'pad="-1" oversample="4"
+       yCurve…' where it read 'pad="-1" yCurve…'. The refused program below
+       is kept verbatim, so its byte checks did not move. -->
 
   <setup project="new"/>
 
@@ -38,7 +47,9 @@
     <assert-sampler-program trackPath="0" slotIndex="0" exists="1" readable="1"
                             equalsFile="../sampler_q1_newer_program.xml" installed="1"/>
     <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='nextId="3" zeta="z" alpha="a"&gt;'/>
-    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='pad="-1" yCurve="exp" bWeight="0.5"&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='masterTune="0" busDrive1="0"'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='outputLevel8="0" nextId="3" zeta="z" alpha="a"&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='pad="-1" oversample="4" yCurve="exp" bWeight="0.5"&gt;'/>
     <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='reverse="0" stage="post" grain="7"/&gt;'/>
     <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='&lt;route src="lfo2" dst="pan"/&gt;'/>
     <assert-sampler-program trackPath="0" slotIndex="0" xmlContains='&lt;macros count="2"/&gt;'/>
@@ -47,7 +58,7 @@
     <!-- An edit keeps them. -->
     <set-zone trackPath="0" slotIndex="0" zone="1" tune="+1"/>
     <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="1"
-                            xmlContains='pad="-1" yCurve="exp" bWeight="0.5"&gt;'/>
+                            xmlContains='pad="-1" oversample="4" yCurve="exp" bWeight="0.5"&gt;'/>
     <assert-sampler-program trackPath="0" slotIndex="0" capture="edited"/>
 
     <!-- ...and so do a save and a reload of the edited program. -->

@@ -50,6 +50,21 @@ through its own verbatim `cmake/NassauDSP.cmake`: `-DNASSAU_DSP_DIR`, then
 `NASSAU_DSP_GIT_REF`; it logs `nassau-dsp: <route>, <dir> at <commit>`. qbx
 carries nothing for it. A bare clone fetches both.
 
+**The pin, as of 2026-11-01: nassau-digital 793f4ce** (main after
+nassau-digital#24; nassau-dsp 76e38fb, unchanged). What the core's API lost
+since 5adc61a and qbx therefore must not call: `Instrument::setOversampling()`
+/ `oversampling()` (the factor is now the zone attribute `oversample`, 2 or 4,
+default 4; tw/sampler never called them). `Instrument::kRouteFadeFrames` is
+deprecated and unused (a sounding voice now keeps the output it started on);
+tw/sampler never named it. What the core's WRITER now adds to every program
+qbx saves: `busDrive1..8` and `outputLevel1..8` on the program (aux k's
+bus drive and level, 0 and 0 dB by default) and `oversample="4"` on each zone,
+all defaults written as every attribute is; `libraryVersion` only when set.
+They are table attributes, so the Q1 verbs (`set-sampler-program`,
+`set-zone`) reach them through the core's own tables with no qbx change. B7
+still holds: tw/sampler calls the main-only `process()` overload, so the aux
+attributes are stored and not yet heard (Q8).
+
 ## Invariants
 
 1. **THE CORE IS SEEN BY `tw/sampler` ONLY** (proposal 56 invariant 1). It is
@@ -137,6 +152,20 @@ spell it out:
   in use (`zone id N is in use`) or below `nextId` (`zone id N was handed out
   before (nextId M); ids are never reused`). The ids a jump skips are below
   `nextId` from then on and are never handed out;
+- **the overlay range, refused with a reason** (core bump to nassau-digital
+  793f4ce, 2026-11-01; the core's C8, DESIGN §8): ids from
+  `nd::kOverlayIdFirst` (1,000,000) on belong to what a library overlay adds,
+  and the core's `addZone()` / `addLayer()` refuse an add that would hand one
+  out, returning 0 with no reason. `addZone()` refuses first when the LAST id
+  the zone and its layers would take reaches the range: `zone id N with K
+  layer(s) reaches the ids reserved for library overlays (from 1000000)` for
+  an explicit id, `no ids left below the ids reserved for library overlays
+  (nextId M, overlays from 1000000)` without one; `addLayer()` the latter when
+  `nextId` has reached the range. So the explicit-id rule above accepts at
+  most 999999 (a zone with no layers), which leaves `nextId` at 1000000: a
+  program that has used up its ids, which the core's reader still accepts (it
+  refuses a `nextId` ABOVE 1000000). A program may still CARRY ids in the
+  range (a flattened overlay keeps them); `idInUse()` sees them like any id;
 - **a removed zone / layer as the core's own XML** plus where it was, and its
   reinsertion VALIDATED: every id free AND already handed out (`< nextId`).
   The core's `reinsertZone()` checks only the zone id and the index;
@@ -183,8 +212,11 @@ pre-roll, capped at 4 s by the processor.
 - `sampler_slot_test` (main/testkit): Q0.4 and Q0.q2 on a real slot.
 - `qxa.sampler_q0_engine_seam`: Q0.3, Q0.q2 and Q0.q4 through the app.
 - `qxa.sampler_q1_verbs`, `qxa.sampler_q1_persist`,
-  `qxa.sampler_q1_newer_program`: `twSamplerProgramModel` through the Q1 verbs
-  and the project file (see `main/objects/sampler/CONTRACT.md`).
+  `qxa.sampler_q1_newer_program`, `qxa.sampler_q1_zone_id`:
+  `twSamplerProgramModel` through the Q1 verbs and the project file (see
+  `main/objects/sampler/CONTRACT.md`); `sampler_q1_zone_id` also gates the
+  overlay-range refusals and the save and reload of a program at
+  `nextId` 1000000.
 
 ## Known limits (recorded, not hidden)
 
