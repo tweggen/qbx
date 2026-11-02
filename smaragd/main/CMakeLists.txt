@@ -45,6 +45,7 @@ set(APP_MODEL_FILES
     model/include/app/model/sroutinggraph.h
     model/include/app/model/ssortedobjlist.h
     model/src/sappcontext.cpp
+    model/src/sarrangements.cpp
     model/src/sautofade.cpp
     model/src/sautomationlane.cpp
     model/src/sclipcolors.cpp

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_late_cycle_duplicate_clip">
+
+  <!-- QBX-267 (proposal 56 §11 Q3, objects/sampler CONTRACT inv. 22):
+       DUPLICATE-CLIP AND LINK-CLIP REFUSE A COPY OR A SECOND PLACEMENT THAT
+       WOULD CLOSE A CYCLE.
+
+       Shape: as sampler_late_cycle_move_clip. The sampler on master lane
+       "Synth" links "InstLane", an asset over Inst:0; a placement of
+       "SynthAsset" (an asset over Synth) sits on Inst:1. A copy of it on
+       Inst:0 (duplicate-clip: a new window over the same content) or a
+       second placement of it there (link-clip) would make Inst:0 hold Synth,
+       whose sampler bounces Inst:0. On main neither verb asks, both accept,
+       and the case dies at teardown.
+
+       The same guard refuses a PLAIN reference cycle neither verb refused
+       before: a copy of the InstLane placement on Inst:0.
+
+       Positive controls: both verbs onto Inst:2 (closes nothing), with undo
+       and redo; and once Synth lets go of InstLane, both are accepted onto
+       Inst:0. Two verbs, one helper (sduplicateclipaction.cpp), one case:
+       each refusal carries its own verb's name. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Synth"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <create-arrangement name="Inst"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:0" name="I0"/>
+    <add-sample trackPath="Inst:0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:1" name="I1"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:2" name="I2"/>
+
+    <create-asset container="Inst:0" startOffset="0" duration="48000" assetName="InstLane"/>
+    <create-asset container="0" startOffset="0" duration="48000" assetName="SynthAsset"/>
+    <place-asset assetName="SynthAsset" trackPath="Inst:1" timePos="0"/>
+    <place-asset assetName="InstLane" trackPath="Inst:2" timePos="0"/>
+
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:InstLane"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          asset="InstLane"/>
+
+    <!-- ============================================ THE REFUSALS (sampler hop) -->
+    <duplicate-clip source="Inst:1,0" destTrack="Inst:0" startTime="0" expectReject="true"/>
+    <assert-log contains="duplicate-clip: refused, placing &quot;SynthAsset&quot; on &quot;I0&quot; would close a sampler asset-link cycle (the sampler on &quot;Synth&quot; links &quot;InstLane&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+    <link-clip source="Inst:1,0" destTrack="Inst:0" startTime="0" expectReject="true"/>
+    <assert-log contains="link-clip: refused, placing &quot;SynthAsset&quot; on &quot;I0&quot; would close a sampler asset-link cycle (the sampler on &quot;Synth&quot; links &quot;InstLane&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+
+    <!-- ================================== the PLAIN cycle, refused as well -->
+    <duplicate-clip source="Inst:2,0" destTrack="Inst:0" startTime="0" expectReject="true"/>
+    <assert-log contains="duplicate-clip: refused, placing &quot;InstLane&quot; on &quot;I0&quot; would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <link-clip source="Inst:2,0" destTrack="Inst:0" startTime="0" expectReject="true"/>
+    <assert-log contains="link-clip: refused, placing &quot;InstLane&quot; on &quot;I0&quot; would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+
+    <!-- ========== POSITIVE CONTROLS: onto Inst:2, which closes nothing -->
+    <duplicate-clip source="Inst:1,0" destTrack="Inst:2" startTime="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:2,1"/>
+    <link-clip source="Inst:1,0" destTrack="Inst:2" startTime="48000"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:2,2"/>
+    <undo/>
+    <undo/>
+    <assert-clip-window clip="Inst:2,1" expectReject="true"/>
+    <redo/>
+    <redo/>
+    <assert-clip-window clip="Inst:2,2"/>
+    <undo/>
+    <undo/>
+
+    <!-- ===== THE HOP'S POSITIVE CONTROL: Synth lets go, both are accepted -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
+    <duplicate-clip source="Inst:1,0" destTrack="Inst:0" startTime="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:0,1"/>
+    <link-clip source="Inst:1,0" destTrack="Inst:0" startTime="48000"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:0,2"/>
+    <undo/>
+    <undo/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+    <redo/>
+    <redo/>
+    <assert-clip-window clip="Inst:0,2"/>
+  </actions>
+
+</SActionScript>

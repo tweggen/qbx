@@ -125,6 +125,15 @@ of tests/test_stereo.wav, asserted at the clip through the real scheduler AND
 in the rendered file — test_sawtooth.wav cannot gate a channel claim, its two
 channels are byte-identical).
 
+`duplicate-clip` and `link-clip` ask the whole-graph cycle guard before they
+create anything (QBX-267, `refuseCycle` in sduplicateclipaction.cpp): a copy
+shares its source's content and a link IS the source, so either closes a cycle
+exactly when the destination lane is reachable from the source's object.
+With the shell's walk installed that includes NassauDigital sampler asset
+links (objects/sampler inv. 22); a plain reference cycle (a copy of an asset
+placement into the asset's own container) is refused too, which neither verb
+did before. Gated by `sampler_late_cycle_duplicate_clip.qxa`.
+
 Known debt: loop tiling of container captures deferred; FIXME bounds check
 in seekTo.
 

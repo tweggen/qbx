@@ -44,21 +44,28 @@ LanePrograms &laneProgramsSlot()
     return h;
 }
 
-bool reachesRec( SObject *from, const SObject *to, QSet<const SObject *> &seen, QStringList &via )
+bool reachesRec( SObject *from, const SObject *to, QSet<const SObject *> &seen, QStringList &via,
+                 const sarrangements::PendingEdges *pending )
 {
     if( !from ) return false;
     if( from == to ) return true;
     if( seen.contains( from ) ) return false;   // shared, or (already) cyclic
     seen.insert( from );
     for( SLink *lk : from->childLinks() ) {
-        if( lk && reachesRec( &lk->getSObject(), to, seen, via ) ) return true;
+        if( lk && reachesRec( &lk->getSObject(), to, seen, via, pending ) ) return true;
+    }
+    // Edges the asking edit is about to add (QBX-267), as if child links.
+    if( pending ) {
+        for( const auto &e : *pending ) {
+            if( e.first == from && reachesRec( e.second, to, seen, via, pending ) ) return true;
+        }
     }
     // A lane's instrument is not a child link: follow its sampler's asset links.
     if( from->isLane() && laneProgramsSlot() ) {
         for( SSamplerProgram *p : laneProgramsSlot()( from ) ) {
             if( !p ) continue;
             for( SObject *body : p->liveLinkTargets() ) {
-                if( reachesRec( body, to, seen, via ) ) {
+                if( reachesRec( body, to, seen, via, pending ) ) {
                     SProject *proj = body->getProjectSafe();
                     const QString n = proj ? proj->assetNameOf( body ) : QString();
                     via.prepend( QStringLiteral( "the sampler on \"%1\" links \"%2\"" )
@@ -74,13 +81,14 @@ bool reachesRec( SObject *from, const SObject *to, QSet<const SObject *> &seen, 
 
 void setLaneProgramsHook( LanePrograms hook ) { laneProgramsSlot() = std::move( hook ); }
 
-bool assetReachesTrack( SObject *body, const SObject *track, QString *via )
+bool assetReachesTrack( SObject *body, const SObject *track, QString *via,
+                        const sarrangements::PendingEdges *pending )
 {
     if( via ) via->clear();
     if( !body || !track ) return false;
     QSet<const SObject *> seen;
     QStringList hops;
-    const bool r = reachesRec( body, track, seen, hops );
+    const bool r = reachesRec( body, track, seen, hops, pending );
     if( r && via ) *via = hops.join( QStringLiteral( ", " ) );
     return r;
 }

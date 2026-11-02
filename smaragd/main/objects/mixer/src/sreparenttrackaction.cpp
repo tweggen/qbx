@@ -6,6 +6,7 @@
 #include "app/objects/track/strack.h"
 #include "app/model/slink.h"
 #include "app/model/splacements.h"
+#include "app/model/sarrangements.h"
 #include "app/model/sappcontext.h"
 #include <QDebug>
 #include <QDomElement>
@@ -111,6 +112,33 @@ SApplyResult SReparentTrackAction::apply(SProject *project)
     }
     if (isSelfOrDescendant(destParent, track)) {
         return {false, nullptr};
+    }
+
+    // QBX-267: THE WHOLE-GRAPH CYCLE GUARD. Moving the track under destParent
+    // adds the edge destParent -> track, which closes a cycle exactly when
+    // destParent is already reachable FROM the track. isSelfOrDescendant above
+    // sees only the tree; the walk also goes through placements (the track
+    // holds an asset over destParent's folder) and through NassauDigital
+    // sampler asset links (proposal 56 Q3: a sampler on the track links an
+    // asset over the destination) -- the check set-layer makes a link under,
+    // asked again because the move would build that cycle after the link.
+    // Asked BEFORE anything detaches, so a refusal has mutated nothing.
+    {
+        QString via;
+        if (sarrangements::placementWouldCycle(track, destParent, &via)) {
+            if (!via.isEmpty()) {
+                qWarning().noquote()
+                    << QStringLiteral("reparent-track: refused, moving \"%1\" into \"%2\" "
+                                      "would close a sampler asset-link cycle (%3)")
+                           .arg(track->getSName(), destParent->getSName(), via);
+            } else {
+                qWarning().noquote()
+                    << QStringLiteral("reparent-track: refused, moving \"%1\" into \"%2\" "
+                                      "would close a reference cycle")
+                           .arg(track->getSName(), destParent->getSName());
+            }
+            return {false, nullptr};
+        }
     }
 
     SStdMixer *srcMixer = dynamic_cast<SStdMixer *>(sourceParent);

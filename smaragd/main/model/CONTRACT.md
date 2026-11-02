@@ -991,6 +991,35 @@ pass; and `isReturnLane()` lets `splacements::placementLaneAt()` word its
 refusal for a return track ("is a RETURN track ... carries no clips"), which a
 case must be able to tell from proposal 45 D6's system-lane message.
 
+## The whole-graph cycle guard takes ONE walk, and the shell may widen it (QBX-267)
+
+`sarrangements::reaches( from, to, via, pending )` is the question every verb
+that attaches X under Y asks ("is Y reachable from X?"), and since QBX-267 it
+is no longer only the child-link walk the header describes. A NassauDigital
+sampler's asset link (proposal 56 Q3) is an edge too — the sampler's track
+renders the asset it links — but a plugin chain is not a child link, and the
+walk that follows sampler links (`ssampler::assetReachesTrack`, the one
+`set-layer` makes a link under) lives in `objects/sampler`, which this layer
+may not name. So the walk is a HOOK (`sarrangements::setReachWalk`, storage in
+`sarrangements.cpp`), installed by the shell (`ssamplerwiring::install`); with
+none installed (a unit test) the plain child-link walk answers. One function
+then decides a cycle at link time and at every later containment or placement
+edit — the author's ruling of 2026-11-01, gated per verb by
+`qxa.sampler_late_cycle_*`.
+
+- **`via`** receives the sampler hops the found path took, and is EMPTY when
+  it took none: a caller tells a sampler asset-link cycle from a plain
+  reference cycle by it, and words its refusal accordingly.
+- **`pending`** (`PendingEdges`, (parent, child) pairs) are edges the asking
+  edit is ABOUT to add, followed as if child links. A verb that moves several
+  objects at once (`dissolve-arrangement`) must ask about the graph it leaves:
+  two moves can close a cycle together that neither closes alone.
+- **Edges the edit removes are not subtracted.** For every caller today a path
+  through a removed edge back into what moves would be a cycle the project
+  already had; a future verb for which that is false must say so.
+- **Main thread only**, as before: it reads the child tree and, through the
+  hook, the sampler programs' link records.
+
 ## The recorder's TAKE NAME, and the one test for "this take came from a recording" (plan 53 §8 P4, D5, QBX-182)
 
 `app/model/stakenames.h` — `recorded( n, stamp )` builds `"Take 3 · 14:27"` and

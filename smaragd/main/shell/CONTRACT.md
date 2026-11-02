@@ -998,7 +998,7 @@ comes through here, which is what lets a `.qxa` say
 `objects/track`, and the slot may not name the sampler (proposal 56 Q-6,
 answered 2026-10-27: "the shell installs the slot's instance initializer as a
 hook"). Right after `registerNassauDigital()`, `ssamplerwiring::install()`
-installs the two hooks that join them, and nothing else:
+installs the hooks that join them, and nothing else:
 
 - `ssampler::setResolver` — a sampler verb's `trackPath` (+ the action's
   `pathRoot`) and `slotIndex` become the slot's `SSamplerProgram`, through
@@ -1020,6 +1020,12 @@ installs the two hooks that join them, and nothing else:
   asks which NassauDigital programs sit on a lane it passes (the chain's
   slots), so it can follow THEIR asset links: a cycle through a second
   sampler is refused (`qxa.sampler_q3_link_cycle`).
+- `sarrangements::setReachWalk` (QBX-267) — model's whole-graph cycle guard
+  asks `ssampler::assetReachesTrack`, so every containment and placement verb
+  (`place-asset`, `reparent-track`, `move-clip`, `duplicate-clip`,
+  `link-clip`, `dissolve-arrangement`) refuses an edit that would close a
+  sampler asset-link cycle by the check a link is made under
+  (`qxa.sampler_late_cycle_*`). Without it those verbs see only child links.
 
 **An offline render settles the sampler first (Q2, QBX-263; proposal 56 B8,
 invariant 7).** `startRender()` calls `ssamplerwiring::settleBeforeRender()`
