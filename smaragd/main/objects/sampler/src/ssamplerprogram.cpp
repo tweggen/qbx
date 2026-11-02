@@ -10,7 +10,13 @@
 #include "tw/pages/tw_output_page.h"
 #include "tw/plugins/twplugin.h"
 #include "tw/sampler/twsamplerhost.h"
+#include "tw/sampler/twsamplerstretch.h"
 #include "tw/sampler/twsamplertypes.h"
+#include "tw/core/twcontenthash.h"
+#include "tw/sidecar/twanalyzers.h"
+#include "tw/sidecar/twaspects.h"
+#include "tw/sidecar/twqaf.h"
+#include "tw/sidecar/twsidecarstore.h"
 #include "tw/sources/twsamplesource.h"
 
 #include <QDebug>
@@ -23,7 +29,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 #include <set>
 #include <string>
@@ -64,6 +72,62 @@ struct SSamplerProgram::LinkKey {
     }
 };
 
+// A kept, unstretched SOURCE (Q4): what a re-stretch starts from without
+// decoding or bouncing again, and what the onset analysis reads. Planar, at
+// the source's own rate; `content` keys its onsets (the sidecar store's key).
+struct SSamplerProgram::Source {
+    int                channels = 0;
+    double             rate     = 0.0;
+    std::int64_t       frames   = 0;
+    std::vector<float> plane[2];
+    twContentHash      content;
+};
+
+namespace {
+
+// The gate a held job or analysis waits on (set-sampler-render-gate).
+void waitOnGate( const std::shared_ptr<SSamplerProgram::Gate> &gate,
+                 const std::atomic<bool> &cancelled );
+
+// The onsets the sidecar store holds for `content`, in frames of a source at
+// `rate` (params-agnostic, exactly as twGrainSource reads them for its
+// vocoder). Null when the store has none; an empty list when it holds an
+// analysis that found none.
+std::shared_ptr<const std::vector<std::uint64_t>> sidecarOnsets( const twContentHash &content,
+                                                                 double rate )
+{
+    if( content.isNull() || !twSidecarStore::instance().enabled() ) return nullptr;
+    auto r = twSidecarStore::instance().loadAny( content, twAspect::Onsets,
+                                                 twAspect::OnsetsVersion );
+    if( !r || r->info().sourceRate == 0 ) return nullptr;
+    auto out = std::make_shared<std::vector<std::uint64_t>>();
+    const std::uint64_t n = r->info().recordCount;
+    if( n == 0 ) return out;
+    if( r->info().recordStride != 12 ) return nullptr;
+    std::vector<std::uint8_t> raw( (std::size_t)n * 12 );
+    if( !r->readRecords( raw.data(), 0, n ) ) return nullptr;
+    const double scale = rate / (double)r->info().sourceRate;
+    out->reserve( (std::size_t)n );
+    for( std::uint64_t i = 0; i < n; ++i ) {
+        std::uint64_t pos = 0;
+        for( int b = 7; b >= 0; --b ) pos = ( pos << 8 ) | raw[(std::size_t)i * 12 + (std::size_t)b];
+        out->push_back( (std::uint64_t)std::llround( (double)pos * scale ) );
+    }
+    return out;
+}
+
+// A content hash for planes that did not come with one (a bounce): the
+// planes' bytes, channel after channel.
+twContentHash hashPlanes( const SSamplerProgram::Source &s )
+{
+    twContentHash h = twHashBuffer( s.plane[0].data(), s.plane[0].size() * sizeof( float ) );
+    if( s.channels > 1 )
+        h = twHashBuffer( s.plane[1].data(), s.plane[1].size() * sizeof( float ), h.lo ^ h.hi );
+    return h;
+}
+
+}  // namespace
+
 struct SSamplerProgram::Job {
     std::uint32_t layerId    = 0;
     std::uint64_t generation = 0;
@@ -73,8 +137,15 @@ struct SSamplerProgram::Job {
     std::shared_ptr<Gate> gate;     // set-sampler-render-gate, or null
     // A BOUNCE (Q3) instead of a decode: the worker freezes key->comp's pages
     // over [key->base, key->base + key->frames). The component is held by the
-    // key; the worker touches nothing else.
+    // key; the worker touches nothing else. For a RE-STRETCH of a linked layer
+    // (sourceIn set) it is only the key the generation is recorded under.
     std::shared_ptr<const LinkKey> key;
+    // Q4: what the generation is for (stretched to want.spec, or not), the
+    // source to start from instead of decoding or bouncing (a re-stretch),
+    // and the onsets to stretch with (null: whatever the sidecar store holds).
+    Want                                              want;
+    std::shared_ptr<const Source>                     sourceIn;
+    std::shared_ptr<const std::vector<std::uint64_t>> onsetsIn;
 
     std::mutex              m;
     std::condition_variable cv;
@@ -82,51 +153,61 @@ struct SSamplerProgram::Job {
     std::atomic<bool>       cancelled{ false };
     std::shared_ptr<const audio::twSamplerSample> result;   // under m, once done
     std::string             error;                          // under m, once done
+    // Q4 results, under m once done: the source (kept only when want.on),
+    // whether the vocoder ran, and the onsets it was given.
+    std::shared_ptr<const Source>                     source;
+    bool                                              stretched = false;
+    std::shared_ptr<const std::vector<std::uint64_t>> onsetsUsed;
     std::chrono::steady_clock::time_point started;
     std::thread             thread;
 
     void run()
     {
-        if( gate ) {
-            std::unique_lock<std::mutex> lk( gate->m );
-            auto released = [this] {
-                return gate->released || cancelled.load( std::memory_order_acquire );
-            };
-            if( gate->holdMs >= 0 )
-                gate->cv.wait_for( lk, std::chrono::milliseconds( gate->holdMs ), released );
-            else
-                gate->cv.wait( lk, released );
-        }
+        waitOnGate( gate, cancelled );
         std::shared_ptr<const audio::twSamplerSample> out;
+        std::shared_ptr<const Source> srcBuf = sourceIn;
+        std::shared_ptr<const std::vector<std::uint64_t>> used;
+        bool didStretch = false;
         std::string err;
         if( cancelled.load( std::memory_order_acquire ) ) {
             err = "cancelled";
-        } else if( key ) {
-            out = bounce( err );
-        } else if( !env ) {
-            err = "no audio environment to decode with";
         } else {
-            twSampleSource src( *env, QString::fromStdString( path ) );
-            const int ch = src.wasLoaded() ? (int)src.channels() : 0;
-            if( !src.wasLoaded() ) {
-                err = "cannot decode " + path;
-            } else if( ch != 1 && ch != 2 ) {
-                err = path + " has " + std::to_string( ch ) + " channels; a sample has 1 or 2";
-            } else {
-                const float *planar[2] = { src.channelData( 0 ),
-                                           ch > 1 ? src.channelData( 1 ) : nullptr };
-                out = audio::twSamplerSample::fromPlanar( ch, (double)src.sampleRate(), planar,
-                                                         (std::int64_t)src.length(),
-                                                         generation, &err );
-            }
+            if( !srcBuf ) srcBuf = key ? bounce( err ) : decode( err );
+            if( srcBuf ) out = derive( *srcBuf, used, didStretch, err );
         }
         {
             std::lock_guard<std::mutex> lk( m );
-            result = std::move( out );
-            error  = std::move( err );
+            result     = std::move( out );
+            error      = std::move( err );
+            source     = want.on ? srcBuf : nullptr;
+            stretched  = didStretch;
+            onsetsUsed = std::move( used );
             done.store( true, std::memory_order_release );
         }
         cv.notify_all();
+    }
+
+    std::shared_ptr<const Source> decode( std::string &err )
+    {
+        if( !env ) { err = "no audio environment to decode with"; return nullptr; }
+        twSampleSource src( *env, QString::fromStdString( path ) );
+        const int ch = src.wasLoaded() ? (int)src.channels() : 0;
+        if( !src.wasLoaded() ) { err = "cannot decode " + path; return nullptr; }
+        if( ch != 1 && ch != 2 ) {
+            err = path + " has " + std::to_string( ch ) + " channels; a sample has 1 or 2";
+            return nullptr;
+        }
+        auto s      = std::make_shared<Source>();
+        s->channels = ch;
+        s->rate     = (double)src.sampleRate();
+        s->frames   = (std::int64_t)src.length();
+        for( int c = 0; c < ch; ++c ) {
+            const float *p = src.channelData( c );
+            s->plane[c].assign( p, p + s->frames );
+        }
+        s->content = src.contentHash();
+        if( s->content.isNull() ) s->content = hashPlanes( *s );
+        return s;
     }
 
     // The asset bounce, on this worker (proposal 56 §4.7, B9 as built): the
@@ -134,7 +215,7 @@ struct SSamplerProgram::Job {
     // buildCapture_ captures a container on a revalidator worker -- freezePage
     // positions the component itself, under its own cursor mutex, so no seek
     // and no model object is touched here.
-    std::shared_ptr<const audio::twSamplerSample> bounce( std::string &err )
+    std::shared_ptr<const Source> bounce( std::string &err )
     {
         twComponent &c = *key->comp;
         idx_t ch = c.getOutputChannels();
@@ -142,31 +223,57 @@ struct SSamplerProgram::Job {
         if( ch > 2 ) ch = 2;   // a sample has 1 or 2 channels; the first two
         const length_t n = key->frames;
         if( n <= 0 ) { err = "the asset's window is empty"; return nullptr; }
-        std::vector<float> plane[2];
-        for( idx_t k = 0; k < ch; ++k ) plane[k].assign( (std::size_t)n, 0.0f );
+        auto s      = std::make_shared<Source>();
+        s->channels = (int)ch;
+        s->rate     = (double)key->srate;
+        s->frames   = (std::int64_t)n;
+        for( idx_t k = 0; k < ch; ++k ) s->plane[k].assign( (std::size_t)n, 0.0f );
         length_t done = 0;
         offset_t pos  = (offset_t)key->base;
         while( done < n ) {
             if( cancelled.load( std::memory_order_acquire ) ) { err = "cancelled"; return nullptr; }
-            const length_t want = std::min<length_t>( n - done,
+            const length_t need = std::min<length_t>( n - done,
                                                       (length_t)twOutputPage::FRAME_CAPACITY );
             std::shared_ptr<twOutputPage> page =
-                c.freezePage( pos, nullptr, 0, want, key->srate, nullptr );
+                c.freezePage( pos, nullptr, 0, need, key->srate, nullptr );
             if( !page || page->validFrames == 0 ) break;
             const length_t got = std::min<length_t>( std::min<length_t>( (length_t)page->validFrames,
-                                                                         want ),
+                                                                         need ),
                                                      (length_t)page->channelFrames() );
             for( idx_t k = 0; k < ch; ++k ) {
                 const float *src = page->channelPtr( twPageClampChannel( *page, k ) );
-                std::copy( src, src + got, plane[k].data() + done );
+                std::copy( src, src + got, s->plane[k].data() + done );
             }
             done += got;
             pos  += got;
-            if( got < want ) break;
+            if( got < need ) break;
         }
-        const float *planar[2] = { plane[0].data(), ch > 1 ? plane[1].data() : nullptr };
-        return audio::twSamplerSample::fromPlanar( (int)ch, (double)key->srate, planar,
-                                                   (std::int64_t)n, generation, &err );
+        s->content = hashPlanes( *s );
+        return s;
+    }
+
+    // The generation's buffer from a source: the source itself, or (Q4) the
+    // source stretched to the tempo by the vocoder, with the factor as its
+    // time scale. At a factor of exactly 1 (the layer's own tempo) the source
+    // plays as it is; beats = 0 cannot be stretched and plays as it is too.
+    std::shared_ptr<const audio::twSamplerSample> derive(
+        const Source &s, std::shared_ptr<const std::vector<std::uint64_t>> &used, bool &didStretch,
+        std::string &err )
+    {
+        const float *planar[2] = { s.plane[0].data(), s.channels > 1 ? s.plane[1].data() : nullptr };
+        if( want.on ) {
+            const double f = audio::twSamplerStretchFactor( want.spec, s.frames, s.rate );
+            if( f > 0.0 && f != 1.0 ) {
+                if( cancelled.load( std::memory_order_acquire ) ) { err = "cancelled"; return nullptr; }
+                used = onsetsIn ? onsetsIn : sidecarOnsets( s.content, s.rate );
+                didStretch = true;
+                return audio::twSamplerStretch( s.channels, s.rate, planar, s.frames, f,
+                                                used && !used->empty() ? used->data() : nullptr,
+                                                used ? used->size() : 0, generation, &err );
+            }
+        }
+        return audio::twSamplerSample::fromPlanar( s.channels, s.rate, planar, s.frames, generation,
+                                                   &err );
     }
 
     void cancel()
@@ -183,6 +290,107 @@ struct SSamplerProgram::Job {
         if( thread.joinable() ) thread.join();
     }
 };
+
+// ONE onset analysis of a kept source (Q4; DESIGN §5: the vocoder places its
+// transient keyframes from the source's onsets). Runs twDetectOnsets with the
+// parameters SPlainWave's import analysis uses, on its own std::thread, and
+// stores the result in the sidecar store under the source's content hash, so
+// a later decode (in this process or the next) finds it. Qt-free; it never
+// calls back (the main thread polls `done`, or waits on `cv`).
+struct SSamplerProgram::AnalysisJob {
+    std::uint32_t                 layerId = 0;
+    std::shared_ptr<const Source> source;
+    std::shared_ptr<Gate>         gate;
+
+    std::mutex              m;
+    std::condition_variable cv;
+    std::atomic<bool>       done{ false };
+    std::atomic<bool>       cancelled{ false };
+    std::shared_ptr<const std::vector<std::uint64_t>> result;   // under m, once done
+    std::thread             thread;
+
+    void run()
+    {
+        waitOnGate( gate, cancelled );
+        std::shared_ptr<std::vector<std::uint64_t>> out;
+        if( !cancelled.load( std::memory_order_acquire ) ) {
+            const Source &s     = *source;
+            const uint32_t rate = (uint32_t)std::lround( s.rate );
+            twOnsetParams op;
+            op.minSeparationFrames = rate * 3 / 100;   // ~30 ms, as SPlainWave
+            const float *chans[2] = { s.plane[0].data(),
+                                      s.channels > 1 ? s.plane[1].data() : nullptr };
+            std::vector<twOnset> found =
+                twDetectOnsets( chans, (uint32_t)s.channels, (uint64_t)s.frames, op );
+            out = std::make_shared<std::vector<std::uint64_t>>();
+            out->reserve( found.size() );
+            std::vector<std::uint8_t> payload;
+            payload.reserve( found.size() * 12 );
+            for( const twOnset &o : found ) {
+                out->push_back( o.pos );
+                // v3 records: PACKED 12-byte {u64 pos, f32 salience} LE.
+                for( int b = 0; b < 8; ++b ) payload.push_back( (std::uint8_t)( o.pos >> ( 8 * b ) ) );
+                std::uint32_t sb;
+                std::memcpy( &sb, &o.salience, 4 );
+                for( int b = 0; b < 4; ++b ) payload.push_back( (std::uint8_t)( sb >> ( 8 * b ) ) );
+            }
+            if( twSidecarStore::instance().enabled() && !s.content.isNull() ) {
+                std::vector<std::uint8_t> blob;
+                op.serialize( blob );
+                twQafInfo qi;
+                qi.contentHash   = s.content;
+                qi.sourceRate    = rate;
+                qi.channels      = (uint32_t)s.channels;
+                qi.sourceFrames  = (uint64_t)s.frames;
+                qi.aspectId      = twAspect::Onsets;
+                qi.aspectVersion = twAspect::OnsetsVersion;
+                qi.recordStride  = 12;
+                qi.recordCount   = (uint64_t)found.size();
+                qi.hopFrames     = op.hop;
+                qi.params        = blob;
+                twSidecarStore::instance().store( qi, payload.data(), (uint64_t)payload.size() );
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lk( m );
+            result = std::move( out );
+            done.store( true, std::memory_order_release );
+        }
+        cv.notify_all();
+    }
+
+    void cancel()
+    {
+        cancelled.store( true, std::memory_order_release );
+        if( gate ) {
+            { std::lock_guard<std::mutex> lk( gate->m ); }
+            gate->cv.notify_all();
+        }
+    }
+
+    void join()
+    {
+        if( thread.joinable() ) thread.join();
+    }
+};
+
+namespace {
+
+void waitOnGate( const std::shared_ptr<SSamplerProgram::Gate> &gate,
+                 const std::atomic<bool> &cancelled )
+{
+    if( !gate ) return;
+    std::unique_lock<std::mutex> lk( gate->m );
+    auto released = [&] {
+        return gate->released || cancelled.load( std::memory_order_acquire );
+    };
+    if( gate->holdMs >= 0 )
+        gate->cv.wait_for( lk, std::chrono::milliseconds( gate->holdMs ), released );
+    else
+        gate->cv.wait( lk, released );
+}
+
+}  // namespace
 
 namespace {
 
@@ -247,9 +455,14 @@ SSamplerProgram::SSamplerProgram( SProject *project ) : SObject( project )
     // THE TRIGGER of a linked layer's bounce (DESIGN §6.2): qbx signals after
     // EVERY action; checkLinks_ costs one compare per linked layer and acts
     // only on an asset whose own content epoch moved.
-    if( project )
+    if( project ) {
         connect( project, &SProject::arrangementChanged, this,
                  &SSamplerProgram::onArrangementChanged_ );
+        // THE TRIGGER of a stretch layer's re-stretch (DESIGN §5, Q4): the
+        // tempo map's one writer (set-tempo, and the loader) emits it.
+        connect( project, &SProject::bpmTempoChanged, this,
+                 [this]( double ) { onTempoChanged_(); } );
+    }
 }
 
 SSamplerProgram::~SSamplerProgram()
@@ -259,8 +472,12 @@ SSamplerProgram::~SSamplerProgram()
     // object it reports to (it reports to nothing, but its Job is shared).
     for( auto &kv : jobs_ ) kv.second->cancel();
     for( auto &j : retiredJobs_ ) j->cancel();
+    for( auto &kv : analysisJobs_ ) kv.second->cancel();
+    for( auto &j : retiredAnalyses_ ) j->cancel();
     for( auto &kv : jobs_ ) kv.second->join();
     for( auto &j : retiredJobs_ ) j->join();
+    for( auto &kv : analysisJobs_ ) kv.second->join();
+    for( auto &j : retiredAnalyses_ ) j->join();
 }
 
 // --- the program ---------------------------------------------------------------
@@ -362,7 +579,13 @@ SSamplerProgram::LayerState SSamplerProgram::layerState( std::uint32_t layerId )
     if( in != installed_.end() ) {
         st.installedGeneration = in->second.generation;
         st.installedSrc        = in->second.src;
+        st.timeScale           = in->second.sample ? in->second.sample->timeScale() : 1.0;
+        st.stretched           = in->second.stretched;
+        st.onsets = in->second.stretched && in->second.onsets ? (int)in->second.onsets->size() : -1;
     }
+    st.analyzing = analysisJobs_.count( layerId ) != 0;
+    auto an = analyses_.find( layerId );
+    if( an != analyses_.end() ) st.analyses = an->second;
     auto jb = jobs_.find( layerId );
     if( jb != jobs_.end() ) {
         st.pendingGeneration = jb->second->generation;
@@ -464,6 +687,10 @@ void SSamplerProgram::reconcileSamples_( bool atBind )
 
     if( !removed.empty() ) installChanged_( removed );
     if( bindDue ) checkLinks_( false );   // arms the debounce
+    // An edit of a zone's mode or method, or of a layer's beats or positions,
+    // changes what a stretch layer's generation should be without changing
+    // its src (Q4): compared here, after every committed edit.
+    checkStretch_();
 }
 
 // --- asset links (Q3) ---------------------------------------------------------------
@@ -616,6 +843,7 @@ void SSamplerProgram::startBounce_( std::uint32_t layerId, const QString &src, c
     job->generation = ++lastGeneration_[layerId];
     job->src        = src;
     job->key        = std::make_shared<const LinkKey>( key );
+    job->want       = wantFor_( layerId );
     auto g = armedGates_.find( layerId );
     if( g != armedGates_.end() ) {
         job->gate = g->second;
@@ -697,13 +925,26 @@ void SSamplerProgram::onArrangementChanged_()
     checkLinks_( false );
 }
 
-void SSamplerProgram::startJob_( std::uint32_t layerId, const QString &src )
+void SSamplerProgram::startJob_( std::uint32_t layerId, const QString &src,
+                                 std::shared_ptr<const Source> from )
 {
+    cancelJob_( layerId );   // a job for the same layer is superseded
     auto job        = std::make_shared<Job>();
     job->layerId    = layerId;
     job->generation = ++lastGeneration_[layerId];
     job->src        = src;
-    job->path       = resolveFileSrc( getProjectSafe(), src ).toStdString();
+    job->want       = wantFor_( layerId );
+    if( from ) {
+        // A RE-STRETCH (Q4): from the kept source, with the onsets known for
+        // it (null: the worker asks the sidecar store). A linked layer keeps
+        // the key its source was bounced from, so checkLinks_ still compares.
+        job->sourceIn = from;
+        job->onsetsIn = knownOnsets_( *from );
+        auto in = installed_.find( layerId );
+        if( in != installed_.end() ) job->key = in->second.key;
+    } else {
+        job->path = resolveFileSrc( getProjectSafe(), src ).toStdString();
+    }
     job->env        = SAppContext::hasInstance() ? SAppContext::get().get303aEnvironment()
                                                  : nullptr;
     auto g = armedGates_.find( layerId );
@@ -716,10 +957,14 @@ void SSamplerProgram::startJob_( std::uint32_t layerId, const QString &src )
     Job *raw = job.get();
     job->thread = std::thread( [raw] { raw->run(); } );
     jobs_[layerId] = job;
+    const QString what =
+        from ? QStringLiteral( "a re-stretch of its kept source (%1 BPM, %2 beats)" )
+                   .arg( job->want.spec.bpm ).arg( job->want.spec.beats )
+             : QString::fromStdString( job->path );
     qInfo().noquote() << QStringLiteral( "NassauDigital: layer %1: generation %2 rendering from "
                                          "%3%4" )
                              .arg( layerId ).arg( (qulonglong)job->generation )
-                             .arg( QString::fromStdString( job->path ) )
+                             .arg( what )
                              .arg( job->gate ? QStringLiteral( " (HELD by the render gate)" )
                                              : QString() );
     ensurePolling_();
@@ -747,15 +992,38 @@ int SSamplerProgram::installFinished_( bool force )
         j.join();
         std::shared_ptr<const audio::twSamplerSample> sample;
         std::string err;
+        std::shared_ptr<const Source> source;
+        std::shared_ptr<const std::vector<std::uint64_t>> used;
+        bool stretched = false;
         {
             std::lock_guard<std::mutex> lk( j.m );
-            sample = j.result;
-            err    = j.error;
+            sample    = j.result;
+            err       = j.error;
+            source    = j.source;
+            used      = j.onsetsUsed;
+            stretched = j.stretched;
         }
         if( sample ) {
-            installed_[j.layerId] = Installed{ j.generation, j.src, sample, j.key };
+            Installed rec{ j.generation, j.src, sample, j.key };
+            rec.want      = j.want;
+            rec.source    = source;
+            rec.stretched = stretched;
+            rec.onsets    = used;
+            installed_[j.layerId] = std::move( rec );
+            // Onsets the worker found in the sidecar store are known now.
+            if( used && source && !source->content.isNull() )
+                onsets_[{ source->content.hi, source->content.lo }] = used;
             ++installs_[j.layerId];
             changed.push_back( j.layerId );
+            if( stretched )
+                qInfo().noquote()
+                    << QStringLiteral( "NassauDigital: layer %1: generation %2 is stretched x%3 "
+                                       "(%4 BPM) with %5" )
+                           .arg( j.layerId ).arg( (qulonglong)j.generation )
+                           .arg( sample->timeScale(), 0, 'g', 12 ).arg( j.want.spec.bpm )
+                           .arg( used ? QStringLiteral( "%1 onset keyframe(s)" ).arg( used->size() )
+                                      : QStringLiteral( "the vocoder's fixed keyframe grid "
+                                                        "(no onsets known yet)" ) );
         } else {
             // The layer keeps what it had: a failed decode is not a new
             // generation, and silence pretending to be one would be worse.
@@ -771,6 +1039,7 @@ int SSamplerProgram::installFinished_( bool force )
         it = jobs_.erase( it );
     }
     if( !changed.empty() ) installChanged_( changed );
+    for( std::uint32_t id : changed ) maybeAnalyze_( id );
     return (int)changed.size();
 }
 
@@ -805,7 +1074,8 @@ void SSamplerProgram::installChanged_( const std::vector<std::uint32_t> &layers 
 
 void SSamplerProgram::ensurePolling_()
 {
-    if( jobs_.empty() && retiredJobs_.empty() ) {
+    if( jobs_.empty() && retiredJobs_.empty() && analysisJobs_.empty() &&
+        retiredAnalyses_.empty() ) {
         if( poll_ ) poll_->stop();
         return;
     }
@@ -827,13 +1097,26 @@ void SSamplerProgram::pollJobs_()
             ++it;
         }
     }
+    for( auto it = retiredAnalyses_.begin(); it != retiredAnalyses_.end(); ) {
+        if( ( *it )->done.load( std::memory_order_acquire ) ) {
+            ( *it )->join();
+            it = retiredAnalyses_.erase( it );
+        } else {
+            ++it;
+        }
+    }
     installFinished_( false );
+    processAnalyses_();
     ensurePolling_();
 }
 
 bool SSamplerProgram::settle( int boundMs, int *waitedFor, qint64 *waitedMs, QString *why )
 {
     using clock = std::chrono::steady_clock;
+    // An onset analysis that FINISHED is acted on first (its re-stretch is
+    // then outstanding and waited for); one still running is not waited for:
+    // the barrier waits for generations, not for analyses (Q4).
+    processAnalyses_();
     // A bounce the debounce is still holding back is outstanding too: start
     // it now, so the render after an asset edit hears the edit (Q3.1).
     flushDueBounces();
@@ -880,6 +1163,219 @@ void SSamplerProgram::releaseHeldJob( std::uint32_t layerId )
         g->second->released = true;
     }
     g->second->cv.notify_all();
+}
+
+// --- tempo modes by stretch (Q4) ------------------------------------------------------
+
+namespace {
+
+double attrNum( const audio::twSamplerProgramModel &m, audio::twSamplerScope scope,
+                std::uint32_t id, const char *attr, double dflt )
+{
+    std::string v;
+    if( !m.value( scope, id, attr, &v ) || v.empty() ) return dflt;
+    // QString::toDouble is the C locale, always. NOT std::strtod: the app runs
+    // under the user's LC_NUMERIC (Qt calls setlocale), and under a German
+    // locale strtod reads the core's "1.5" as 1 (measured: a stretch factor
+    // of 0.8 for beats 1.5).
+    bool ok = false;
+    const double d = QString::fromStdString( v ).toDouble( &ok );
+    return ok ? d : dflt;
+}
+
+}  // namespace
+
+SSamplerProgram::Want SSamplerProgram::wantFor_( std::uint32_t layerId ) const
+{
+    // DESIGN §5: a layer is stretched when its zone is in a tempo mode by the
+    // stretch method and its length in beats is known. Reading the zone's
+    // mode and method and the layer's beats and positions is the one place
+    // qbx reads program attributes beyond `src`: what to render ahead is the
+    // host's decision (§5, "the host passes a buffer already rendered").
+    Want w;
+    std::uint32_t zone = 0;
+    for( std::uint32_t z : model_.zoneIds() ) {
+        const std::vector<std::uint32_t> ls = model_.layerIds( z );
+        if( std::find( ls.begin(), ls.end(), layerId ) != ls.end() ) { zone = z; break; }
+    }
+    if( zone == 0 ) return w;
+    std::string mode, method;
+    model_.value( audio::twSamplerScope::Zone, zone, "mode", &mode );
+    model_.value( audio::twSamplerScope::Zone, zone, "tempoMethod", &method );
+    if( ( mode != "tempo-loop" && mode != "tempo-oneshot" ) || method != "stretch" ) return w;
+    SProject *proj = getProjectSafe();
+    const double bpm = proj ? proj->getBPMTempo() : 0.0;
+    const audio::twSamplerScope L = audio::twSamplerScope::Layer;
+    w.spec.bpm       = bpm;
+    w.spec.beats     = attrNum( model_, L, layerId, "beats", 0.0 );
+    w.spec.start     = (std::int64_t)attrNum( model_, L, layerId, "start", 0.0 );
+    w.spec.end       = (std::int64_t)attrNum( model_, L, layerId, "end", -1.0 );
+    w.spec.loopStart = (std::int64_t)attrNum( model_, L, layerId, "loopStart", -1.0 );
+    w.spec.loopEnd   = (std::int64_t)attrNum( model_, L, layerId, "loopEnd", -1.0 );
+    w.on = w.spec.beats > 0.0 && bpm > 0.0;
+    return w;
+}
+
+std::shared_ptr<const std::vector<std::uint64_t>> SSamplerProgram::knownOnsets_(
+    const Source &s ) const
+{
+    if( s.content.isNull() ) return nullptr;
+    auto it = onsets_.find( { s.content.hi, s.content.lo } );
+    return it != onsets_.end() ? it->second : nullptr;
+}
+
+void SSamplerProgram::checkStretch_()
+{
+    if( !installer_ || !isReadable() ) return;
+    for( std::uint32_t z : model_.zoneIds() ) {
+        for( std::uint32_t id : model_.layerIds( z ) ) {
+            std::string s;
+            model_.value( audio::twSamplerScope::Layer, id, "src", &s );
+            if( !isFileSrc( s ) && !isLinkSrc( s ) ) continue;
+            const QString src = QString::fromStdString( s );
+            const Want    w   = wantFor_( id );
+            auto jb = jobs_.find( id );
+            const bool pendingSame = jb != jobs_.end() && jb->second->src == src;
+            if( pendingSame && jb->second->want == w ) continue;   // already on its way
+            auto in = installed_.find( id );
+            const bool haveSame = in != installed_.end() && in->second.src == src;
+            if( !pendingSame ) {
+                // Nothing on its way: compare with what is installed. A
+                // layer with nothing installed is reconcile's business.
+                if( !haveSame ) continue;
+                const Installed &I = in->second;
+                bool need = I.want != w;
+                if( !need && w.on && I.stretched && I.source ) {
+                    // The source's onsets became known (an analysis finished)
+                    // after this generation was stretched without them, or
+                    // with others: re-stretch with them (DESIGN §5).
+                    std::shared_ptr<const std::vector<std::uint64_t>> k = knownOnsets_( *I.source );
+                    if( k && ( !I.onsets || *k != *I.onsets ) ) need = true;
+                }
+                if( !need ) continue;
+            }
+            // (Re)start: from the kept source when there is one, else from
+            // the src (a decode or a bounce).
+            if( haveSame && in->second.source ) {
+                startJob_( id, src, in->second.source );
+            } else if( isLinkSrc( s ) ) {
+                LinkKey key;
+                if( linkKeyOf_( src, key, nullptr ) ) startBounce_( id, src, key );
+            } else {
+                startJob_( id, src );
+            }
+        }
+    }
+}
+
+void SSamplerProgram::maybeAnalyze_( std::uint32_t layerId )
+{
+    auto in = installed_.find( layerId );
+    if( in == installed_.end() || !in->second.want.on || !in->second.source ) return;
+    std::shared_ptr<const Source> source = in->second.source;
+    if( knownOnsets_( *source ) ) return;   // the sidecar store had them, or an analysis did
+    auto run = analysisJobs_.find( layerId );
+    if( run != analysisJobs_.end() ) {
+        if( run->second->source->content == source->content ) return;   // already analysing it
+        run->second->cancel();
+        retiredAnalyses_.push_back( run->second );
+        analysisJobs_.erase( run );
+        liveAnalysisGates_.erase( layerId );
+    }
+    auto job     = std::make_shared<AnalysisJob>();
+    job->layerId = layerId;
+    job->source  = source;
+    auto g = armedAnalysisGates_.find( layerId );
+    if( g != armedAnalysisGates_.end() ) {
+        job->gate = g->second;
+        liveAnalysisGates_[layerId] = g->second;
+        armedAnalysisGates_.erase( g );
+    }
+    AnalysisJob *raw = job.get();
+    job->thread = std::thread( [raw] { raw->run(); } );
+    analysisJobs_[layerId] = job;
+    qInfo().noquote() << QStringLiteral( "NassauDigital: layer %1: onset analysis of its source "
+                                         "started%2" )
+                             .arg( layerId )
+                             .arg( job->gate ? QStringLiteral( " (HELD by the render gate)" )
+                                             : QString() );
+    ensurePolling_();
+}
+
+int SSamplerProgram::processAnalyses_()
+{
+    int finished = 0;
+    for( auto it = analysisJobs_.begin(); it != analysisJobs_.end(); ) {
+        AnalysisJob &a = *it->second;
+        if( !a.done.load( std::memory_order_acquire ) ) { ++it; continue; }
+        a.join();
+        std::shared_ptr<const std::vector<std::uint64_t>> r;
+        {
+            std::lock_guard<std::mutex> lk( a.m );
+            r = a.result;
+        }
+        if( r && !a.source->content.isNull() ) {
+            onsets_[{ a.source->content.hi, a.source->content.lo }] = r;
+            ++analyses_[a.layerId];
+            ++finished;
+            qInfo().noquote() << QStringLiteral( "NassauDigital: layer %1: onset analysis "
+                                                 "finished: %2 onset(s)" )
+                                     .arg( a.layerId ).arg( r->size() );
+        }
+        liveAnalysisGates_.erase( a.layerId );
+        it = analysisJobs_.erase( it );
+    }
+    // What the analysis found may change a stretch layer's keyframes: the
+    // re-stretch is a new generation (DESIGN §5).
+    if( finished ) checkStretch_();
+    ensurePolling_();
+    return finished;
+}
+
+void SSamplerProgram::onTempoChanged_()
+{
+    checkStretch_();
+}
+
+void SSamplerProgram::holdNextAnalysis( std::uint32_t layerId, int holdMs )
+{
+    auto g    = std::make_shared<Gate>();
+    g->holdMs = holdMs;
+    armedAnalysisGates_[layerId] = g;
+}
+
+void SSamplerProgram::releaseHeldAnalysis( std::uint32_t layerId )
+{
+    armedAnalysisGates_.erase( layerId );
+    auto g = liveAnalysisGates_.find( layerId );
+    if( g == liveAnalysisGates_.end() ) return;
+    {
+        std::lock_guard<std::mutex> lk( g->second->m );
+        g->second->released = true;
+    }
+    g->second->cv.notify_all();
+}
+
+bool SSamplerProgram::waitAnalyses( int boundMs, QString *why )
+{
+    using clock = std::chrono::steady_clock;
+    const clock::time_point deadline = clock::now() + std::chrono::milliseconds( std::max( 0, boundMs ) );
+    QStringList late;
+    for( auto &kv : analysisJobs_ ) {
+        AnalysisJob &a = *kv.second;
+        std::unique_lock<std::mutex> lk( a.m );
+        if( !a.cv.wait_until( lk, deadline,
+                              [&a] { return a.done.load( std::memory_order_acquire ); } ) )
+            late << QStringLiteral( "layer %1" ).arg( a.layerId );
+    }
+    processAnalyses_();
+    if( !late.isEmpty() ) {
+        if( why )
+            *why = QStringLiteral( "onset analysis of %1 still running after %2 ms" )
+                       .arg( late.join( QStringLiteral( ", " ) ) ).arg( boundMs );
+        return false;
+    }
+    return true;
 }
 
 // --- persistence -------------------------------------------------------------------

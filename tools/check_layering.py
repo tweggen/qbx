@@ -395,7 +395,11 @@ APP_ENG = {
     # component's pages on a worker (twOutputPage, twPageClampChannel), the
     # SCut::buildCapture_ pattern. Q3 needed neither render nor schedule: the
     # bounce is a page loop, not a RenderSession (proposal 56 §11 Q3).
-    'objects/sampler': _ENG_BASE | {'pages', 'plugins', 'sampler', 'sources'},
+    # + sidecar since Q4 (QBX-268): a stretch layer's onset analysis
+    # (twDetectOnsets) stores and looks up the source's "onsets" aspect in the
+    # sidecar store by content hash, as SPlainWave and twGrainSource do. The
+    # vocoder itself is reached through `sampler` (twSamplerStretch).
+    'objects/sampler': _ENG_BASE | {'pages', 'plugins', 'sampler', 'sidecar', 'sources'},
     # objects/track + events since proposal 37 P1: STrack owns the per-track
     # twEventClipSet and the twEventMerge feed (3.2.1).
     # objects/track + render + sidecar + sources since proposal 40 M1b:

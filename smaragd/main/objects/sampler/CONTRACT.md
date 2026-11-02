@@ -18,6 +18,11 @@ asset into a generation when the asset's own content epoch moves, and refuses
 a link that would be a render cycle (invariants 17–21). Since QBX-267 the
 same walk refuses a LATER edit that would close such a cycle (invariant 22).
 
+Since Q4 (QBX-268) a layer of a tempo-mode zone whose method is `stretch`
+plays its source STRETCHED to the project tempo by qbx's phase vocoder, as a
+generation, re-rendered on a tempo change and once more when the source's onset
+analysis completes (proposal 56 §4.8, DESIGN §5, §13; invariants 23–27).
+
 Public headers: app/objects/sampler/*.h
 
 Depends on (engine): tw/core, tw/graph, **tw/sampler** (the editable program
@@ -26,7 +31,10 @@ Depends on (engine): tw/core, tw/graph, **tw/sampler** (the editable program
 by capability), **tw/sources** (since Q2: `twSampleSource`, the decoder every
 sample in the app goes through, on a generation job's worker), **tw/pages**
 (since Q3: the asset bounce freezes the content component's pages,
-`twOutputPage`). App edges: {actions, model, persistence} — **the RANK of
+`twOutputPage`), **tw/sidecar** (since Q4: the onset analysis,
+`twDetectOnsets`, and the `onsets` aspect it stores and looks up by the
+source's content hash). The vocoder is reached through tw/sampler
+(`twSamplerStretch`), not named here. App edges: {actions, model, persistence} — **the RANK of
 `objects/midi`** (DESIGN §9.2; proposal 56 Q-6, answered by the author
 2026-10-27). It does NOT depend on `objects/track`, although the slot it
 configures lives there, and `objects/track` never depends on it (proposal 56
@@ -260,6 +268,71 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     verbs that cannot close one, and why. Without the shell's hook (a unit
     test) the walk is the plain child-link one.
 
+23. **A STRETCH LAYER'S GENERATION IS ITS SOURCE STRETCHED TO THE PROJECT
+    TEMPO** (DESIGN §5, §13; proposal 56 §4.8). A layer WANTS a stretch when
+    its zone's `mode` is `tempo-loop` or `tempo-oneshot`, its `tempoMethod` is
+    `stretch`, its `beats` > 0 and the project has a tempo
+    (`SProject::getBPMTempo()`). Then its generation job decodes (or bounces)
+    the source and stretches it through `twSamplerStretch` by
+    s = (beats · 60 / bpm) / (loop frames / source rate), the loop being
+    `[loopStart, loopEnd)` clamped into `[start, end)` as the core clamps it
+    (without loop points `[start, end)`): uniform, so a lead-in and a tail are
+    stretched alike. The buffer carries s as its time scale; the CORE scales
+    the layer's positions by it (DESIGN §13, settled 2026-11-02), so the model
+    keeps source frames and qbx writes no program attribute. At s == 1 exactly
+    (the loop's own tempo) and with beats = 0 the source plays as it is. This
+    is the one place qbx READS program attributes beyond `src` (the zone's mode
+    and method, the layer's beats and positions): what to render ahead is the
+    host's decision. Numbers are parsed with `QString::toDouble` (C locale;
+    `strtod` reads "1.5" as 1 under a German LC_NUMERIC, measured).
+
+24. **THE SOURCE IS KEPT, AND EVERY CHANGE OF THE WANT IS A NEW GENERATION**.
+    A stretch layer's generation keeps its unstretched source (planar, with its
+    content hash) beside it. `checkStretch_()` compares each layer's want (the
+    mode / method / beats / positions / tempo above) with the want of its
+    newest generation (on its way, else installed) after every committed edit,
+    on `SProject::bpmTempoChanged` (set-tempo and its undo, the loader), and
+    when an onset analysis finishes; a difference starts a RE-STRETCH from the
+    kept source (no decode, no bounce; a linked layer keeps the key its source
+    was bounced from), superseding a job on its way. A want that turns OFF is a
+    generation too (the source, unstretched). A layer with no kept source
+    (it did not want a stretch before) starts from its `src`.
+
+25. **ONSETS: FROM THE SIDECAR STORE, ELSE AN ANALYSIS THIS OBJECT STARTS**
+    (DESIGN §5: the vocoder places its transient keyframes from the source's
+    onsets). The job's worker asks the sidecar store for the source's `onsets`
+    aspect by content hash (params-agnostic, as twGrainSource does). With none,
+    the generation is stretched on the vocoder's fixed keyframe grid and, once
+    installed, `maybeAnalyze_()` starts an ANALYSIS job on the kept source: a
+    `std::thread` (not the revalidator's analysis lane, which a render pauses
+    and which queues behind unrelated work — Q2's reason for its jobs) that
+    runs `twDetectOnsets` with SPlainWave's parameters and STORES the result in
+    the sidecar store (when enabled), so the next decode finds it. Its
+    completion (polled, like a job) records the onsets by content hash and runs
+    `checkStretch_()`: a stretch layer whose generation used other keyframes
+    (the fixed grid) is re-stretched with them — a new generation. An analysis
+    that finds no onsets changes nothing (the fixed grid is what an empty list
+    means) and makes no generation.
+
+26. **THE BARRIER WAITS FOR GENERATIONS, NOT FOR ANALYSES.** `settle()` first
+    acts on analyses that have FINISHED (their re-stretch is then outstanding
+    and waited for), never on one still running: a render after a tempo change
+    hears the stretch (Q4.q1, Q2.3's mechanism), and a render before the
+    analysis completes hears the fixed grid. Every render is still one
+    generation; which one depends on whether the analysis finished, exactly as
+    DESIGN §5 orders it ("rendered again when the tempo changes and once more
+    when the analysis finishes"). `waitAnalyses()` (and
+    `wait-sampler-generations analysis="1"`) is the bounded wait that a case
+    uses to place itself after the completion.
+
+27. **THE STRETCH IS DETERMINISTIC.** `twSamplerStretch` runs
+    `twPagedVocoder::warpOffline` (single-threaded, double math, fft 2048, hop
+    512, pitch ratio 1 — the twGrainSource configuration) over the whole
+    source into exactly llround(frames · s) frames; the same source, factor and
+    onsets give the same bytes in every process (gated against goldens). No
+    stretch runs on the audio thread: the worker renders, the main thread
+    installs (invariants 13–15).
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -379,7 +452,41 @@ absolute (there is nothing to be relative to).
   the teardown and the earlier moves have run. Sabotages: proposal 56 §11
   "QBX-267".
 
+- `qxa.sampler_q4_stretch` (QBX-268) — Q4.1: tests/sampler_q4_loop.wav (2
+  beats at 120 BPM, a 1 kHz carrier under four hits, the first accented), zone
+  tempo-loop by stretch, beats 2. At 120 BPM (factor 1, unstretched) the period
+  is 1000.0000 ms (the measurement's positive control); `set-tempo 100` is a
+  new generation (`timeScale="1.2"`), whose render measures a period of
+  1200.0000 ms (± 1 ms; autocorrelation over 1150–1250 ms) and a carrier of
+  999.772 / 1000.39 Hz (−0.39 / +0.67 cent; the band is ± 5 cent). Loop points
+  in source frames ([12000, 48000), beats 1.5) are a new generation of the same
+  factor, period 900.0000 ms: the core scales them. `tempo-oneshot` plays the
+  stretched buffer once (1.2 s, then silence).
+- `qxa.sampler_q4_generations` — Q4.2: from a cold sidecar store, with the
+  analysis HELD, `set-tempo 100` is generation 3 on the fixed grid
+  (`onsets="-1"`) and its render equals `goldens/sampler_q4_tempo.wav`; the
+  released analysis (4 onsets) is generation 4 and its render equals
+  `goldens/sampler_q4_onsets.wav` and differs from the fixed grid's; both
+  goldens are an earlier run's renders, so each run compares across processes.
+  Q4.q1: the stretch job held 1500 ms makes the render issued straight after
+  `set-tempo` log the barrier's line once. Also: the analysis stored the
+  sidecar (4 records); 80 BPM and its undo are generations 5 and 6 with the
+  onsets at once, and the undo's render equals generation 4's bytes; back at
+  120 BPM generation 7 is unstretched.
+- Sabotages that bite (QBX-268): see proposal 56 §11 "Q4 as built".
+
 ## Not gated / known limits
+
+- Q4: a stretch DURING PLAYBACK (a tempo change while playing) installs like
+  any generation and stales the track; no case plays. An analysis during a
+  render is not waited for (invariant 26) and no case races one. The loop's
+  SEAM is stretched as part of the whole buffer, not circularly: the vocoder
+  sees no material across the wrap, so a seam can carry a small discontinuity
+  the source did not have (not measured as a click; the period and pitch gates
+  are unaffected). `tune`, master tune and LFO pitch still move the read rate
+  in tempo modes (DESIGN §13, accepted for now), so a stretch zone with
+  tune ≠ 0 drifts off the tempo. A kept source doubles a stretch layer's
+  memory (the source beside its generation).
 
 - A render cycle made AFTER the link is refused since QBX-267 (invariant
   22), by the verbs that can build one. What still is not: a project FILE

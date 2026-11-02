@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q4_generations">
+
+  <!-- PROPOSAL 56 Q4 (QBX-268): TEMPO MODES BY STRETCHING, the generations
+       (nassau-digital GATES Q4.2, DESIGN §5, §6.1).
+
+       Q4.2  A tempo change produces a new generation, and so does completion
+             of the source's onset analysis; renders after each are
+             byte-identical across two runs.
+       Q4.q1 An offline render issued straight after set-tempo waits for the
+             stretch at the barrier (Q2.3's mechanism).
+
+       ACROSS TWO RUNS is asserted against GOLDENS: goldens/sampler_q4_tempo.wav
+       and goldens/sampler_q4_onsets.wav are the renders of an earlier run of
+       this very case, so every run compares its bytes with another process's.
+       Each run starts from a COLD sidecar store (sidecar-root, then
+       sidecar-drop onsets), so the onset analysis really runs in every run.
+
+       ======================================================= the fixture
+
+       sampler_q4_stretch's: ../sampler_q4_loop.wav (2 beats at 120 BPM, four
+       sharp hits a loop that the onset analysis finds), one zone over every
+       key in tempo-loop, layer 2 with beats 2, a note held from tick 0.
+
+       THE ORDER IS FORCED by two test gates (set-sampler-render-gate):
+       analysis="true" holds the layer's next ONSET ANALYSIS until released,
+       so the tempo change's generation is stretched on the vocoder's fixed
+       keyframe grid (onsets="-1") in every run; holdMs holds the next
+       generation JOB, so the render after set-tempo must find it outstanding
+       (Q4.q1). The zone starts by the RESAMPLE method (nothing kept, nothing
+       analysed), so the analysis gate can be armed on an existing layer
+       before set-zone tempoMethod="stretch" starts the first analysis. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <sidecar-root/>
+    <sidecar-drop aspect="onsets"/>
+    <set-tempo bpm="120"/>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="15360" name="Hold"/>
+    <add-note clip="0,0" tick="0" dur="14400" key="60" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60"
+              mode="tempo-loop" tempoMethod="resample">
+      <layer src="file:../sampler_q4_loop.wav" beats="2"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          stretched="0" analyzing="0" analyses="0"/>
+
+    <!-- The stretch method at the loop's own tempo: a new generation (the
+         source, factor 1, kept), and its onset analysis starts - HELD. -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false" analysis="true"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" tempoMethod="stretch"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          stretched="0" timeScale="1" analyzing="1" analyses="0"/>
+
+    <!-- ============================================== Q4.2 a tempo change
+         ...is a new generation: the source stretched x1.2 on the fixed grid
+         (the analysis is still held). Q4.q1: its job holds 1500 ms, so the
+         render issued straight after set-tempo finds it outstanding, waits at
+         the barrier and says so, once. -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false" holdMs="1500"/>
+    <set-tempo bpm="100"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2" pending="3"
+                          rendering="1"/>
+    <render filename="q4g_tempo.wav" format="wav" quality="10" durationSec="6"/>
+    <assert-log contains="run barrier: waited" minCount="1" maxCount="1"/>
+    <assert-log contains="for 1 sampler generation(s) on track 0" minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3" rendering="0"
+                          stretched="1" timeScale="1.2" onsets="-1" analyzing="1" analyses="0"/>
+    <!-- Byte-identical across runs: an earlier run's render. -->
+    <assert-file-identical actual="q4g_tempo.wav" expected="../goldens/sampler_q4_tempo.wav"/>
+    <!-- And it IS the stretch: the loop's period is 1200 ms. -->
+    <assert-audio-period filename="q4g_tempo.wav" channel="0" startFrame="48000" frameCount="230400"
+                         minMs="1150" maxMs="1250" expectMs="1200" toleranceMs="1"/>
+
+    <!-- ================================= Q4.2 the onset analysis completes
+         ...and is a new generation: the same stretch with the analysis's
+         onsets as keyframes (wait-sampler-generations analysis="1" waits for
+         the analysis, acts on it, then settles the re-stretch). -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="true" analysis="true"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000" analysis="1"/>
+    <assert-log contains="onset analysis finished: 4 onset(s)" minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="4" rendering="0"
+                          stretched="1" timeScale="1.2" onsets="4" analyzing="0" analyses="1"/>
+    <render filename="q4g_onsets.wav" format="wav" quality="10" durationSec="6"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+    <assert-file-identical actual="q4g_onsets.wav" expected="../goldens/sampler_q4_onsets.wav"/>
+    <!-- The keyframes changed what is heard: not the fixed grid's bytes. -->
+    <assert-file-identical actual="q4g_onsets.wav" expected="q4g_tempo.wav" expectReject="true"/>
+    <assert-audio-period filename="q4g_onsets.wav" channel="0" startFrame="48000" frameCount="230400"
+                         minMs="1150" maxMs="1250" expectMs="1200" toleranceMs="1"/>
+
+    <!-- The sidecar store now holds the onsets (the analysis stored them). -->
+    <assert-sidecar aspect="onsets" minRecords="4" maxRecords="4"/>
+
+    <!-- ===================================== a tempo change and its undo
+         Another tempo is a new generation with the onsets known at once (no
+         second analysis); its undo is a new generation again, and back at
+         100 BPM with the same onsets it renders the SAME bytes. -->
+    <set-tempo bpm="80"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="5"
+                          stretched="1" timeScale="1.5" onsets="4" analyses="1"/>
+    <undo/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="6"
+                          stretched="1" timeScale="1.2" onsets="4" analyses="1"/>
+    <render filename="q4g_undo.wav" format="wav" quality="10" durationSec="6"/>
+    <assert-file-identical actual="q4g_undo.wav" expected="q4g_onsets.wav"/>
+
+    <!-- Back to the loop's own tempo: the source itself, unstretched. -->
+    <set-tempo bpm="120"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="7"
+                          stretched="0" timeScale="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -538,6 +538,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertautomationvalueaction.h
     testkit/include/app/testkit/sautomationuitestactions.h
     testkit/include/app/testkit/sassertaudiofrequencyaction.h
+    testkit/include/app/testkit/sassertaudioperiodaction.h
     testkit/include/app/testkit/sassertaudiolengthaction.h
     testkit/include/app/testkit/sassertaudiopeakaction.h
     testkit/include/app/testkit/sassertchannelsdifferaction.h
@@ -601,6 +602,7 @@ set(APP_UI_FILES
     testkit/src/sassertautomationvalueaction.cpp
     testkit/src/sautomationuitestactions.cpp
     testkit/src/sassertaudiofrequencyaction.cpp
+    testkit/src/sassertaudioperiodaction.cpp
     testkit/src/sassertaudiolengthaction.cpp
     testkit/src/sassertaudiopeakaction.cpp
     testkit/src/sassertchannelsdifferaction.cpp

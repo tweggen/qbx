@@ -58,7 +58,8 @@ std::shared_ptr<const twSamplerSample> twSamplerSample::fromPlanar( int channels
                                                                     const float *const *planar,
                                                                     std::int64_t frames,
                                                                     std::uint64_t generation,
-                                                                    std::string *error )
+                                                                    std::string *error,
+                                                                    double timeScale )
 {
     if( channels != 1 && channels != 2 ) {
         if( error ) *error = "a sample has 1 or 2 channels";
@@ -84,9 +85,11 @@ std::shared_ptr<const twSamplerSample> twSamplerSample::fromPlanar( int channels
         }
     }
     std::shared_ptr<const nd::Sample> s = nd::Sample::fromInterleaved(
-        channels, sampleRate, inter.empty() ? nullptr : inter.data(), frames, generation );
+        channels, sampleRate, inter.empty() ? nullptr : inter.data(), frames, generation, timeScale );
     if( !s ) {
-        if( error ) *error = "the core refused the sample's shape (rate <= 0 or negative length)";
+        if( error )
+            *error = "the core refused the sample's shape (rate <= 0, negative length, or a time "
+                     "scale that is not finite and positive)";
         return nullptr;
     }
     std::shared_ptr<twSamplerSample> out( new twSamplerSample );
@@ -98,5 +101,6 @@ int           twSamplerSample::channels() const   { return impl_->sample->channe
 double        twSamplerSample::sampleRate() const { return impl_->sample->sampleRate(); }
 std::int64_t  twSamplerSample::frames() const     { return impl_->sample->frames(); }
 std::uint64_t twSamplerSample::generation() const { return impl_->sample->generation(); }
+double        twSamplerSample::timeScale() const  { return impl_->sample->timeScale(); }
 
 }  // namespace audio

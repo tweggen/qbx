@@ -21,6 +21,9 @@
 
 #include <QDebug>
 #include <QDomElement>
+
+#include <algorithm>
+#include <cmath>
 #include <QDomNamedNodeMap>
 #include <QFile>
 #include <QHash>
@@ -426,9 +429,16 @@ SApplyResult SSetSamplerRenderGateAction::apply( SProject *project )
         qWarning().noquote() << where << ": REJECTED: no such layer";
         return { false, nullptr };
     }
-    if( ready_ ) prog->releaseHeldJob( (std::uint32_t)layer_ );
-    else         prog->holdNextJob( (std::uint32_t)layer_, holdMs_ );
-    qInfo().noquote() << where << ( ready_ ? ": released"
+    if( analysis_ ) {
+        // Q4.2: the layer's next ONSET ANALYSIS, not its next generation job.
+        if( ready_ ) prog->releaseHeldAnalysis( (std::uint32_t)layer_ );
+        else         prog->holdNextAnalysis( (std::uint32_t)layer_, holdMs_ );
+    } else {
+        if( ready_ ) prog->releaseHeldJob( (std::uint32_t)layer_ );
+        else         prog->holdNextJob( (std::uint32_t)layer_, holdMs_ );
+    }
+    qInfo().noquote() << where << ( analysis_ ? " (analysis)" : "" )
+                      << ( ready_ ? ": released"
                                            : QStringLiteral( ": the next job HOLDS (%1)" )
                                                  .arg( holdMs_ >= 0
                                                            ? QStringLiteral( "%1 ms" ).arg( holdMs_ )
@@ -444,6 +454,7 @@ void SSetSamplerRenderGateAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "ready", ready_ ? "true" : "false" );
     elem.setAttribute( "holdMs", holdMs_ );
     if( hasBound_ ) elem.setAttribute( "settleBoundMs", settleBoundMs_ );
+    if( analysis_ ) elem.setAttribute( "analysis", "true" );
 }
 
 bool SSetSamplerRenderGateAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -455,6 +466,7 @@ bool SSetSamplerRenderGateAction::readXml( const QDomElement &elem, int /*versio
     holdMs_    = elem.attribute( "holdMs", "-1" ).toInt();
     hasBound_  = elem.hasAttribute( "settleBoundMs" );
     settleBoundMs_ = elem.attribute( "settleBoundMs", "-1" ).toInt();
+    analysis_  = elem.attribute( "analysis", "false" ) == QLatin1String( "true" );
     return true;
 }
 
@@ -462,7 +474,8 @@ QStringList SSetSamplerRenderGateAction::knownAttributes() const
 {
     return { QStringLiteral( "trackPath" ), QStringLiteral( "slotIndex" ),
              QStringLiteral( "layer" ),     QStringLiteral( "ready" ),
-             QStringLiteral( "holdMs" ),    QStringLiteral( "settleBoundMs" ) };
+             QStringLiteral( "holdMs" ),    QStringLiteral( "settleBoundMs" ),
+             QStringLiteral( "analysis" ) };
 }
 
 static const bool s_reg_setsamplerrendergate =
@@ -481,7 +494,11 @@ const QStringList &layerCheckNames()
                                    QStringLiteral( "src" ),        QStringLiteral( "captureTrackEpoch" ),
                                    QStringLiteral( "trackEpochAdvancedSince" ),
                                    // Q3 (QBX-266)
-                                   QStringLiteral( "renders" ),    QStringLiteral( "asset" ) };
+                                   QStringLiteral( "renders" ),    QStringLiteral( "asset" ),
+                                   // Q4 (QBX-268)
+                                   QStringLiteral( "timeScale" ),  QStringLiteral( "stretched" ),
+                                   QStringLiteral( "onsets" ),     QStringLiteral( "analyzing" ),
+                                   QStringLiteral( "analyses" ) };
     return n;
 }
 
@@ -526,14 +543,20 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
         }
     }
     const QString got = QStringLiteral( "generation=%1 rendering=%2 pending=%3 installs=%4 src=%5 "
-                                        "renders=%6 asset=%7" )
+                                        "renders=%6 asset=%7 timeScale=%8 stretched=%9 onsets=%10 "
+                                        "analyzing=%11 analyses=%12" )
                             .arg( (qulonglong)st.installedGeneration )
                             .arg( st.rendering() ? 1 : 0 )
                             .arg( (qulonglong)st.pendingGeneration )
                             .arg( st.installs )
                             .arg( st.installedSrc )
                             .arg( st.renders )
-                            .arg( assetNow );
+                            .arg( assetNow )
+                            .arg( st.timeScale, 0, 'g', 12 )
+                            .arg( st.stretched ? 1 : 0 )
+                            .arg( st.onsets )
+                            .arg( st.analyzing ? 1 : 0 )
+                            .arg( st.analyses );
     QStringList fails;
     auto num = [&]( const char *k, qulonglong have ) {
         if( checks_.contains( QLatin1String( k ) ) &&
@@ -546,6 +569,19 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
     num( "pending", st.pendingGeneration );
     num( "installs", (qulonglong)st.installs );
     num( "renders", (qulonglong)st.renders );
+    num( "stretched", st.stretched ? 1 : 0 );
+    num( "analyzing", st.analyzing ? 1 : 0 );
+    num( "analyses", (qulonglong)st.analyses );
+    if( checks_.contains( QStringLiteral( "onsets" ) ) &&
+        checks_.value( "onsets" ).toInt() != st.onsets )
+        fails << QStringLiteral( "onsets: want %1" ).arg( checks_.value( "onsets" ) );
+    // The time scale to 1e-9 relative: it is the stretch factor the worker
+    // computed in double, compared with the value the case derives by hand.
+    if( checks_.contains( QStringLiteral( "timeScale" ) ) ) {
+        const double want = checks_.value( "timeScale" ).toDouble();
+        if( !( std::fabs( st.timeScale - want ) <= 1e-9 * std::max( 1.0, std::fabs( want ) ) ) )
+            fails << QStringLiteral( "timeScale: want %1" ).arg( checks_.value( "timeScale" ) );
+    }
     if( checks_.contains( QStringLiteral( "asset" ) ) && checks_.value( "asset" ) != assetNow )
         fails << QStringLiteral( "asset: want \"%1\"" ).arg( checks_.value( "asset" ) );
     if( checks_.contains( QStringLiteral( "src" ) ) && checks_.value( "src" ) != st.installedSrc )
@@ -633,6 +669,13 @@ SApplyResult SWaitSamplerGenerationsAction::apply( SProject *project )
     int     n  = 0;
     qint64  ms = 0;
     QString late;
+    // analysis="1" (Q4.2): first wait for the onset analyses and act on them
+    // (each that changes a layer's keyframes starts its re-stretch), then
+    // settle the generations as without it.
+    if( analysis_ && !prog->waitAnalyses( timeoutMs_, &late ) ) {
+        qWarning().noquote() << where << "FAIL:" << late;
+        return { false, nullptr };
+    }
     if( !prog->settle( timeoutMs_, &n, &ms, &late ) ) {
         qWarning().noquote() << where << "FAIL:" << late;
         return { false, nullptr };
@@ -647,6 +690,7 @@ void SWaitSamplerGenerationsAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "trackPath", trackPath_ );
     elem.setAttribute( "slotIndex", slotIndex_ );
     elem.setAttribute( "timeoutMs", timeoutMs_ );
+    if( analysis_ ) elem.setAttribute( "analysis", "1" );
 }
 
 bool SWaitSamplerGenerationsAction::readXml( const QDomElement &elem, int /*version*/ )
@@ -655,13 +699,14 @@ bool SWaitSamplerGenerationsAction::readXml( const QDomElement &elem, int /*vers
     slotIndex_ = elem.attribute( "slotIndex", "0" ).toInt();
     timeoutMs_ = elem.attribute( "timeoutMs", "15000" ).toInt();
     if( timeoutMs_ < 0 ) timeoutMs_ = 15000;
+    analysis_  = elem.attribute( "analysis", "0" ) == QLatin1String( "1" );
     return true;
 }
 
 QStringList SWaitSamplerGenerationsAction::knownAttributes() const
 {
     return { QStringLiteral( "trackPath" ), QStringLiteral( "slotIndex" ),
-             QStringLiteral( "timeoutMs" ) };
+             QStringLiteral( "timeoutMs" ), QStringLiteral( "analysis" ) };
 }
 
 static const bool s_reg_waitsamplergenerations =

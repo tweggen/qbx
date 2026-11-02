@@ -535,4 +535,50 @@ bool readAudioRegion(const std::string &filename, int64_t startFrame,
     return true;
 }
 
+double estimatePeriodFrames(const std::string &filename,
+                            int64_t startFrame, int64_t frameCount,
+                            int channelIndex, int64_t minLag, int64_t maxLag,
+                            int &sampleRate, bool &onEdge, std::string &error)
+{
+    onEdge = false;
+    std::vector<float> x;
+    if (!readAudioRegion(filename, startFrame, frameCount, channelIndex, x, sampleRate, error))
+        return 0.0;
+    const int64_t n = (int64_t) x.size();
+    if (minLag < 1 || maxLag <= minLag + 1 || maxLag >= n / 2) {
+        error = "Lag range invalid for the region (need 1 <= minLag < maxLag - 1 < frames / 2)";
+        return 0.0;
+    }
+    // Prefix sums of x^2 give every overlap's two energies in O(1).
+    std::vector<double> e((size_t) n + 1, 0.0);
+    for (int64_t i = 0; i < n; ++i) e[(size_t) i + 1] = e[(size_t) i] + (double) x[(size_t) i] * x[(size_t) i];
+    std::vector<double> r((size_t) (maxLag - minLag + 1), 0.0);
+    for (int64_t lag = minLag; lag <= maxLag; ++lag) {
+        const int64_t m = n - lag;
+        double sum = 0.0;
+        for (int64_t i = 0; i < m; ++i) sum += (double) x[(size_t) i] * x[(size_t) (i + lag)];
+        const double ea = e[(size_t) m] - e[0];
+        const double eb = e[(size_t) n] - e[(size_t) lag];
+        r[(size_t) (lag - minLag)] = (ea > 0.0 && eb > 0.0) ? sum / std::sqrt(ea * eb) : 0.0;
+    }
+    int64_t best = minLag;
+    for (int64_t lag = minLag; lag <= maxLag; ++lag)
+        if (r[(size_t) (lag - minLag)] > r[(size_t) (best - minLag)]) best = lag;
+    if (r[(size_t) (best - minLag)] <= 0.0) {
+        error = "No periodicity found in the lag range";
+        return 0.0;
+    }
+    if (best == minLag || best == maxLag) {
+        onEdge = true;
+        return (double) best;
+    }
+    const double y0 = r[(size_t) (best - 1 - minLag)];
+    const double y1 = r[(size_t) (best - minLag)];
+    const double y2 = r[(size_t) (best + 1 - minLag)];
+    const double denom = y0 - 2.0 * y1 + y2;
+    double refined = (double) best;
+    if (std::abs(denom) > 1e-15) refined += 0.5 * (y0 - y2) / denom;
+    return refined;
+}
+
 }  // namespace audio

@@ -22,9 +22,9 @@ twsamplerprogrammodel.h. All Qt-free (THREADING.md rule 1), and none names a
 core type.
 
 Depends on: tw/core, tw/graph, tw/events, tw/plugins (and tw/pages through
-graph, for one constant: `twOutputPage::FRAME_CAPACITY`). `check_layering.py`
-also grants tw/sources, for Q4's stretch renderer (`twPagedVocoder`); it is
-not linked until Q4 uses it. Plus the NassauDigital core, linked PRIVATE.
+graph, for one constant: `twOutputPage::FRAME_CAPACITY`), and tw/sources
+since Q4 (QBX-268): the stretch renderer `twSamplerStretch`
+(`twsamplerstretch.h`) runs `twPagedVocoder`. Plus the NassauDigital core, linked PRIVATE.
 Forbidden: app headers, mix, pages beyond the one constant, playback, devices,
 sinks. Nothing below the app layer depends on this module.
 
@@ -50,7 +50,14 @@ through its own verbatim `cmake/NassauDSP.cmake`: `-DNASSAU_DSP_DIR`, then
 `NASSAU_DSP_GIT_REF`; it logs `nassau-dsp: <route>, <dir> at <commit>`. qbx
 carries nothing for it. A bare clone fetches both.
 
-**The pin, as of 2026-11-01: nassau-digital 793f4ce** (main after
+**The pin, as of 2026-11-02: nassau-digital a82a698** (the merge of
+nassau-digital#27 on main, the sample's time scale for Q4; its code is
+identical to the PR branch's 4167ab5, which it replaced). What it adds: `nd::Sample::
+timeScale()` (a trailing default argument on its factories), which
+`twSamplerSample::fromPlanar( …, timeScale )` passes through; nothing else in
+the API moved, and no program is written differently.
+
+**The pin before, 2026-11-01: nassau-digital 793f4ce** (main after
 nassau-digital#24; nassau-dsp 76e38fb, unchanged). What the core's API lost
 since 5adc61a and qbx therefore must not call: `Instrument::setOversampling()`
 / `oversampling()` (the factor is now the zone attribute `oversample`, 2 or 4,
@@ -195,6 +202,16 @@ render (`assert-sampler-program installed="1"`).
 `twCtxTempo` is set) goes to `nd::Instrument::setTempo` per chunk, for the
 resample tempo modes.
 
+**Stretch (Q4).** `twSamplerSample::timeScale()` is the buffer's length over
+the length of the source the layer's positions were set on; the core scales a
+`stretch` zone's start, end, loop points and velToStart skip by it at note-on
+(nassau-digital DESIGN §13, settled 2026-11-02, option A). `twSamplerStretch`
+makes such a buffer: the whole source through `twPagedVocoder::warpOffline`
+(fft 2048, hop 512, pitch ratio 1, onsets as keyframes) into llround(frames ·
+s) frames with timeScale s; `twSamplerStretchFactor` computes s from the song
+tempo, `beats` and the loop clamped as the core clamps it. Both run on the
+app's generation worker, never in `process()`.
+
 `tailFrames()` is the longest amp release in the program, extended to the
 longest installed sample when the program has a one-shot zone (which plays to
 the sample's end whatever the note-off says); it sizes the processor's
@@ -217,6 +234,10 @@ pre-roll, capped at 4 s by the processor.
   `main/objects/sampler/CONTRACT.md`); `sampler_q1_zone_id` also gates the
   overlay-range refusals and the save and reload of a program at
   `nextId` 1000000.
+- `qxa.sampler_q4_stretch`, `qxa.sampler_q4_generations` (QBX-268):
+  `twSamplerStretch` and the time scale through the app (period 1200.0000 ms
+  at 100 BPM, pitch within 0.7 cent; loop points scaled: 900.0000 ms;
+  goldens across processes) — see `main/objects/sampler/CONTRACT.md`.
 
 ## Known limits (recorded, not hidden)
 

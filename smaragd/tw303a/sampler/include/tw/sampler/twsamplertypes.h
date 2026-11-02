@@ -75,12 +75,20 @@ public:
                                                               const float *const *planar,
                                                               std::int64_t frames,
                                                               std::uint64_t generation,
-                                                              std::string *error = nullptr );
+                                                              std::string *error = nullptr,
+                                                              double timeScale = 1.0 );
 
     int           channels() const;
     double        sampleRate() const;
     std::int64_t  frames() const;
     std::uint64_t generation() const;
+    // This buffer's length over the length of the source the layer's frame
+    // positions were set on: 1 for the source itself, s for qbx's stretch
+    // generation rendered s times as long (Q4). The core scales a `stretch`
+    // zone's start, end, loop points and velToStart skip by it at note-on
+    // (nassau-digital DESIGN §13, settled 2026-11-02). Must be finite and
+    // positive (fromPlanar refuses anything else).
+    double        timeScale() const;
 
     ~twSamplerSample();
     twSamplerSample( const twSamplerSample & )            = delete;

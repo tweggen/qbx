@@ -15,6 +15,7 @@
 
 #include "app/model/sobject.h"
 #include "tw/sampler/twsamplerprogrammodel.h"
+#include "tw/sampler/twsamplerstretch.h"
 
 class QDomElement;
 class QTextStream;
@@ -106,6 +107,23 @@ class twSamplerSample;
  * worker freezes the content component's pages over the asset's window into
  * an immutable twSamplerSample, and the install, the render pin and the settle
  * are the file layer's.
+ *
+ * TEMPO MODES BY STRETCH (proposal 56 §4.8, Q4; DESIGN §5, §13). A layer of a
+ * `tempo-loop` / `tempo-oneshot` zone whose method is `stretch` and whose
+ * `beats` > 0 plays its source STRETCHED to the project tempo by qbx's phase
+ * vocoder (twSamplerStretch), pitch kept: the same generation job decodes (or
+ * bounces) the source and then stretches it, and the result carries the
+ * factor as its time scale, which the core applies to the layer's positions.
+ * The source is kept beside the generation, so a TEMPO CHANGE (bpmTempoChanged)
+ * or an edit of the zone's mode / method or the layer's beats or positions
+ * re-stretches it as a new generation without decoding again. The vocoder's
+ * transient keyframes come from the source's ONSETS: looked up in the sidecar
+ * store by the source's content hash, else computed by an ANALYSIS job this
+ * object starts itself on the kept source (a std::thread, like a generation
+ * job; the result is stored in the sidecar store); its completion re-stretches
+ * the layer once more as a new generation (DESIGN §5: "once more when qbx's
+ * onset analysis of the source finishes"). The barrier's settle waits for
+ * generation jobs, never for an analysis.
  */
 class SSamplerProgram : public SObject {
     Q_OBJECT
@@ -180,6 +198,15 @@ public:
         bool          rendering() const { return pendingGeneration != 0 || bounceDue; }
         int           installs = 0;             // generations installed so far
         int           renders  = 0;             // asset bounces STARTED so far (Q3.2)
+        // Q4: the installed buffer's time scale (the stretch factor; 1 when
+        // not stretched), the onset keyframes it was stretched with (-1 = it
+        // was not stretched with an onset list: unstretched, or the vocoder's
+        // fixed grid), an onset analysis running, and analyses finished.
+        double        timeScale = 1.0;
+        bool          stretched = false;
+        int           onsets    = -1;
+        bool          analyzing = false;
+        int           analyses  = 0;
     };
     LayerState layerState( std::uint32_t layerId ) const;
     // Jobs started and not yet installed (finished ones a render kept back
@@ -199,6 +226,15 @@ public:
     // when holdMs >= 0. release() also frees a job that is holding now.
     void holdNextJob( std::uint32_t layerId, int holdMs );
     void releaseHeldJob( std::uint32_t layerId );
+    // The same seam for the layer's NEXT onset analysis (Q4.2): it holds before
+    // it analyses, until released or for holdMs.
+    void holdNextAnalysis( std::uint32_t layerId, int holdMs );
+    void releaseHeldAnalysis( std::uint32_t layerId );
+    // Wait (bounded, on the calling main thread) for every onset analysis of
+    // this program, then act on what finished: each one that changes a layer's
+    // keyframes starts that layer's re-stretch (a new generation, which a
+    // following settle() waits for). False with `why` on the bound.
+    bool waitAnalyses( int boundMs, QString *why );
 
     // --- asset links (proposal 56 §4.7, Q3) -----------------------------------------
     // Mint a link to `body` (a registered asset's body) and return its id, the
@@ -221,6 +257,15 @@ public:
 
     struct Job;    // Qt-free state shared with one worker (ssamplerprogram.cpp)
     struct Gate;
+    struct Source;         // a kept, unstretched source (Q4)
+    struct AnalysisJob;    // one onset analysis on its worker (Q4)
+    // What a layer's generation should be (Q4): stretched to `spec`, or not.
+    struct Want {
+        bool                        on = false;
+        audio::twSamplerStretchSpec spec;
+        bool operator==( const Want &o ) const { return on == o.on && ( !on || spec == o.spec ); }
+        bool operator!=( const Want &o ) const { return !( *this == o ); }
+    };
 
 signals:
     void programChanged();
@@ -232,7 +277,8 @@ signals:
 private:
     void publish_();
     void reconcileSamples_( bool atBind = false );
-    void startJob_( std::uint32_t layerId, const QString &src );
+    void startJob_( std::uint32_t layerId, const QString &src,
+                    std::shared_ptr<const Source> from = nullptr );
     void cancelJob_( std::uint32_t layerId );
     // Install every finished job (`force` ignores the render pin: settle()).
     // Returns how many generations were installed.
@@ -249,6 +295,13 @@ private:
     void onArrangementChanged_();
     void ensurePolling_();
     InstanceInitializer futureInitializer_() const;
+    // The stretch half (Q4).
+    Want wantFor_( std::uint32_t layerId ) const;
+    std::shared_ptr<const std::vector<std::uint64_t>> knownOnsets_( const Source &s ) const;
+    void checkStretch_();
+    void maybeAnalyze_( std::uint32_t layerId );
+    int  processAnalyses_();
+    void onTempoChanged_();
 
     audio::twSamplerProgramModel                  model_;
     QString                                       loadError_;
@@ -263,6 +316,13 @@ private:
         QString                                       src;
         std::shared_ptr<const audio::twSamplerSample> sample;
         std::shared_ptr<const LinkKey>                key;   // a bounce's, else null
+        // Q4: the generation was made for `want`; `source` is the unstretched
+        // source kept for a re-stretch and an analysis (only when want.on);
+        // `stretched` = the vocoder ran (factor != 1); the onsets it used.
+        Want                                          want;
+        std::shared_ptr<const Source>                 source;
+        bool                                          stretched = false;
+        std::shared_ptr<const std::vector<std::uint64_t>> onsets;
     };
     std::map<std::uint32_t, Installed>              installed_;
     std::map<std::uint32_t, std::uint64_t>          lastGeneration_;  // never reset
@@ -290,6 +350,16 @@ private:
     std::map<std::uint32_t, int>                    renders_;
     std::set<std::uint32_t>                         due_;            // bounce waiting
     QTimer                                         *debounce_ = nullptr;
+
+    // Q4: onset lists by source content (from the sidecar or an analysis),
+    // the running analyses, their gates, and how many finished per layer.
+    std::map<std::pair<std::uint64_t, std::uint64_t>,
+             std::shared_ptr<const std::vector<std::uint64_t>>> onsets_;
+    std::map<std::uint32_t, std::shared_ptr<AnalysisJob>>  analysisJobs_;
+    std::vector<std::shared_ptr<AnalysisJob>>              retiredAnalyses_;
+    std::map<std::uint32_t, std::shared_ptr<Gate>>         armedAnalysisGates_;
+    std::map<std::uint32_t, std::shared_ptr<Gate>>         liveAnalysisGates_;
+    std::map<std::uint32_t, int>                           analyses_;
 };
 
 #endif

@@ -599,6 +599,10 @@ so "current at note-on" is well defined.
   analysis completion produces the second (A9). For a file layer the analysis
   is the one `SPlainWave` already enqueues; for a bounced asset or a recording
   `objects/sampler` enqueues the same analyzer on the bounced buffer.
+  *(Corrected by the build, §11 "Q4 as built" item 2: a sampler file layer
+  has no `SPlainWave`, so `objects/sampler` runs the analysis itself for
+  every stretch layer, file or asset, on its own worker, and stores the
+  result in the sidecar store.)*
 * Both renders feed §4.6, so an offline render after a tempo change waits for
   the stretch at the barrier.
 
@@ -1597,3 +1601,92 @@ changes containment or placement refuses such an edit.
    Found on the way and not fixed: `dissolve-arrangement` of an arrangement
    made by `create-arrangement` (no asset named after it) hands back an
    extraction over an empty window, which is refused, so its undo fails.
+
+### Q4 as built (QBX-268, 2026-11-02)
+
+Built: the core's sample time scale (nassau-digital#27, the author's answer
+of 2026-11-02, option A: a host-supplied sample carries stretched ÷ source
+length and the core scales a `stretch` zone's start, end, loop points and
+velToStart skip by it at note-on; DESIGN §13), the pin moved to it;
+`twSamplerStretch` / `twSamplerStretchFactor` in tw/sampler (the
+`tw/sampler → sources` edge §4.8 named); in `SSamplerProgram` the stretch want,
+the kept source, the re-stretch on a tempo change or an edit, the onset
+analysis and its re-stretch; the test seams (`set-sampler-render-gate
+analysis=`, `wait-sampler-generations analysis=`, five `assert-sampler-layer`
+checks) and a new verb `assert-audio-period`; two cases, a fixture and two
+goldens. Gated: Q4.1, Q4.2, Q4.q1. Where the text above did not survive the
+build:
+
+1. **The positions question was the author's to answer** (not in §4.8 or
+   DESIGN §5): the core reads a layer's positions as frames of whatever
+   buffer it is handed, and a stretched buffer is s times as long. Answered
+   2026-11-02, option A (above); option B (qbx publishing rescaled positions)
+   was not taken, so invariant 8 still holds — qbx writes no program
+   attribute. It does now READ the zone's mode and method and the layer's
+   beats and positions (what to render ahead is the host's decision), with
+   `QString::toDouble`: `strtod` read "1.5" as 1 under this box's German
+   LC_NUMERIC (measured, a factor of 0.8 for 1.2).
+2. **The analysis is objects/sampler's own** (§4.8: "for a file layer the
+   analysis is the one SPlainWave already enqueues"). A sampler's file layer
+   is not an `SPlainWave` and nothing enqueues one for it, so the program
+   runs `twDetectOnsets` (SPlainWave's parameters) itself on the kept source,
+   on a `std::thread` like a generation job (not the revalidator's analysis
+   lane, which a render pauses — Q2 item 2's reason), and stores the result
+   in the sidecar store by the source's content hash. The job's worker first
+   asks the sidecar store (params-agnostic, as twGrainSource does): a warm
+   store gives the first generation its onsets and no analysis runs.
+3. **The source is kept** (not in §4.8): a stretch layer's generation keeps
+   its unstretched planar source beside it, so a tempo change re-stretches
+   without decoding or bouncing again. It doubles the layer's memory.
+4. **The barrier waits for generations, never for an analysis** (§4.8: "both
+   renders feed §4.6"). An analysis that has FINISHED is acted on by the
+   settle (its re-stretch is then waited for); one still running is not, so
+   a render before the completion hears the fixed keyframe grid, as DESIGN §5
+   orders the two generations. Q4.2's "renders after each" is placed by
+   holding the analysis (`set-sampler-render-gate analysis="true"`) and by
+   `wait-sampler-generations analysis="1"`, not by `wait-analysis` (which
+   knows SPlainWave and the revalidator, not this program).
+5. **At a factor of exactly 1 the source plays as it is** (not in §4.8): at
+   the loop's own tempo no vocoder runs (timeScale 1), and `beats` = 0 plays
+   the source too. An analysis that finds no onsets makes no generation (an
+   empty list IS the fixed grid).
+6. **The trigger is `SProject::bpmTempoChanged`** (§4.8: "the slot already
+   receives the tempo map and bumps on a change"): the model's own signal,
+   emitted by `set-tempo`, its undo and the loader; the slot's per-chunk
+   tempo still drives the resample method in the core.
+7. **The whole source is stretched uniformly**, lead-in and tail included
+   (DESIGN §5), by s = (beats · 60 / bpm) / (loop seconds), the loop clamped
+   as the core clamps it.
+8. **Measured** (`sampler_q4_stretch`, `sampler_q4_generations`; fixture
+   `tests/sampler_q4_loop.wav`, 2 beats at 120 BPM, a 1 kHz carrier under four
+   hits): Q4.1 at 100 BPM a period of 57600.0000 frames = **1200.0000 ms**
+   (± 1 ms; autocorrelation over 1150–1250 ms), carrier **999.772 Hz and
+   1000.39 Hz** in two windows (**−0.39 and +0.67 cent**; ± 5 cent), the
+   measurement's control at 120 BPM 1000.0000 ms and 999.974 Hz; loop points
+   in source frames ([12000, 48000), beats 1.5) 900.0000 ms. Q4.2: the tempo
+   change's generation (fixed grid) and the analysis's (4 onsets) each render
+   byte-identically to goldens an earlier run made (cold sidecar store every
+   run), and differ from each other (79 % of the bytes); 80 BPM and its undo
+   are new generations and the undo renders generation 4's bytes. Q4.q1: a
+   stretch held 1500 ms makes the render after `set-tempo` log
+   `run barrier: waited 1536 ms for 1 sampler generation(s) on track 0` once (one run).
+9. **Sabotages that bite** (each watched failing; the harness restores every
+   file from its saved bytes and touches it): the `bpmTempoChanged` trigger
+   dropped (both cases); the analysis's completion not re-stretching
+   (Q4.2: generation, golden, the differs check); the onsets never reaching
+   the vocoder (Q4.2's onsets golden and differs check); the time scale not
+   handed to the core (the loop-points period 900 ms, and every
+   `timeScale=`); the factor inverted (both periods, the golden); the factor
+   over `[start, end)` instead of the loop (the loop-points period, the
+   one-shot's energy); the want ignoring the method (Q4.2's resample start);
+   the onset compare dropped from `checkStretch_` (Q4.2); the analysis not
+   storing the sidecar (`assert-sidecar`); the vocoder run at factor 1
+   (`stretched="0"` at 120 BPM). In the core (nassau-digital#27): positions
+   unscaled, loop points only, start only, end only, the skip, and the scale
+   applied to every zone.
+10. **Not gated**: a stretch during playback (it installs and stales the
+    track like any generation; no case plays); an analysis racing a render;
+    the loop's seam (stretched as part of the whole buffer, not circularly —
+    a small discontinuity at the wrap is possible and was not measured);
+    `tune` and LFO pitch in tempo modes (DESIGN §13: they still move the
+    read rate, accepted for now).
