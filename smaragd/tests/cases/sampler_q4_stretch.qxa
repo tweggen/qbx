@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q4_stretch">
+
+  <!-- PROPOSAL 56 Q4 (QBX-268): TEMPO MODES BY STRETCHING, the period and the
+       pitch (nassau-digital GATES Q4.1, DESIGN §5, §13).
+
+       Q4.1  A 2-beat loop at 120 BPM played at 100 BPM by stretch measures a
+             period of 2*60/100 s +- 1 ms with its pitch unchanged +- 5 cents.
+
+       ======================================================= the fixture
+
+       ../sampler_q4_loop.wav (tests/tools/gen_sampler_q4_fixture.py): 1 s at
+       48 kHz = 2 beats at 120 BPM, mono, a 1 kHz carrier (1000 whole cycles)
+       under four sharp hits per loop, the first accented, so the loop is
+       periodic with its own period and nothing shorter.
+
+       One zone over every key, root 60, mode tempo-loop, method stretch,
+       layer 2 = the file with beats 2 and no loop points (the loop is
+       [start, end), the whole file). A note at tick 0 held for 15 beats.
+
+       At the loop's own tempo (120 BPM) the stretch factor is exactly 1 and
+       the source plays as it is: stretched="0", period 1000 ms (a positive
+       control of the measurement). At 100 BPM the layer's generation is the
+       source stretched x1.2 by the vocoder (stretched="1", timeScale 1.2) and
+       the core scales the layer's positions by it (DESIGN §13, settled
+       2026-11-02), so the loop wraps after 57600 frames.
+
+       The period is measured by normalised autocorrelation over lags
+       1150..1250 ms (assert-audio-period: a maximum on the range's edge
+       fails), from 1 s to 7.9 s of an 8 s render, on channel 0. The pitch
+       band is 1000 Hz x 2^(+-5/1200) = 997.117..1002.890 Hz
+       (assert-audio-frequency, autocorrelation f0), over 1 s of the render. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Hermetic sidecars (the layer's onset analysis stores its result). -->
+    <sidecar-root/>
+    <sidecar-drop aspect="onsets"/>
+    <set-tempo bpm="120"/>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="15360" name="Hold"/>
+    <add-note clip="0,0" tick="0" dur="14400" key="60" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60"
+              mode="tempo-loop" tempoMethod="stretch">
+      <layer src="file:../sampler_q4_loop.wav" beats="2"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          stretched="0" timeScale="1"/>
+
+    <!-- The positive control: at 120 BPM the loop's period is its own 1 s. -->
+    <render filename="q4_120.wav" format="wav" quality="10" durationSec="8"/>
+    <assert-audio-period filename="q4_120.wav" channel="0" startFrame="48000" frameCount="331200"
+                         minMs="950" maxMs="1050" expectMs="1000" toleranceMs="1"/>
+    <assert-audio-frequency filename="q4_120.wav" channel="0" startFrame="96000" frameCount="48000"
+                            minHz="997.117" maxHz="1002.890"/>
+
+    <!-- ============================================================ Q4.1
+         100 BPM: the tempo change is a new generation, the source stretched
+         x1.2 (the next settle installs it). -->
+    <set-tempo bpm="100"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1" pending="2"
+                          rendering="1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2" rendering="0"
+                          stretched="1" timeScale="1.2"/>
+
+    <render filename="q4_100.wav" format="wav" quality="10" durationSec="8"/>
+    <assert-audio-period filename="q4_100.wav" channel="0" startFrame="48000" frameCount="331200"
+                         minMs="1150" maxMs="1250" expectMs="1200" toleranceMs="1"/>
+    <assert-audio-frequency filename="q4_100.wav" channel="0" startFrame="96000" frameCount="48000"
+                            minHz="997.117" maxHz="1002.890"/>
+    <assert-audio-frequency filename="q4_100.wav" channel="0" startFrame="240000" frameCount="48000"
+                            minHz="997.117" maxHz="1002.890"/>
+
+    <!-- THE POSITIONS SCALE (DESIGN §13, settled 2026-11-02): loop points in
+         SOURCE frames, [12000, 48000) = the last three hits (0.75 s = 1.5
+         beats at 120 BPM), beats 1.5. A new generation (the layer's stretch
+         changed), the same factor 1.2; the loop the core plays is
+         [14400, 57600) of the stretched buffer only because it scales the
+         positions by the buffer's time scale: 0.9 s at 100 BPM. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" loopStart="12000" loopEnd="48000" beats="1.5"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          stretched="1" timeScale="1.2"/>
+    <render filename="q4_loop_points.wav" format="wav" quality="10" durationSec="8"/>
+    <assert-audio-period filename="q4_loop_points.wav" channel="0" startFrame="96000" frameCount="278400"
+                         minMs="850" maxMs="950" expectMs="900" toleranceMs="1"/>
+    <assert-audio-frequency filename="q4_loop_points.wav" channel="0" startFrame="144000" frameCount="48000"
+                            minHz="997.117" maxHz="1002.890"/>
+
+    <!-- tempo-oneshot follows the tempo too (DESIGN §13): the same stretched
+         generation (the mode change is no new one: both modes want the same
+         stretch), played once over [start, end) - the whole 1.2 s buffer
+         (the loop points only set the rate), then silence. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" mode="tempo-oneshot"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          stretched="1" timeScale="1.2"/>
+    <render filename="q4_oneshot.wav" format="wav" quality="10" durationSec="3"/>
+    <assert-audio-energy filename="q4_oneshot.wav" startFrame="52800" frameCount="4800"
+                         minRms="0.01" maxRms="0.95"/>
+    <assert-audio-energy filename="q4_oneshot.wav" startFrame="60000" frameCount="48000"
+                         minRms="0" maxRms="0.0001"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

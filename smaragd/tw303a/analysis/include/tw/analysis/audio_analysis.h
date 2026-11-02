@@ -200,6 +200,21 @@ double estimateFundamental(const std::string &filename,
                            int channelIndex, std::string &error);
 
 /**
+ * The PERIOD of a region, in frames (fractional), by normalised
+ * autocorrelation: r(lag) = sum x[i]x[i+lag] / sqrt(sum x[i]^2 * sum
+ * x[i+lag]^2) over the overlap, the GLOBAL maximum over [minLag, maxLag],
+ * refined by a parabola through it and its neighbours. For a loop's period
+ * (proposal 56 Q4.1, GATES C7.1's method): the search range is the caller's,
+ * so a long period is measured without scanning every shorter lag. A maximum
+ * on the range's edge is reported as such (`onEdge`): the period is then not
+ * inside the range. 0 with `error` on a bad region or range.
+ */
+double estimatePeriodFrames(const std::string &filename,
+                            int64_t startFrame, int64_t frameCount,
+                            int channelIndex, int64_t minLag, int64_t maxLag,
+                            int &sampleRate, bool &onEdge, std::string &error);
+
+/**
  * Result of decoding a position-coded window (tw/core/position_code.h).
  */
 struct PositionDecode {

@@ -99,7 +99,8 @@ private:
 // set-sampler-render-gate — the NEXT generation job of one layer holds before
 // it decodes (the set-render-gate pattern): until ready="true", or for holdMs.
 // settleBoundMs= also sets the offline render's settle bound for the rest of
-// the run (-1 restores SMARAGD_SAMPLER_SETTLE_MS / 30 s).
+// the run (-1 restores SMARAGD_SAMPLER_SETTLE_MS / 30 s). analysis="true"
+// (Q4, QBX-268) gates the layer's next ONSET ANALYSIS instead of its next job.
 class SSetSamplerRenderGateAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "set-sampler-render-gate" ); }
@@ -116,6 +117,7 @@ private:
     int     holdMs_    = -1;
     bool    hasBound_  = false;
     int     settleBoundMs_ = -1;
+    bool    analysis_  = false;   // Q4.2: gate the next onset ANALYSIS instead
 };
 
 // assert-sampler-layer — one layer's generation state, as the model holds it:
@@ -124,7 +126,10 @@ private:
 // generations were installed), src= (what the installed buffer came from),
 // captureTrackEpoch= / trackEpochAdvancedSince= (the TRACK's content epoch,
 // remembered under a name / now above the remembered one: the install staled
-// every page stamped before it).
+// every page stamped before it). Q4 (QBX-268): timeScale= (the installed
+// buffer's, to 1e-9 relative), stretched= (1/0: the vocoder made it),
+// onsets= (the keyframes it was stretched with; -1 = none, the fixed grid or
+// unstretched), analyzing= (1/0) and analyses= (onset analyses finished).
 class SAssertSamplerLayerAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "assert-sampler-layer" ); }
@@ -143,7 +148,8 @@ private:
 // wait-sampler-generations — the settle the run barrier makes, without a
 // render: waits synchronously (bounded) for every outstanding job of one
 // slot's program and installs the results. Fails when one is still
-// outstanding after timeoutMs.
+// outstanding after timeoutMs. analysis="1" (Q4) first waits for the
+// program's onset analyses and acts on them (a re-stretch each), then settles.
 class SWaitSamplerGenerationsAction : public SAction {
 public:
     QString name() const override { return QStringLiteral( "wait-sampler-generations" ); }
@@ -156,6 +162,7 @@ private:
     QString trackPath_ = QStringLiteral( "0" );
     int     slotIndex_ = 0;
     int     timeoutMs_ = 15000;
+    bool    analysis_  = false;
 };
 
 #endif

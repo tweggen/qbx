@@ -1062,7 +1062,7 @@ endif()
 # two are different numbers by design, and the configure log says which was
 # built. nassau-dsp, which the core takes from its gate C5 on, is found by the
 # core's own locator the same way (the suite passes NASSAU_DSP_DIR too).
-set(NASSAU_DIGITAL_GIT_REF "793f4ceb3a73a972aa233e9c606920aebd85c6a0")
+set(NASSAU_DIGITAL_GIT_REF "4167ab58b7ce426dc5f1c01e91dbf5bcbcadd059")
 # This file sits two levels below the checkout's root (smaragd/tw303a/).
 get_filename_component(NASSAU_DIGITAL_SIBLING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/NassauDigital.cmake)
@@ -1073,11 +1073,14 @@ tw_module(sampler
         sampler/include/tw/sampler/twsamplerhost.h
         sampler/include/tw/sampler/twsamplerregistry.h
         sampler/include/tw/sampler/twsamplerprogrammodel.h
+        sampler/include/tw/sampler/twsamplerstretch.h
         sampler/src/twsamplerimpl.h
         sampler/src/twsamplertypes.cc
         sampler/src/twsamplerprogrammodel.cc
         sampler/src/twsamplerinstrument.cc
-    DEPS tw_core tw_graph tw_events tw_plugins
+        sampler/src/twsamplerstretch.cc
+    # tw_sources since Q4 (QBX-268): the stretch renderer runs twPagedVocoder.
+    DEPS tw_core tw_graph tw_events tw_plugins tw_sources
 )
 # PRIVATE is load-bearing (proposal 56 invariant 1), exactly as for the CLAP
 # headers: the core's include directory reaches tw_sampler and nothing else, so
