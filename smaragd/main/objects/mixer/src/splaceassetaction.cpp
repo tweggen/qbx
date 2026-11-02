@@ -75,9 +75,23 @@ SApplyResult SPlaceAssetAction::apply(SProject *project)
     // are cheaper, but neither can see a cycle that leaves the tree it started
     // in -- "arrangement A places an asset of B, B places an asset of A" -- and
     // detached arrangement roots make that shape reachable for the first time.
-    if (sarrangements::placementWouldCycle(assetBody, track)) {
-        TW_LOGW("cut", "place-asset: refused, placing '%s' here would close a "
-                       "reference cycle", assetName_.toUtf8().constData());
+    //
+    // QBX-267: with the shell's walk installed it also follows NassauDigital
+    // sampler asset links (proposal 56 Q3), the check a link is made under:
+    // placing an asset on a lane inside an asset some sampler links, when the
+    // placed asset reaches that sampler's track, closes a render cycle through
+    // the sampler and is refused here, with the hops in the reason.
+    QString via;
+    if (sarrangements::placementWouldCycle(assetBody, track, &via)) {
+        if (!via.isEmpty()) {
+            TW_LOGW("cut", "place-asset: refused, placing '%s' on '%s' would close a "
+                           "sampler asset-link cycle (%s)",
+                    assetName_.toUtf8().constData(), track->getSName().toUtf8().constData(),
+                    via.toUtf8().constData());
+        } else {
+            TW_LOGW("cut", "place-asset: refused, placing '%s' here would close a "
+                           "reference cycle", assetName_.toUtf8().constData());
+        }
         return {false, nullptr};
     }
 

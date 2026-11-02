@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_late_cycle_move_clip">
+
+  <!-- QBX-267 (proposal 56 §11 Q3, objects/sampler CONTRACT inv. 22):
+       MOVE-CLIP REFUSES A MOVE THAT WOULD CLOSE A CYCLE.
+
+       Shape: the sampler on master lane "Synth" links "InstLane", an asset
+       over the arrangement lane Inst:0. A placement of "SynthAsset" (an
+       asset over Synth) sits on Inst:1, where it closes nothing. Moving it
+       onto Inst:0 would: Inst:0 -> SynthAsset -> Synth -(sampler)->
+       InstLane -> Inst:0. On main move-clip asks no cycle question at all,
+       so the move is accepted and the case dies at teardown.
+
+       The same guard refuses a PLAIN reference cycle, which move-clip never
+       refused before either: a placement of InstLane moved onto Inst:0, the
+       lane the asset windows. Its line is a different one (no sampler hop).
+
+       Positive controls: SynthAsset moved to Inst:2 (closes nothing), with
+       undo and redo; and once Synth lets go of InstLane, the refused move
+       is accepted. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Synth"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <create-arrangement name="Inst"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:0" name="I0"/>
+    <add-sample trackPath="Inst:0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:1" name="I1"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:2" name="I2"/>
+
+    <create-asset container="Inst:0" startOffset="0" duration="48000" assetName="InstLane"/>
+    <create-asset container="0" startOffset="0" duration="48000" assetName="SynthAsset"/>
+    <place-asset assetName="SynthAsset" trackPath="Inst:1" timePos="0"/>
+    <place-asset assetName="InstLane" trackPath="Inst:2" timePos="0"/>
+
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:InstLane"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          asset="InstLane"/>
+
+    <!-- ======================================== THE REFUSAL (sampler hop) -->
+    <move-clip clip="Inst:1,0" destTrack="Inst:0" startTime="0" expectReject="true"/>
+    <assert-log contains="move-clip: refused, moving &quot;SynthAsset&quot; onto &quot;I0&quot; would close a sampler asset-link cycle (the sampler on &quot;Synth&quot; links &quot;InstLane&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:1,0"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+
+    <!-- ================================== the PLAIN cycle, refused as well -->
+    <move-clip clip="Inst:2,0" destTrack="Inst:0" startTime="0" expectReject="true"/>
+    <assert-log contains="move-clip: refused, moving &quot;InstLane&quot; onto &quot;I0&quot; would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:2,0"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+
+    <!-- ========== POSITIVE CONTROL: onto Inst:2, which closes nothing -->
+    <move-clip clip="Inst:1,0" destTrack="Inst:2" startTime="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:2,1"/>
+    <assert-clip-window clip="Inst:1,0" expectReject="true"/>
+    <undo/>
+    <assert-clip-window clip="Inst:1,0"/>
+    <assert-clip-window clip="Inst:2,1" expectReject="true"/>
+    <redo/>
+    <assert-clip-window clip="Inst:2,1"/>
+    <undo/>
+
+    <!-- ====== THE HOP'S POSITIVE CONTROL: Synth lets go, the move is accepted -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
+    <move-clip clip="Inst:1,0" destTrack="Inst:0" startTime="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:0,1"/>
+    <undo/>
+    <assert-clip-window clip="Inst:1,0"/>
+    <redo/>
+    <assert-clip-window clip="Inst:0,1"/>
+  </actions>
+
+</SActionScript>

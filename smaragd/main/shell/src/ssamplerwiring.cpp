@@ -1,5 +1,6 @@
 #include "app/shell/ssamplerwiring.h"
 
+#include "app/model/sarrangements.h"
 #include "app/model/slink.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
@@ -104,6 +105,16 @@ void install()
             if( p && !out.contains( p ) ) out.append( p );
         }
         return out;
+    } );
+    // ...and that same walk is the one every containment and placement verb
+    // asks (QBX-267; proposal 56 §11 Q3): model's whole-graph guard
+    // (sarrangements::reaches) cannot name objects/sampler, so it is handed
+    // the walk here. reparent-track, move-clip, place-asset and the rest then
+    // refuse an edit that would close a sampler asset-link cycle by the check
+    // set-layer refuses a cycle-closing link with.
+    sarrangements::setReachWalk( []( SObject *from, const SObject *to,
+                                     const sarrangements::PendingEdges *pending, QString *via ) {
+        return ssampler::assetReachesTrack( from, to, via, pending );
     } );
     SPluginSlot::setChildAdoptedHook( []( SPluginSlot &slot, SObject &child ) {
         SSamplerProgram *prog = qobject_cast<SSamplerProgram *>( &child );

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_late_cycle_place_asset">
+
+  <!-- QBX-267 (proposal 56 §11 Q3, objects/sampler CONTRACT inv. 22):
+       PLACE-ASSET REFUSES A PLACEMENT THAT WOULD CLOSE A SAMPLER ASSET-LINK
+       CYCLE AFTER THE LINK EXISTS.
+
+       Shape: the sampler on master lane "Synth" links "InstLane", an asset
+       over the arrangement lane Inst:0 (no cycle: Inst:0 holds nothing of
+       Synth). "SynthAsset" is an asset over Synth itself. Placing SynthAsset
+       on Inst:0 would make Inst:0 hold Synth, whose sampler bounces Inst:0:
+       Inst:0 -> SynthAsset -> Synth -(sampler)-> InstLane -> Inst:0. The
+       plain child-link walk cannot see the sampler hop (an instrument is not
+       a child link), so on main the placement is ACCEPTED, and the case then
+       dies at teardown on the refcount cycle (QBX-266 finding).
+
+       The second shape runs through TWO samplers: B0's sampler links
+       SynthAsset, and "BLane" is an asset over B0; BLane on Inst:0 closes
+       Inst:0 -> BLane -> B0 -(sampler)-> SynthAsset -> Synth -(sampler)->
+       InstLane -> Inst:0, and the reason names both hops.
+
+       Each refusal is checked three ways: refused, the line only that
+       refusal writes, the lane untouched. Positive controls: the same assets
+       placed where they close nothing (Inst:1), with undo and redo; and once
+       Synth's layer lets go of InstLane, the refused placement is accepted.
+
+       Ids: add-zone gives each program zone 1 and layer 2. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- =========================================== the sampler on "Synth" -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Synth"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <!-- ============================================ the arrangement "Inst" -->
+    <create-arrangement name="Inst"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:0" name="I0"/>
+    <add-sample trackPath="Inst:0" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track arrangement="Inst" index="-1"/>
+    <set-track-name trackPath="Inst:1" name="I1"/>
+    <add-sample trackPath="Inst:1" filePath="../test_stereo.wav" timePos="0"/>
+
+    <create-asset container="Inst:0" startOffset="0" duration="48000" assetName="InstLane"/>
+    <create-asset container="0" startOffset="0" duration="48000" assetName="SynthAsset"/>
+
+    <!-- The link: no cycle when it is made. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:InstLane"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          asset="InstLane"/>
+
+    <!-- ===================== THE REFUSAL: the cycle the placement would close -->
+    <place-asset assetName="SynthAsset" trackPath="Inst:0" timePos="0" expectReject="true"/>
+    <assert-log contains="place-asset: refused, placing 'SynthAsset' on 'I0' would close a sampler asset-link cycle (the sampler on &quot;Synth&quot; links &quot;InstLane&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:0,0"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+
+    <!-- The POSITIVE CONTROL: the same asset where it closes nothing. -->
+    <place-asset assetName="SynthAsset" trackPath="Inst:1" timePos="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:1,1"/>
+    <undo/>
+    <assert-clip-window clip="Inst:1,1" expectReject="true"/>
+    <redo/>
+    <assert-clip-window clip="Inst:1,1"/>
+
+    <!-- ======================= THROUGH A SECOND SAMPLER (B0 links SynthAsset) -->
+    <create-arrangement name="B"/>
+    <add-track arrangement="B" index="-1"/>
+    <set-track-name trackPath="B:0" name="B0"/>
+    <insert-plugin trackPath="B:0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="B:0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <set-layer trackPath="B:0" slotIndex="0" layer="2" src="asset:SynthAsset"/>
+    <wait-sampler-generations trackPath="B:0" slotIndex="0" timeoutMs="15000"/>
+    <create-asset container="B:0" startOffset="0" duration="48000" assetName="BLane"/>
+
+    <place-asset assetName="BLane" trackPath="Inst:0" timePos="0" expectReject="true"/>
+    <assert-log contains="place-asset: refused, placing 'BLane' on 'I0' would close a sampler asset-link cycle (the sampler on &quot;B0&quot; links &quot;SynthAsset&quot;, the sampler on &quot;Synth&quot; links &quot;InstLane&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+    <!-- ...and its positive control. -->
+    <place-asset assetName="BLane" trackPath="Inst:1" timePos="0"/>
+    <assert-clip-window clip="Inst:1,2"/>
+
+    <!-- ====== THE HOP'S POSITIVE CONTROL: once Synth lets go of InstLane, the
+         refused placement closes nothing and is accepted; its undo and redo. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
+    <place-asset assetName="SynthAsset" trackPath="Inst:0" timePos="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-clip-window clip="Inst:0,1"/>
+    <undo/>
+    <assert-clip-window clip="Inst:0,1" expectReject="true"/>
+    <redo/>
+    <assert-clip-window clip="Inst:0,1"/>
+    <!-- With SynthAsset now on Inst:0, re-linking InstLane is the cycle the
+         LINK-time check refuses: one check, both directions. -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:InstLane" expectReject="true"/>
+    <assert-log contains="asset &quot;InstLane&quot; contains this sampler's own track" minCount="1" maxCount="1"/>
+  </actions>
+
+</SActionScript>

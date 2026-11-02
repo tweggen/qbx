@@ -1,6 +1,7 @@
 #include "app/objects/cut/sduplicateclipaction.h"
 #include "app/model/sobjectpath.h"
 #include "app/model/splacements.h"
+#include "app/model/sarrangements.h"
 #include "app/objects/cut/sremoveclipaction.h"
 #include "app/model/sproject.h"
 #include "app/actions/sactionregistry.h"
@@ -9,9 +10,36 @@
 #include "app/objects/cut/stakestack.h"
 #include "app/objects/cut/stakehelpers.h"
 #include "tw/core/twfraction.h"
+#include <QDebug>
 #include <QDomElement>
 
 using namespace strackpath;
+
+namespace {
+// QBX-267: a copy or a second placement of `src` on `destLane` closes a cycle
+// exactly when the lane is reachable from what `src` places (a duplicated
+// window shares its content, so the copy reaches what the source reaches).
+// The whole-graph walk follows placements and, with the shell's walk
+// installed, NassauDigital sampler asset links (proposal 56 Q3) -- the check
+// set-layer makes a link under. Asked before anything is created.
+bool refuseCycle( const char *verb, SObject &src, SObject *destLane )
+{
+    QString via;
+    if( !sarrangements::placementWouldCycle( &src, destLane, &via ) ) return false;
+    if( !via.isEmpty() ) {
+        qWarning().noquote()
+            << QStringLiteral( "%1: refused, placing \"%2\" on \"%3\" would close a "
+                               "sampler asset-link cycle (%4)" )
+                   .arg( QLatin1String( verb ), src.getSName(), destLane->getSName(), via );
+    } else {
+        qWarning().noquote()
+            << QStringLiteral( "%1: refused, placing \"%2\" on \"%3\" would close a "
+                               "reference cycle" )
+                   .arg( QLatin1String( verb ), src.getSName(), destLane->getSName() );
+    }
+    return true;
+}
+}  // namespace
 
 SLink *makeDuplicateClip( SProject *project, SObject &srcObj,
                           SObject *destLane, offset_t startTime )
@@ -107,6 +135,10 @@ SApplyResult SDuplicateClipAction::apply( SProject *project )
         return {false, nullptr};
     }
 
+    if( refuseCycle( "duplicate-clip", srcLink->getSObject(), destTrack ) ) {
+        return {false, nullptr};
+    }
+
     SLink *copy = makeDuplicateClip( project, srcLink->getSObject(), destTrack, startTime_ );
     if( !copy ) {
         return {false, nullptr};
@@ -184,6 +216,10 @@ SApplyResult SLinkClipAction::apply( SProject *project )
     SObject *destTrack = splacements::placementLaneAt( mixer, destTrackPath_,
                                                        "link-clip" );
     if( !destTrack ) {
+        return {false, nullptr};
+    }
+
+    if( refuseCycle( "link-clip", srcLink->getSObject(), destTrack ) ) {
         return {false, nullptr};
     }
 
