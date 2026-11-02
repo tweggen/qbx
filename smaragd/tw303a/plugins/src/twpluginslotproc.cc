@@ -127,7 +127,10 @@ void twPluginSlotProcessor::setRoutedOutBuses( std::uint32_t busMask )
     // Every instance learns the applied mask, then is RE-PREPARED: a format
     // that must activate an aux bus before writing it (VST3) may do so only
     // there. A re-prepare is a reconfiguration, so the DSP does not continue
-    // across it.
+    // across it -- and that has to be SAID with a reset(), as setKeyChannels
+    // does (QBX-264): a prepare() at an unchanged rate is a no-op in CLAP, and
+    // haveLastEnd_ = false makes the next effect page NOT a discontinuity, so
+    // without it the last render's tail runs into the next render's head.
     if( appliedMask_ != before ) {
         for( const std::unique_ptr<twPlugin> &p : instances_ )
             if( p ) p->setRoutedOutBuses( appliedMask_ );
@@ -136,6 +139,7 @@ void twPluginSlotProcessor::setRoutedOutBuses( std::uint32_t busMask )
                 if( p ) p->prepare( (std::uint32_t)preparedRate_,
                                     (std::uint32_t)kChunkFrames );
         }
+        resetInstances_nolock();
         haveLastEnd_ = false;
     }
 
