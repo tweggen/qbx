@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 56 Q6 (QBX-272): GATES Q6.2, Key view on a program WITH zones.
+  "Key view on a program with zones: a one-key zone on the last key played."
+  DESIGN 7: "so a recording never lands on top of an existing drum map".
+
+  Env as sampler_q6_record (RUN_SERIAL, real-time file input
+  test_stereo.wav, the instance's own record input, a MIDI track input).
+
+  THE LAST KEY PLAYED is the last note-on the instance's DEVICE MIDI INPUT
+  TAP saw (the author's answer of 2026-11-02): here injected into the
+  `capture` port the track's input names, two keys in turn (64, then 67), so
+  the landing must take the LAST one. Played while the track is NOT armed, so
+  no live lane and no MIDI recorder is in the way, and none of it reaches the
+  lane (asserted).
+
+  First a take BEFORE any key is played: the program has zones and there is
+  no last key, so place-sampler-recording REFUSES (the recorder reports the
+  lane skipped, the capture file stays on disk, the program and the asset
+  registry are unchanged). record-stop therefore carries nestedRejects="1":
+  the runner cannot tell the press's own outcome from the refusal of the verb
+  it submitted.
+-->
+<SActionScript version="1" name="sampler_q6_land_key_zones">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="67" velocity="127" channel="0"/>
+
+    <!-- A drum map of one zone, on 36. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36" mode="oneshot">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <set-sampler-record-input trackPath="0" slotIndex="0" input="audio:qxa-record-input:3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1" view="key" lastKey="-1"
+                            capture="before"/>
+
+    <!-- ................................... no key played yet: refused -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop nestedRejects="1"/>
+    <assert-log contains="no key has been played on the instance's MIDI input yet" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="before"
+                            assetAbsent="Recording 1"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <!-- ............................................ two keys, 64 then 67 -->
+    <midi-in-event kind="noteon" key="64" velocity="100" channel="0"/>
+    <midi-in-event kind="noteoff" key="64" channel="0"/>
+    <midi-in-event kind="noteon" key="67" velocity="100" channel="0"/>
+    <midi-in-event kind="noteoff" key="67" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="67"/>
+
+    <!-- ........................................................ THE TAKE -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: key view: a new one-key zone on the last key played, 67" minCount="1"/>
+
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" recordedLayer="4"
+                            recordedAsset="Recording 1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="keyLo" value="67"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="keyHi" value="67"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="rootKey" value="67"/>
+    <!-- The drum map is untouched. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyLo" value="36"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyHi" value="36"/>
+    <!-- Neither the injected keys nor the takes reached the lane. -->
+    <assert-clip-window clip="0,1" expectReject="true"/>
+
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq6_keyzones.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="4" filename="sq6_keyzones.wav"
+                                    noteFrame="1000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

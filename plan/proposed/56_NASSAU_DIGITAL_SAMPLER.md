@@ -479,12 +479,24 @@ nothing.
 | `set-layer` | Q1 | `layer`, any layer attribute, `src` (§4.4) | absolute |
 | `set-sampler-program` | Q1 | `polyphony`, `level`, `tune`, `busDrive`, … | absolute |
 | `select-zones` | Q1 | `zones`, `mode` = `replace`\|`add`\|`toggle` | the previous selection |
-| `set-sampler-view` | Q7 | `view` = `key`\|`pad`\|`map`\|`zone`, `padBank` | absolute |
-| `set-sampler-routing` | Q8 | `mask` (DESIGN §3.1) | absolute |
-| `place-sampler-recording` | Q6 | `filePath`, `srcOffset`, `length`, `target` = `pad`\|`key` (resolved by the recorder from the view, §4.10), `key` | `remove-layer` / `remove-zone`, whichever it created, or the replaced layer 1 |
+| `set-sampler-view` | ~~Q7~~ **Q6** *(moved 2026-11-02, the author: a real undoable verb from Q6 on, which the Q7 editor drives; QBX-272)* | `view` = `key`\|`pad`\|`map`\|`zone`, `padBank`, **`pad`** *(added in Q6: the selected pad)* | absolute |
+| `set-sampler-record-input` | Q6 *(added 2026-11-02, QBX-272)* | `input` = `audio:<device>:<mask>` \| `""` (Q-1's record input) | absolute |
+| ~~`set-sampler-routing`~~ | ~~Q8~~ | ~~`mask` (DESIGN §3.1)~~ | ~~absolute~~ — **struck 2026-11-03**, see below |
+| `place-sampler-recording` | Q6 | `filePath`, `srcOffset`, `length`, `target` = `pad`\|`key` (resolved by the recorder from the view, §4.10), `key` *(as built, QBX-272: both optional; the VERB resolves them from the model at its first apply and remembers them, and the recorder passes neither)* | `remove-layer` / `remove-zone`, whichever it created, or the replaced layer 1 *(as built: one composite with the asset's `remove-asset`, Q-4 — §11 "Q6 as built")* |
 
 `select-zones` is an action because GATES Q1.1 asks that it be undone by one
 undo; it changes no sound and bumps nothing.
+
+*Correction (2026-11-03, the author's answer on qbx#340, QBX-273):*
+`set-sampler-routing` is **struck**. The return tracks (proposal 55) are the
+ONLY writer of the routed mask: the mixer pass derives it from the returns that
+name the slot and hands it to the instrument through
+`twPlugin::setRoutedOutBuses`. A verb setting the mask explicitly would be a
+second writer of the same state with no rule for which one wins.
+`twSamplerHost::setRoutedOutputs()` stays as an internal hook (tests, the host
+interface), never a verb: called directly it can only NARROW what is heard,
+because an aux bit the host gave no bus for has no buffer and the core plays
+that zone on main. §11 "Q8 as built" item 1.
 
 Test verbs (testkit): `assert-sampler-program` (structural equality against a
 program file or inline XML, and named fields), `assert-sampler-layer`
@@ -638,7 +650,20 @@ installs the first generation. The landing rule needs the view and the last key
 played; both are model state of `SSamplerProgram` (the last key from the
 editor's tap, §4.11), so the verb is deterministic given its attributes.
 
-**Which input.** A track has one input: audio, MIDI or keyboard
+*Correction, 2026-11-02 (the author's answers to QBX-272; QBX-272 as built,
+§11 "Q6 as built"):* the view, the selected pad and its bank, and the record
+input are model state of `SSamplerProgram`, saved in its own element and never
+in the program. `set-sampler-view` (`view`, `padBank`, `pad`) MOVED FROM Q7
+INTO Q6 as a real undoable verb, and `set-sampler-record-input` sets the
+record input. The last key played does not come from the editor: it is the
+last note-on seen by the instance's own DEVICE MIDI INPUT TAP (the tap Q7.2
+uses; the shell's `SSamplerKeyTaps`, which exists without the editor). It is
+live and not saved. The verb resolves the landing from that state at its
+first apply and keeps its children for the redo.
+
+**Which input.** *(Answered by Q-1, option (a); built in QBX-272: an armed
+track whose instance has a record input records into it from that input,
+whatever the track's own input is, so the track keeps its MIDI input.)* A track has one input: audio, MIDI or keyboard
 (`docs/ACTIONS.md:360`; the audio recorder skips a MIDI-input track,
 `saudiorecorder.cpp:65-70`). Playing a sampler live needs a MIDI input on its
 track; recording into it needs an audio input. How one instrument gets both is
@@ -681,7 +706,8 @@ proposal designs only the sampler's side: from Q8 the instrument reports nine
 output buses (main + 8 stereo aux, B7), the routed mask comes from whatever
 proposal 55 makes the model say about which `(track, slot, output)` taps exist,
 and `setRoutedOutputs` is called with it through §4.3, as a state change.
-`set-sampler-routing` is the verb when the mask is set explicitly. Everything
+~~`set-sampler-routing` is the verb when the mask is set explicitly.~~ *(Struck
+2026-11-03: the return tracks are the only writer of the mask — §4.5.)* Everything
 about return tracks, their caches, their UI and sidechain inputs is proposal
 55's.
 
@@ -861,6 +887,8 @@ onsets aspect from proposal 27 M1. Scope: §4.8.
   zones → a one-key zone on the last key played. One case each.
 * **Q6.q1** The recorder submits `place-sampler-recording` in the same commit
   scope as any `place-recording` of the same press (one undo for the press).
+* *Built in QBX-272, 2026-11-02 (§11 "Q6 as built"); `set-sampler-view` moved
+  here from Q7.*
 
 ### Q7 — Editor
 **Depends on:** Q1 (Q6 for the recording affordances). Scope: §4.11.
@@ -1695,6 +1723,223 @@ build:
     a small discontinuity at the wrap is possible and was not measured);
     `tune` and LFO pitch in tempo modes (DESIGN §13: they still move the
     read rate, accepted for now).
+
+### Q8 as built (QBX-273, 2026-11-02)
+
+Built: the sampler's side of §4.12 and nothing else, because proposal 55
+already routes any plugin's aux buses. The instrument reports nine stereo
+output buses (descriptor and instance: main, then "Aux 1".."Aux 8"),
+overrides `twPlugin::setRoutedOutBuses` to hand the core `busMask >> 1`, and
+renders through the core's bus-aware `process()` whenever a bus is routed.
+`add-return-track`, the routed mask (`SPluginSlot::routedOutBuses()`, the
+processor's `setRoutedOutBuses()`), the side page, the tap, the reset on a
+mask change (QBX-264) and the sidechain are proposal 55's, unchanged. One
+defect of proposal 55's found on the way is fixed (item 4). Gated: Q8.1,
+Q8.2, Q8.3, Q8.q1. Three cases (`sampler_q8_reference`,
+`sampler_q8_outputs`, `sampler_q8_duck`), three goldens, `sampler_test`
+part H. Where the text above did not survive the build:
+
+1. **No `set-sampler-routing` verb** (§4.5 lists it for Q8; §4.12 "when the
+   mask is set explicitly"). The mask is derived from the return tracks that
+   name the slot, so an explicit verb would be a second writer of the same
+   state, and which one wins is a design question nobody has answered; the
+   GATES ACs do not need it. `twSamplerHost::setRoutedOutputs()` stays in the
+   host interface and sets the same core mask; called directly it can only
+   NARROW what is heard (an aux bit the host gave no bus for has no buffer,
+   which the core treats as unrouted), and the next host mask replaces it.
+   *Answered 2026-11-03 by the author (qbx#340): struck.* The return tracks
+   are the only writer of the mask, and `setRoutedOutputs()` stays an
+   internal hook that can only narrow what is heard; §4.5 carries the dated
+   correction.
+2. **The host's mask is the only thing that says which `outBuses[b]` may be
+   read** (plugins inv. 61), not `setRoutedOutputs()`. An unrouted bus is
+   handed to the core as null, and the legacy three-argument `process()`
+   hands the event-aware one a full nine-entry array. With nothing routed
+   the instrument makes exactly the pre-Q8 main-only core call, so every
+   existing render is byte-identical by construction (the committed goldens
+   are, and the suite agrees).
+3. **A routed bus with no buffer renders into scratch** (not in §4.12). The
+   processor's pre-roll and a bypass render with the side page absent, so a
+   routed aux bus gets a null `outBuses[b]`. The core decides a voice's output
+   AT ITS NOTE-ON and treats a missing buffer as "not routed" (C6, accepted as
+   built), so a kick whose note-on fell in a pre-roll would have sounded on
+   MAIN for its whole life, in the very page it was rolled for. The
+   instrument substitutes its own scratch (allocated in the constructor,
+   16 KiB per bus channel; segments capped at 4096 frames) for a routed bus
+   without a buffer. Measured in `sampler_test` H: a cold page 1 whose
+   note-on lies 1000 frames before it, main peak **0**, aux 1 peak
+   **0.499982**; without the scratch, main carries the kick.
+4. **Proposal 55: an UNROUTED return did not stale what it keys** (mixer
+   CONTRACT inv. 31). `clear-return-source` re-wires the former return to its
+   own `twTrackMix` (re-stamping its own chain) but did not
+   `invalidateRenderPath()` on it, so the walk never followed its KEY edge:
+   the bass keyed from it kept ducking from its cached pages, **0.124997**
+   (0.25 × dry) on the render after the unroute, and the same through
+   `tw.test.clap.split`, so not the sampler's. The pass now invalidates an
+   unwired return as it does a re-pointed one.
+5. **A routing change resets the instrument** (QBX-264's reset on a mask
+   change), so DESIGN §13's "a sounding voice keeps the route it started on"
+   is never exercised by an offline render in qbx: a mask change stales every
+   page and the next render re-renders from its pre-roll, where the voice is
+   started again under the new mask. The rule matters for the live path,
+   which Q8 does not touch (proposal 55 Q1 (a): an armed source's returns are
+   silent).
+6. **The kit for the cases** (not in §6): kick zone on aux 1 (`level` −15 dB,
+   `test_clipsaw.wav`), hat zone on main (−12 dB, `test_autosaw.wav`); kicks
+   at frames 0 and 60000 (the second crosses the 65536 page boundary), hats at
+   30000 and 90000. The levels keep the mix below full scale: at unity two
+   overlapping kicks clipped the 16-bit render (peak 1.0) and the mixed golden
+   was not the sum of the other two; at these levels it is, to 1 LSB (peak
+   0.580).
+7. **Measured.** Q8.1 (`sampler_q8_outputs`): the return soloed is
+   byte-identical to `sampler_q8_kick.wav` (768044 bytes), the kick alone on
+   main of a slot with no return; the return muted, the file (Drums alone) is
+   byte-identical to `sampler_q8_hat.wav`, and frames [0, 24000), where only
+   the kick plays, measure RMS **0**. Q8.2 (`sampler_q8_duck`): the bass
+   inside the kick `[28000, 116000)` **0.124997 / 0.062499** (ch 0 / ch 1)
+   against a dry **0.499987 / 0.24999** before and after: out/dry **0.25000**
+   on both channels, band ±1 %; the Drums track is NOT muted, so any kick left
+   on main would be in the file. Unrouted (`clear-return-source`, Drums muted
+   because the kick is back on its main): **0.499987 / 0.24999**, dry; undo:
+   ducked again. Q8.3: the render right after `clear-return-source` is
+   byte-identical to `sampler_q8_mixed.wav` from frame 0 (RMS 0.101313 over
+   the first 1024 frames, the first kick), and again after removing the
+   return track; the Drums track's content epoch advanced across each unroute
+   (**17 → 18**, **21 → 22**). Q8.q1: `sampler_test` A, nine stereo buses.
+   `sampler_test` H: routed, main exactly silent and the aux 1 tap page
+   memcmp-equal to the zone's unrouted main render (C6.1 through the host);
+   the core saw mask 0x1 for the host's 0x2; unrouted again, main
+   memcmp-equal to a never-routed slot from the page's first frame.
+   `sampler_q8_reference` renders the three goldens with nothing routed and
+   pins that they differ pairwise.
+8. **Sabotages that bite** (each watched failing; the harness restores every
+   file from its saved bytes and touches it): the core mask never set from
+   the host mask (outputs, duck, H); the mask not shifted, bus 1 → aux 2
+   (outputs, duck, H); one bus reported by descriptor and instance (both
+   cases: `add-return-track` refused; H); no scratch for a routed bus without
+   a buffer (H only, see item 9); the unwired return not invalidated (duck's
+   unrouted window); the mask change made no state change — the processor's
+   epoch bump and the pass's track invalidation both removed (outputs' two
+   epoch assertions, H's re-render); host aux buffers ignored on the bus path
+   (outputs, duck, H).
+9. **Not gated**: the pre-roll scratch through the app — the qxa renders run
+   their pages contiguously, so no case pre-rolls across an aux note-on, and
+   only `sampler_test` H bites that sabotage. The state-change sabotage moves
+   no qxa render either, because the run barrier invalidates every instrument
+   track from the render's start (Q2's note); the epoch assertions are what
+   bite. Per-output `busDrive<k>` / `outputLevel<k>` heard through qbx (the
+   core's C6.3 gates them; no qbx case drives an aux bus). The live path
+   (proposal 55 Q1 (a)). More than one aux bus routed at once (proposal 55's
+   gates route one bus of the split; the sampler's mask path is generic).
+
+### Q6 as built (QBX-272, 2026-11-02)
+
+The author answered the four questions DESIGN.md left open about §7 before
+the build (nassau-digital DESIGN §13, "Settled on 2026-11-02",
+nassau-digital#29). The answers are applied in §4.5 and §4.10 above.
+
+1. **The instance state is the model's, not the program's.** `SSamplerProgram`
+   holds `view` (Key by default), `padBank` (0..5), `pad` (0..15) and
+   `recordInput` (`audio:<device>:<mask>`). They are saved as attributes of
+   `<SSamplerProgram>`, each only when not the default, so every earlier file is
+   byte-unchanged and no golden moves. They never go into the program text and
+   so are never exported. A pad is key 36 + 16·bank + pad (DESIGN §7). A pad
+   whose key would pass 127 does not exist: bank 5 holds pads 0..11.
+2. **Two state verbs**: `set-sampler-view` (moved from Q7) and
+   `set-sampler-record-input`. Both are undoable with absolute inverses, change
+   no sound and publish nothing, and both create the program object as
+   add-zone does (a refused one creates none).
+3. **The last key played** comes from the shell's `SSamplerKeyTaps`. Every
+   NassauDigital program on a track whose input is MIDI gets its own sink of
+   that port (`SMidiInputHub`'s fan-out). The set is recomputed after every
+   action, and a 10 ms poll hands each note-on with velocity > 0 to
+   `setLastKey`. It is live and not saved. A headless case sets it with
+   `midi-in-event` on the `capture` port.
+4. **The recorder** (`SAudioRecorder`) collects an armed track whose instance
+   has a record input even when the track's input is MIDI (Q-1 (a)). The
+   capture uses the instance's mask and device. The track gets no growing clip,
+   no snap and no edit-group plan. At stop the recorder submits
+   `place-sampler-recording` with the whole kept capture, inside the press's
+   commit scope, so the press is one undo step (Q6.q1).
+5. **`place-sampler-recording`** resolves the target (from `target`, else the
+   view: Pad → pad, any other view → key) and the key at its first apply. It
+   pre-flights the file, then applies ONE HELD composite: the program child
+   (add-zone, add-layer or set-layer) and `create-file-asset`, built through
+   the registry because objects/cut owns it. The redo re-applies the same
+   children (same ids, same asset name), and one undo removes both. The
+   landing rules:
+   - Pad: replaces layer 1 of the first zone with keyLo = keyHi = the pad's
+     key (src, start and end; loop points reset, beats 0, everything else
+     kept), else adds a one-key zone rooted there.
+   - Key on an empty program: a whole-keyboard zone at the core's default
+     root, 60.
+   - Key with zones: a one-key zone rooted on the last key played, refused
+     when none has been played.
+6. **Q-4: the asset.** `create-file-asset` (objects/cut) registers an SCut over
+   the file's extern-file object. `remove-asset` gained the inverse for such a
+   body: it used to refuse, because the container walk finds no path to a file.
+   The layer plays `file:<capture path>` and is fed by generations like every
+   file layer. The asset is a separate body the layer does not link.
+7. **Measured** (fixture `tests/test_stereo.wav` through the file input: a
+   looping 480 Hz sine at RMS 0.5 left, 0.25 right; the instance's record input
+   `audio:qxa-record-input:3`; the track's input `midi:capture:any`):
+   - **Q6.1** (`sampler_q6_record`): the next note plays the recording at
+     **0.999967 (left) and 0.999945 (right)** of the recording's own RMS over
+     the frames it plays. The band is ± 2 %, and absolute levels are 0.49997 /
+     0.24998. ONE undo restores the program captured before the press, removes
+     the asset and renders silence. The redo renders the same bytes.
+   - **Q6.2**, one case each:
+     - `sampler_q6_land_pad`: bank 1 pad 5 lands on key 57 as a new one-key
+       zone. A second take replaces its layer 1 (same ids, nextId unmoved).
+       Each undo is exact.
+     - `sampler_q6_land_key_empty`: a zone over 0..127, root 60, played
+       chromatically at **480 / 960 / 240 Hz**.
+     - `sampler_q6_land_key_zones`: the LAST of two injected keys (67, not
+       64), the drum map untouched, and the refusal before any key is played.
+   - Every landing renders at a ratio of 0.99997 / 0.99995.
+   - `sampler_q6_view_verbs`: undo, redo, refusals and save/reload of the
+     state verbs; the last key ignores velocity-0 note-ons, note-offs and
+     channels the input does not take, and does not survive a reload.
+8. **Sabotages that bite** (each watched failing; the harness restores every
+   file from its saved bytes and touches it): fourteen, every one biting:
+   - the recorder ignores the record target, so the take goes nowhere (all
+     four recording cases);
+   - the recording placed 0.5 dB down (every level gate: the four recording
+     cases);
+   - `place-sampler-recording` not undoable (`record`, `land_pad`);
+   - no asset (the four recording cases);
+   - the pad key ignores the bank (`land_pad`, `view_verbs`);
+   - the pad's zone never found, so take 2 adds a zone (`land_pad`);
+   - an empty program not special (`land_key_empty`, `record`);
+   - the first key wins instead of the last (`land_key_zones`, `view_verbs`);
+   - a velocity-0 note-on counted as a key (`view_verbs`);
+   - the view not saved (`view_verbs`);
+   - `set-sampler-view`'s inverse restoring the new state (`view_verbs`);
+   - `remove-asset` unable to invert a file asset (`record`, `land_pad`);
+   - the whole-keyboard zone rooted on 72 (`land_key_empty`);
+   - the key tap never polled (`land_key_zones`, `view_verbs`).
+   An earlier spelling of the level sabotage (`=-0.5`) refused every landing,
+   because add-zone values are absolute; it was replaced by `-0.5`.
+9. **Not gated / not built**:
+   - The cycle and punch regions do not apply to a take into the instrument.
+     The whole kept capture is one recording.
+   - Input monitoring of the instance's record input is not built.
+   - A press records every armed track from the first armed track's device,
+     as for lanes.
+   - The layer src is the capture's absolute path; relocation is not Q6's.
+   - Pad reassignment to another key, and the core's zone `pad` attribute, are
+     not built.
+   - A new instance starts in the Key view, not the per-user default (Q7.1).
+   - Still open (not yet asked): what the core's zone `pad` attribute means,
+     and how a pad reassigned to another key is stored.
+10. **Accepted by the author 2026-11-03** (built as the simplest reading of a
+    point DESIGN.md did not state, then put to the author):
+    - Map and Zone views land a take as the Key view does.
+    - The pad's zone is the first one-key zone on the pad's key; a new take
+      replaces its layer 1.
+    - The whole-keyboard zone is rooted on key 60.
+    - A Key-view take onto a key that already has a one-key zone adds a second
+      zone there rather than replacing it.
 
 ### Q5 as built (QBX-271, 2026-11-02)
 

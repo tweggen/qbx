@@ -15,7 +15,9 @@ Built in milestone Q0 (QBX-250); Q1 (QBX-253) added `twSamplerProgramModel`
 and `twSamplerHostStats::installedSerial`. The program MODEL object
 (`objects/sampler`'s `SSamplerProgram`, with undo, persistence and signals) and
 its verbs are Q1's, in the app; generations, live asset links, stretch, live
-play, recording, the editor and the aux outputs are Q2–Q8.
+play, recording, the editor and the aux outputs are Q2–Q8. Q8 (QBX-273) made
+the aux outputs real: nine stereo buses, routed by proposal 55's return tracks
+(invariant 7).
 
 Public headers: twsamplerhost.h, twsamplertypes.h, twsamplerregistry.h,
 twsamplerprogrammodel.h. All Qt-free (THREADING.md rule 1), and none names a
@@ -68,9 +70,10 @@ qbx saves: `busDrive1..8` and `outputLevel1..8` on the program (aux k's
 bus drive and level, 0 and 0 dB by default) and `oversample="4"` on each zone,
 all defaults written as every attribute is; `libraryVersion` only when set.
 They are table attributes, so the Q1 verbs (`set-sampler-program`,
-`set-zone`) reach them through the core's own tables with no qbx change. B7
-still holds: tw/sampler calls the main-only `process()` overload, so the aux
-attributes are stored and not yet heard (Q8).
+`set-zone`) reach them through the core's own tables with no qbx change. Until
+Q8 tw/sampler called the main-only `process()` overload, so the aux attributes
+were stored and not heard; since Q8 (QBX-273) a routed aux bus is rendered
+with its own `busDrive<k>` and `outputLevel<k>` (invariant 7).
 
 ## Invariants
 
@@ -111,14 +114,42 @@ attributes are stored and not yet heard (Q8).
    declares NO host parameters and the blob is the header alone. The program
    and every sample live in the model, so a 10 MiB sample adds 0 bytes to the
    saved project (`sampler_slot_test`).
-7. **ONE STEREO BUS UNTIL Q8** (B7, invariant 10). `io = {0, 2}`,
-   `nOutBuses = 1`, `outBusChannels = {2}`: the host hands a generator exactly
-   one bus array (`twpluginslotproc.cc`, the generator render), so the
-   instrument never writes an aux bus until proposal 55's host passes every
-   bus. `setRoutedOutputs()` is stored and read by `process()` already (so the
-   seam exists), and changes nothing audible yet: every zone plays on main.
+7. **NINE STEREO BUSES, ROUTED BY THE HOST'S MASK** (Q8, QBX-273; B7 and
+   proposal 56 invariant 10 until then). `io = {0, 2}` (the MAIN bus), and
+   the descriptor and the instance both report `nOutBuses = 9`, every one
+   two channels: bus 0 main, bus k aux k — exactly the core's `outBuses`
+   layout. The routing is proposal 55's, generic, and nothing here names a
+   return track:
+   - **The host's mask is the authority.** `twPlugin::setRoutedOutBuses(
+     busMask )`, which the slot processor calls under its mutex with the set
+     the slot renders (plugins inv. 60) whenever a return track starts or
+     stops naming the slot, sets the core's routed mask to `busMask >> 1`
+     (bit k = aux k+1) and is the ONLY thing that says which `outBuses[b]`
+     this instance may read (plugins inv. 61); an unrouted bus is handed to
+     the core as null, so its zones fall back to main (DESIGN §3.1). The
+     slot processor follows the call with `prepare()` and `reset()` (QBX-264),
+     so a routing change is a reconfiguration and the next render hears it
+     from its first frame (GATES Q8.3). `twSamplerHost::setRoutedOutputs()`
+     sets the same core mask and is kept for the host interface; called
+     directly it can only NARROW what is heard (an aux bit with no host bus
+     has no buffer), and the next host mask replaces it.
+   - **A routed bus with no buffer renders into scratch.** The processor's
+     pre-roll and a bypassed slot hand the routed aux buses null (the side
+     page is absent). The core decides a voice's output AT ITS NOTE-ON and
+     treats a missing buffer as "not routed", so a voice started in a
+     pre-roll would sound on main for its whole life, in the page it was
+     rolled for. The instrument therefore substitutes its own scratch
+     (allocated in the constructor, 16 KiB per bus channel, a segment never
+     longer than 4096 frames) for a routed bus the host handed no buffer, and
+     the voice takes the aux output it will sound on (`sampler_test` H).
+   - **Nothing routed is the pre-Q8 call.** With the host mask empty,
+     `process()` calls the core's main-only overload exactly as before Q8, so
+     every render without a return track is byte-identical (the committed
+     goldens are). The legacy three-argument `process()` hands the
+     event-aware one a full nine-entry array (plugins inv. 61).
    The generator rows are the processor's: DirectGen on 2 channels, GenFold on
-   1, Transparent + Unsupported wider than 2 (proposal 56 Q-7).
+   1, Transparent + Unsupported wider than 2 (proposal 56 Q-7); every row but
+   those two refusals routes (proposal 55 D9).
 8. **THE ROUND-ROBIN CELL IS THE PAGE GRID** (B10, invariant 11), from frame 0:
    `floor(twProcessContext::position / twOutputPage::FRAME_CAPACITY)`. The
    core has no cell size; it has `startPage()`, and this module calls it
@@ -234,6 +265,14 @@ pre-roll, capped at 4 s by the processor.
   `main/objects/sampler/CONTRACT.md`); `sampler_q1_zone_id` also gates the
   overlay-range refusals and the save and reload of a program at
   `nextId` 1000000.
+- `sampler_test` H (Q8): nine stereo buses reported; a zone on aux 1 routed
+  is exactly silent on main and its tap page is memcmp-equal to the zone's
+  unrouted main render; a voice whose note-on lies in the pre-roll sounds on
+  aux 1, not main; unrouted again it is back on main from the page's first
+  frame.
+- `qxa.sampler_q8_reference`, `qxa.sampler_q8_outputs`, `qxa.sampler_q8_duck`
+  (QBX-273): GATES Q8.1–Q8.3 through return tracks and a keyed duck — see
+  proposal 56 §11, "Q8 as built".
 - `qxa.sampler_q4_stretch`, `qxa.sampler_q4_generations` (QBX-268):
   `twSamplerStretch` and the time scale through the app (period 1200.0000 ms
   at 100 BPM, pitch within 0.7 cent; loop points scaled: 900.0000 ms;

@@ -1027,6 +1027,27 @@ installs the hooks that join them, and nothing else:
   sampler asset-link cycle by the check a link is made under
   (`qxa.sampler_late_cycle_*`). Without it those verbs see only child links.
 
+**Recording INTO a NassauDigital instance (Q6, QBX-272; proposal 56 §4.10,
+the Q-1 answer).** An armed track whose chain holds a NassauDigital program
+with a RECORD INPUT (`ssamplerwiring::recordTargetOf`) is collected by
+`SAudioRecorder` even when the track's own input is MIDI (the MIDI recorder
+still takes its MIDI half). Its capture uses the instance's record-input mask,
+and the device the instance names when it is the first armed track. It grows
+NO clip on the lane, takes no part in the pass-wide snap or the edit-group
+plan, and at stop the recorder submits `place-sampler-recording` (the whole
+kept capture, `[trimmed, +placeable)`) inside the press's commit scope, so the
+press stays one undo step (proposal 56 Q6.q1). A refusal is reported as a
+skipped lane, and the capture file stays on disk. A press whose every armed
+track records into a sampler grew no cut, so the recorder releases the
+growing content itself. **The last key played** comes from
+`SSamplerKeyTaps` (`ssamplerkeytaps.{h,cpp}`, owned by `SApplication`, after
+the MIDI input hub and destroyed before it). It gives every NassauDigital
+program on a track whose input is MIDI its own sink of that port
+(`SMidiInputHub::fanoutFor`), recomputes the set after every action and on
+`liveLanesMayHaveChanged`, follows `setCurrentProject`, and a 10 ms poll
+hands each note-on with velocity > 0 to `SSamplerProgram::setLastKey`. This
+is the device tap, never the engine's event feed. Gates: `qxa.sampler_q6_*`.
+
 **An offline render settles the sampler first (Q2, QBX-263; proposal 56 B8,
 invariant 7).** `startRender()` calls `ssamplerwiring::settleBeforeRender()`
 after the live lanes are suspended and BEFORE `beginRun()`: for every

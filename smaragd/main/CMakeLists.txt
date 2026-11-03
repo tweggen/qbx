@@ -177,6 +177,7 @@ set(APP_OBJECTS_FILES
     objects/cut/include/app/objects/cut/ssetformantshiftaction.h
     objects/cut/include/app/objects/cut/splaceclipaction.h
     objects/cut/include/app/objects/cut/splacerecordingaction.h
+    objects/cut/include/app/objects/cut/screatefileassetaction.h
     objects/cut/include/app/objects/cut/ssplitclipaction.h
     objects/cut/include/app/objects/cut/stakehelpers.h
     objects/cut/include/app/objects/cut/stakestack.h
@@ -213,6 +214,7 @@ set(APP_OBJECTS_FILES
     objects/cut/src/ssetformantshiftaction.cpp
     objects/cut/src/splaceclipaction.cpp
     objects/cut/src/splacerecordingaction.cpp
+    objects/cut/src/screatefileassetaction.cpp
     objects/cut/src/ssplitclipaction.cpp
     objects/cut/src/stakehelpers.cpp
     objects/cut/src/stakestack.cpp
@@ -252,9 +254,11 @@ set(APP_OBJECTS_FILES
     objects/sampler/include/app/objects/sampler/ssamplerprogram.h
     objects/sampler/include/app/objects/sampler/ssamplerslots.h
     objects/sampler/include/app/objects/sampler/ssampleractions.h
+    objects/sampler/include/app/objects/sampler/ssamplerrecordactions.h
     objects/sampler/src/ssamplerprogram.cpp
     objects/sampler/src/ssamplerslots.cpp
     objects/sampler/src/ssampleractions.cpp
+    objects/sampler/src/ssamplerrecordactions.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/sinstrumenttracks.h
@@ -499,6 +503,7 @@ set(APP_UI_FILES
     shell/include/app/shell/smidiinputhub.h
     shell/include/app/shell/smidioutpump.h
     shell/include/app/shell/smidirecorder.h
+    shell/include/app/shell/ssamplerkeytaps.h
     shell/include/app/shell/splayheadclock.h
     shell/include/app/shell/sviewtabs.h
     shell/include/app/shell/slanebadge.h
@@ -522,6 +527,7 @@ set(APP_UI_FILES
     shell/src/smidiinputhub.cpp
     shell/src/smidioutpump.cpp
     shell/src/smidirecorder.cpp
+    shell/src/ssamplerkeytaps.cpp
     shell/src/sviewtabs.cpp
     shell/src/slanebadge.cpp
     shell/src/ssoloindicator.cpp

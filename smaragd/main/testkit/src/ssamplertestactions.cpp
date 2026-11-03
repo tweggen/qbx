@@ -7,6 +7,10 @@
 #include "app/objects/track/spluginslot.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/ssamplerwiring.h"
+#include "app/shell/saudiorecorder.h"
+#include "app/objects/cut/scut.h"
+#include "app/model/sexternfile.h"
+#include <QFileInfo>
 #include "app/testkit/stestfilepath.h"
 #include "app/objects/sampler/ssamplerprogram.h"
 #include "app/objects/sampler/ssamplerslots.h"
@@ -27,6 +31,7 @@
 #include <QDomNamedNodeMap>
 #include <QFile>
 #include <QHash>
+#include <QLocale>
 
 #include <memory>
 #include <string>
@@ -205,6 +210,13 @@ const QStringList &checkNames()
         QStringLiteral( "attr" ),         QStringLiteral( "value" ),
         QStringLiteral( "xmlContains" ),  QStringLiteral( "selected" ),
         QStringLiteral( "installed" ),
+        // Q6 (QBX-272): the instance state outside the program, and the layer
+        // the last take landed as.
+        QStringLiteral( "view" ),         QStringLiteral( "padBank" ),
+        QStringLiteral( "pad" ),          QStringLiteral( "padKey" ),
+        QStringLiteral( "recordInput" ),  QStringLiteral( "lastKey" ),
+        QStringLiteral( "recordedLayer" ), QStringLiteral( "recordedAsset" ),
+        QStringLiteral( "assetAbsent" ),
     };
     return n;
 }
@@ -362,6 +374,54 @@ SApplyResult SAssertSamplerProgramAction::apply( SProject *project )
                          .arg( current ).arg( hosts ).arg( prog->publishedSerial() )
                          .arg( got.join( QLatin1Char( ',' ) ) );
     }
+
+    // ---- Q6: view, pad, record input, last key, the recorded layer --------
+    if( has( "view" ) && get( "view" ) != SSamplerProgram::viewText( prog->view() ) )
+        fails << QStringLiteral( "view: want %1, got %2" )
+                     .arg( get( "view" ), SSamplerProgram::viewText( prog->view() ) );
+    if( has( "padBank" ) && get( "padBank" ).toInt() != prog->padBank() )
+        fails << QStringLiteral( "padBank: want %1, got %2" ).arg( get( "padBank" ) ).arg( prog->padBank() );
+    if( has( "pad" ) && get( "pad" ).toInt() != prog->pad() )
+        fails << QStringLiteral( "pad: want %1, got %2" ).arg( get( "pad" ) ).arg( prog->pad() );
+    if( has( "padKey" ) && get( "padKey" ).toInt() != prog->padKey() )
+        fails << QStringLiteral( "padKey: want %1, got %2" ).arg( get( "padKey" ) ).arg( prog->padKey() );
+    if( has( "recordInput" ) && get( "recordInput" ) != prog->recordInput() )
+        fails << QStringLiteral( "recordInput: want \"%1\", got \"%2\"" )
+                     .arg( get( "recordInput" ), prog->recordInput() );
+    if( has( "lastKey" ) && get( "lastKey" ).toInt() != prog->lastKey() )
+        fails << QStringLiteral( "lastKey: want %1, got %2" ).arg( get( "lastKey" ) ).arg( prog->lastKey() );
+    if( has( "recordedLayer" ) ) {
+        SAudioRecorder *rec = SApplication::app().audioRecorder();
+        const QStringList files = rec ? QStringList( rec->lastFiles() ) : QStringList();
+        std::string src;
+        const std::uint32_t lid = (std::uint32_t)get( "recordedLayer" ).toULongLong();
+        if( files.isEmpty() )
+            fails << QStringLiteral( "recordedLayer: the last take wrote no file" );
+        else if( !m.value( audio::twSamplerScope::Layer, lid, "src", &src ) )
+            fails << QStringLiteral( "recordedLayer: no layer %1" ).arg( lid );
+        else if( QString::fromStdString( src ) != QStringLiteral( "file:" ) + files.first() )
+            fails << QStringLiteral( "recordedLayer %1: src \"%2\" is not the last take, \"file:%3\"" )
+                         .arg( lid ).arg( QString::fromStdString( src ), files.first() );
+    }
+
+    // Q-4: the recording is ALSO a registered asset, a window over the file.
+    if( has( "recordedAsset" ) ) {
+        SAudioRecorder *rec = SApplication::app().audioRecorder();
+        const QStringList files = rec ? QStringList( rec->lastFiles() ) : QStringList();
+        SCut *cut = dynamic_cast<SCut *>( project->asset( get( "recordedAsset" ) ) );
+        SExternFile *ef = cut ? dynamic_cast<SExternFile *>( &cut->getContent() ) : nullptr;
+        if( !cut )
+            fails << QStringLiteral( "recordedAsset: no asset \"%1\" with a cut body" ).arg( get( "recordedAsset" ) );
+        else if( !ef )
+            fails << QStringLiteral( "recordedAsset \"%1\": its body windows no file" ).arg( get( "recordedAsset" ) );
+        else if( files.isEmpty() || QFileInfo( ef->getFileName() ).canonicalFilePath() !=
+                                        QFileInfo( files.first() ).canonicalFilePath() )
+            fails << QStringLiteral( "recordedAsset \"%1\": windows %2, not the last take %3" )
+                         .arg( get( "recordedAsset" ), ef->getFileName(),
+                               files.isEmpty() ? QStringLiteral( "(none)" ) : files.first() );
+    }
+    if( has( "assetAbsent" ) && project->hasAsset( get( "assetAbsent" ) ) )
+        fails << QStringLiteral( "assetAbsent: an asset \"%1\" is registered" ).arg( get( "assetAbsent" ) );
 
     if( has( "capture" ) ) captures().insert( get( "capture" ), m );
 
@@ -713,4 +773,120 @@ static const bool s_reg_waitsamplergenerations =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "wait-sampler-generations" ),
           [] { return new SWaitSamplerGenerationsAction; } ),
+      true );
+
+// ======================================== assert-sampler-recording-level ===
+
+namespace {
+double rmsOf( const std::vector<float> &v )
+{
+    if( v.empty() ) return 0.0;
+    double acc = 0.0;
+    for( float x : v ) acc += (double)x * (double)x;
+    return std::sqrt( acc / (double)v.size() );
+}
+}  // namespace
+
+SApplyResult SAssertSamplerRecordingLevelAction::apply( SProject *project )
+{
+    const QString where = QStringLiteral( "assert-sampler-recording-level: track %1 slot %2 layer %3" )
+                              .arg( trackPath_ ).arg( slotIndex_ ).arg( layer_ );
+    auto reject = [&]( const QString &why ) -> SApplyResult {
+        qWarning().noquote() << where << ": REJECTED:" << why;
+        return { false, nullptr };
+    };
+    if( layer_ <= 0 || filename_.isEmpty() || frameCount_ <= 0 )
+        return reject( QStringLiteral( "needs layer=, filename= and frameCount= > 0" ) );
+    QString why;
+    SSamplerProgram *prog = ssampler::programAt( project, pathRoot(), trackPath_, slotIndex_,
+                                                 false, &why );
+    if( !prog ) return reject( why );
+    std::string src, startText;
+    if( !prog->model().value( audio::twSamplerScope::Layer, (std::uint32_t)layer_, "src", &src ) )
+        return reject( QStringLiteral( "no layer %1" ).arg( layer_ ) );
+    const QString s = QString::fromStdString( src );
+    if( !s.startsWith( QLatin1String( "file:" ) ) )
+        return reject( QStringLiteral( "the layer's src \"%1\" is not file:" ).arg( s ) );
+    qint64 layerStart = 0;
+    if( prog->model().value( audio::twSamplerScope::Layer, (std::uint32_t)layer_, "start", &startText ) )
+        layerStart = QString::fromStdString( startText ).toLongLong();
+    const QString recPath = resolveTestFilePath( s.mid( 5 ), SApplication::app().testOutputDir(), project );
+    const QString renPath = resolveTestFilePath( filename_, SApplication::app().testOutputDir(), project );
+
+    audio::AudioFileInfo recInfo{}, renInfo{};
+    std::string err;
+    if( !audio::readAudioFileInfo( recPath.toStdString(), recInfo, err ) )
+        return reject( QStringLiteral( "cannot read the recording %1: %2" ).arg( recPath, QString::fromStdString( err ) ) );
+    if( !audio::readAudioFileInfo( renPath.toStdString(), renInfo, err ) )
+        return reject( QStringLiteral( "cannot read the render %1: %2" ).arg( renPath, QString::fromStdString( err ) ) );
+
+    QStringList fails;
+    const int channels = std::min( 2, renInfo.channelCount );
+    for( int c = 0; c < channels; ++c ) {
+        const int rc = std::min( c, recInfo.channelCount - 1 );
+        std::vector<float> rec, ren;
+        int rate = 0;
+        if( !audio::readAudioRegion( recPath.toStdString(), layerStart + offset_, frameCount_, rc, rec,
+                                     rate, err ) ||
+            !audio::readAudioRegion( renPath.toStdString(), noteFrame_ + offset_, frameCount_, c, ren,
+                                     rate, err ) )
+            return reject( QString::fromStdString( err ) );
+        if( (qint64)rec.size() != frameCount_ || (qint64)ren.size() != frameCount_ )
+            return reject( QStringLiteral( "channel %1: the window is not inside both files "
+                                           "(recording %2 frames, render %3)" )
+                               .arg( c ).arg( rec.size() ).arg( ren.size() ) );
+        const double a = rmsOf( rec ), b = rmsOf( ren );
+        const double ratio = a > 0.0 ? b / a : 0.0;
+        qInfo().noquote() << QStringLiteral( "%1: channel %2: recording RMS %3, render RMS %4, "
+                                             "ratio %5 (tolerance %6)" )
+                                 .arg( where ).arg( c ).arg( a, 0, 'f', 6 ).arg( b, 0, 'f', 6 )
+                                 .arg( ratio, 0, 'f', 6 ).arg( tolerance_ );
+        if( a <= 1e-6 ) fails << QStringLiteral( "channel %1: the recording is silent there" ).arg( c );
+        else if( std::fabs( ratio - 1.0 ) > tolerance_ )
+            fails << QStringLiteral( "channel %1: ratio %2 is outside 1 ± %3" )
+                         .arg( c ).arg( ratio, 0, 'f', 6 ).arg( tolerance_ );
+    }
+    if( !fails.isEmpty() ) {
+        for( const QString &f : fails ) qWarning().noquote() << where << "FAIL" << f;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertSamplerRecordingLevelAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "trackPath", trackPath_ );
+    elem.setAttribute( "slotIndex", slotIndex_ );
+    elem.setAttribute( "layer", layer_ );
+    elem.setAttribute( "filename", filename_ );
+    elem.setAttribute( "noteFrame", noteFrame_ );
+    elem.setAttribute( "offset", offset_ );
+    elem.setAttribute( "frameCount", frameCount_ );
+    elem.setAttribute( "tolerance", tolerance_ );
+}
+
+bool SAssertSamplerRecordingLevelAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    trackPath_  = elem.attribute( "trackPath", "0" );
+    slotIndex_  = elem.attribute( "slotIndex", "0" ).toInt();
+    layer_      = elem.attribute( "layer", "0" ).toInt();
+    filename_   = elem.attribute( "filename" );
+    noteFrame_  = elem.attribute( "noteFrame", "0" ).toLongLong();
+    offset_     = elem.attribute( "offset", "0" ).toLongLong();
+    frameCount_ = elem.attribute( "frameCount", "0" ).toLongLong();
+    tolerance_  = QLocale::c().toDouble( elem.attribute( "tolerance", "0.02" ) );
+    return true;
+}
+
+QStringList SAssertSamplerRecordingLevelAction::knownAttributes() const
+{
+    return { QStringLiteral( "trackPath" ), QStringLiteral( "slotIndex" ), QStringLiteral( "layer" ),
+             QStringLiteral( "filename" ),  QStringLiteral( "noteFrame" ), QStringLiteral( "offset" ),
+             QStringLiteral( "frameCount" ), QStringLiteral( "tolerance" ) };
+}
+
+static const bool s_reg_assertsamplerrecordinglevel =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-sampler-recording-level" ),
+          [] { return new SAssertSamplerRecordingLevelAction; } ),
       true );

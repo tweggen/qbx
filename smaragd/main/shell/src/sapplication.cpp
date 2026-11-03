@@ -38,6 +38,7 @@
 #include "app/shell/smidioutpump.h"
 #include "app/shell/saudiorecorder.h"
 #include "app/shell/smidirecorder.h"
+#include "app/shell/ssamplerkeytaps.h"
 #include "app/shell/slivemonitor.h"
 #include "app/shell/sautomationrecorder.h"
 #include "app/shell/smediaaccountmanager.h"
@@ -119,6 +120,8 @@ void SApplication::setCurrentProject( SProject *cp )
     // registry at the document boundary. QBX-230.
     if( currentProject_ != cp ) clearAllSelections();
     currentProject_ = cp;
+    // The NassauDigital key taps follow the project (proposal 56 Q6).
+    if( samplerKeyTaps_ ) samplerKeyTaps_->projectChanged( cp );
     // The per-user solo scope is runtime state ON the project (QBX-256), so
     // every project that becomes current gets it -- including the one a load
     // hands us, which is why this sits here and not only at startup.
@@ -1003,6 +1006,7 @@ SApplication::SApplication( int &argc, char **argv )
     // The MIDI half of a record start (proposal 21 L4). After the input hub,
     // whose recorder SINKS it acquires, and destroyed before it.
     midiRecorder_.reset( new SMidiRecorder( this ) );
+    samplerKeyTaps_.reset( new SSamplerKeyTaps( this ) );
     // The MASTER's entry, and the active one until a tab says otherwise.
     activeSelectionRoot_ = QString();
     selectionList_ = &selections_[ activeSelectionRoot_ ].list;
@@ -1152,6 +1156,7 @@ SApplication::~SApplication()
     // The live lane goes first: it stops and JOINS the pump thread and closes
     // the input device, and both of those must happen before the speaker it
     // hands audio to is destroyed.
+    samplerKeyTaps_.reset();
     midiRecorder_.reset();
     audioRecorder_.reset();
     liveMonitor_.reset();

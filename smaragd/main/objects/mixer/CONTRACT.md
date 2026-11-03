@@ -22,6 +22,11 @@ Invariants:
    order survives only through SObject::event's resurrection guard, whose
    warning `rename_asset.qxa` asserts absent). Gated by `rename_asset.qxa`
    and `sampler_q3_asset_link.qxa`.
+   `remove-asset` of a FILE-BACKED asset (an SCut over an extern file, as
+   objects/cut's `create-file-asset` registers a sampler recording, proposal 56
+   Q6) inverts to `create-file-asset` with the same file, window and name. The
+   container walk finds no path to a file, so before QBX-272 such a removal was
+   refused outright. Gated through `sampler_q6_record`'s undo.
    **A verb here that attaches X under Y asks `sarrangements::reaches(X, Y)`
    BEFORE it mutates, and refuses with the reason** (QBX-267): `place-asset`
    (which always asked), `reparent-track` (which asked only
@@ -538,7 +543,13 @@ what feeds it.
     RETURN.** Re-pointing re-stamps the return up to its own rewire and NOT
     the master lane chain and mixer rewire downstream. Measured: a return whose
     source track was deleted rendered byte-identical to the routed render
-    until this was added (inv. 24's lesson, for the aux edge).
+    until this was added (inv. 24's lesson, for the aux edge). **An UNWIRED
+    return's route moved too** (QBX-273): a track handed back to its own
+    `twTrackMix` (inv. 30) is invalidated the same way, and the walk follows
+    its routing edges -- a slot KEYED from the former return kept ducking from
+    its cached pages on the render after `clear-return-source` (measured: 0.25
+    x dry, through both `tw.test.clap.split` and the sampler) until this was
+    added. Gated by `sampler_q8_duck`.
 32. **IT FAILS CLOSED, AND SAYS SO ONCE PER STATE.** No route -- a source that
     is gone, not in this tree, the master, a dropped cycle edge, a second
     return of the same `(source, slot, bus)` (the first in tree order wins,

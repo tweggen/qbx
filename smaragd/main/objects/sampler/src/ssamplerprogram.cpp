@@ -519,6 +519,86 @@ void SSamplerProgram::setSelection( const QVector<std::uint32_t> &ids )
     emit selectionChanged();
 }
 
+// --- the view, the pad, the record input, the last key (Q6) ----------------------
+
+QString SSamplerProgram::viewText( View v )
+{
+    switch( v ) {
+    case View::Key:  return QStringLiteral( "key" );
+    case View::Pad:  return QStringLiteral( "pad" );
+    case View::Map:  return QStringLiteral( "map" );
+    case View::Zone: return QStringLiteral( "zone" );
+    }
+    return QStringLiteral( "key" );
+}
+
+bool SSamplerProgram::viewFromText( const QString &text, View &out )
+{
+    if( text == QLatin1String( "key" ) )  { out = View::Key;  return true; }
+    if( text == QLatin1String( "pad" ) )  { out = View::Pad;  return true; }
+    if( text == QLatin1String( "map" ) )  { out = View::Map;  return true; }
+    if( text == QLatin1String( "zone" ) ) { out = View::Zone; return true; }
+    return false;
+}
+
+void SSamplerProgram::setViewState( View view, int padBank, int pad )
+{
+    if( !padExists( padBank, pad ) ) return;
+    if( view == view_ && padBank == padBank_ && pad == pad_ ) return;
+    view_    = view;
+    padBank_ = padBank;
+    pad_     = pad;
+    emit viewChanged();
+}
+
+namespace {
+// `audio:<device>:<mask>`: the LAST colon separates the mask, as STrack reads a
+// track input, so a device name may itself hold colons.
+bool splitRecordInput( const QString &spec, QString *device, unsigned *mask )
+{
+    if( !spec.startsWith( QLatin1String( "audio:" ) ) ) return false;
+    const QString rest  = spec.mid( 6 );
+    const int     colon = rest.lastIndexOf( QLatin1Char( ':' ) );
+    if( colon < 0 ) return false;
+    bool ok = false;
+    const unsigned m = rest.mid( colon + 1 ).toUInt( &ok, 16 );
+    if( !ok || m == 0 ) return false;
+    if( device ) *device = rest.left( colon );
+    if( mask ) *mask = m;
+    return true;
+}
+}  // namespace
+
+bool SSamplerProgram::isValidRecordInput( const QString &spec )
+{
+    return spec.isEmpty() || splitRecordInput( spec, nullptr, nullptr );
+}
+
+void SSamplerProgram::setRecordInput( const QString &spec )
+{
+    if( spec == recordInput_ || !isValidRecordInput( spec ) ) return;
+    recordInput_ = spec;
+    emit recordInputChanged();
+}
+
+QString SSamplerProgram::recordInputDevice() const
+{
+    QString d;
+    return splitRecordInput( recordInput_, &d, nullptr ) ? d : QString();
+}
+
+unsigned SSamplerProgram::recordInputMask() const
+{
+    unsigned m = 0;
+    return splitRecordInput( recordInput_, nullptr, &m ) ? m : 0u;
+}
+
+void SSamplerProgram::setLastKey( int key )
+{
+    if( key < 0 || key > 127 ) return;
+    lastKey_ = key;
+}
+
 // --- the hand-over ---------------------------------------------------------------
 
 SSamplerProgram::InstanceInitializer SSamplerProgram::futureInitializer_() const
@@ -1419,6 +1499,13 @@ int SSamplerProgram::serialize( QTextStream &o )
         o << " assetLinks='" << pairs.join( QLatin1Char( ';' ) ) << "' nextLinkId='"
           << nextLinkId_ << "'";
     }
+    // THE VIEW STATE AND THE RECORD INPUT (Q6): qbx's, never the program's,
+    // and each only when it is not the default, so every earlier file is
+    // written byte-identically. The last key played is live and not saved.
+    if( view_ != View::Key ) o << " view='" << viewText( view_ ) << "'";
+    if( padBank_ != 0 ) o << " padBank='" << padBank_ << "'";
+    if( pad_ != 0 ) o << " pad='" << pad_ << "'";
+    if( !recordInput_.isEmpty() ) o << " recordInput='" << recordInput_.toHtmlEscaped() << "'";
     o << ">\n";
     const QString text = isReadable() ? QString::fromStdString( model_.toXml() ) : rawText_;
     o << "<program>" << cdata( text ) << "</program>\n";
@@ -1482,6 +1569,36 @@ SLink *SSamplerProgram::instantiateFromDomElement( SProjectLoader &loader, QDomE
     }
     prog->nextLinkId_ = std::max<std::uint32_t>(
         maxId + 1, (std::uint32_t)element.attribute( QStringLiteral( "nextLinkId" ), "1" ).toULongLong() );
+
+    // THE VIEW STATE AND THE RECORD INPUT (Q6). A value this build cannot
+    // take (a view a newer build added, a pad out of range) is announced and
+    // the default kept.
+    {
+        View v = View::Key;
+        const QString vt = element.attribute( QStringLiteral( "view" ), QStringLiteral( "key" ) );
+        if( !viewFromText( vt, v ) ) {
+            qWarning().noquote() << QStringLiteral( "NassauDigital: unknown view \"%1\"; the Key "
+                                                    "view is used" ).arg( vt );
+            v = View::Key;
+        }
+        const int bank = element.attribute( QStringLiteral( "padBank" ), "0" ).toInt();
+        const int pad  = element.attribute( QStringLiteral( "pad" ), "0" ).toInt();
+        if( padExists( bank, pad ) ) {
+            prog->view_    = v;
+            prog->padBank_ = bank;
+            prog->pad_     = pad;
+        } else {
+            qWarning().noquote() << QStringLiteral( "NassauDigital: pad %1 of bank %2 does not "
+                                                    "exist; pad 0 of bank 0 is used" )
+                                        .arg( pad ).arg( bank );
+            prog->view_ = v;
+        }
+        const QString ri = element.attribute( QStringLiteral( "recordInput" ) );
+        if( isValidRecordInput( ri ) ) prog->recordInput_ = ri;
+        else
+            qWarning().noquote() << QStringLiteral( "NassauDigital: record input \"%1\" is not "
+                                                    "audio:<device>:<mask>; none is used" ).arg( ri );
+    }
 
     prog->readPostChildrenAttributes( element );
     return new SLink( *prog );

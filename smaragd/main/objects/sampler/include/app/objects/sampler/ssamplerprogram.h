@@ -176,6 +176,57 @@ public:
     QVector<std::uint32_t> rawSelection() const { return selection_; }
     void setSelection( const QVector<std::uint32_t> &ids );
 
+    // --- the instance's view, its pad and its record input (Q6) ------------------
+    // MODEL STATE OF THIS OBJECT, OUTSIDE THE CORE'S PROGRAM (the author's
+    // answer of 2026-11-02, nassau-digital DESIGN §13): saved in qbx's own
+    // <SSamplerProgram> element, never in the program text, so an exported
+    // program never carries them. Each is written only when it is not the
+    // default, so every earlier file is byte-unchanged. Changed by the verbs
+    // set-sampler-view and set-sampler-record-input (ssamplerrecordactions.h);
+    // they change no sound and publish nothing.
+    enum class View { Key, Pad, Map, Zone };
+    // Pads are banks of 16 consecutive keys from key 36 (DESIGN §7): pad p of
+    // bank b plays key 36 + 16·b + p. Banks 0..5; a pad whose key would pass
+    // 127 does not exist (bank 5 holds pads 0..11).
+    static constexpr int kPadBaseKey  = 36;
+    static constexpr int kPadsPerBank = 16;
+    static constexpr int kPadBanks    = 6;
+    static int  padKeyOf( int bank, int pad ) { return kPadBaseKey + kPadsPerBank * bank + pad; }
+    static bool padExists( int bank, int pad )
+    {
+        return bank >= 0 && bank < kPadBanks && pad >= 0 && pad < kPadsPerBank &&
+               padKeyOf( bank, pad ) <= 127;
+    }
+    static QString viewText( View v );
+    static bool    viewFromText( const QString &text, View &out );
+
+    View view() const { return view_; }
+    int  padBank() const { return padBank_; }
+    int  pad() const { return pad_; }
+    int  padKey() const { return padKeyOf( padBank_, pad_ ); }
+    // Callers validate (padExists); a pad that does not exist is not stored.
+    void setViewState( View view, int padBank, int pad );
+
+    // Q-1 (answered 2026-11-01): the instance's OWN record input, spelled as a
+    // track input is, `audio:<device>:<mask>` (<mask> hex), or empty for none.
+    // An armed track holding this instance records INTO it from this input,
+    // whatever the track's own input is (shell's SAudioRecorder).
+    const QString &recordInput() const { return recordInput_; }
+    void setRecordInput( const QString &spec );
+    // `audio:<device>:<mask>` -> <device> (may be empty: the app's default).
+    QString  recordInputDevice() const;
+    unsigned recordInputMask() const;
+    // Is `spec` a record input this object takes? Empty (none) or
+    // `audio:<device>:<mask>` with a non-zero hex mask.
+    static bool isValidRecordInput( const QString &spec );
+
+    // THE LAST KEY PLAYED (DESIGN §7): the last note-on the instance's DEVICE
+    // MIDI INPUT TAP saw (the tap Q7.2's hand selection uses, not the
+    // engine's event feed; the shell's SSamplerKeyTaps owns it). Live state:
+    // -1 until a key is played, NOT saved and not undoable.
+    int  lastKey() const { return lastKey_; }
+    void setLastKey( int key );
+
     // --- the hand-over to the instrument -----------------------------------------
     InstanceInitializer instanceInitializer() const;
     // Bind: store the installer and publish the current program through it at
@@ -270,6 +321,8 @@ public:
 signals:
     void programChanged();
     void selectionChanged();
+    void viewChanged();
+    void recordInputChanged();
     // A generation was installed into the instrument (or a layer's buffer was
     // removed); `layerId` names it.
     void generationInstalled( quint32 layerId, quint64 generation );
@@ -307,6 +360,11 @@ private:
     QString                                       loadError_;
     QString                                       rawText_;     // verbatim, when unreadable
     QVector<std::uint32_t>                        selection_;
+    View                                          view_    = View::Key;
+    int                                           padBank_ = 0;
+    int                                           pad_     = 0;
+    QString                                       recordInput_;
+    int                                           lastKey_ = -1;
     std::shared_ptr<const audio::twSamplerProgram> snapshot_;
     std::uint64_t                                 publishedSerial_ = 0;
     Installer                                     installer_;

@@ -23,6 +23,13 @@ plays its source STRETCHED to the project tempo by qbx's phase vocoder, as a
 generation, re-rendered on a tempo change and once more when the source's onset
 analysis completes (proposal 56 §4.8, DESIGN §5, §13; invariants 23–27).
 
+Since Q6 (QBX-272) a recording lands IN the instrument: `place-sampler-recording`
+(DESIGN §7's landing rule), the instance state the rule reads — the VIEW, the
+SELECTED PAD and its bank (`set-sampler-view`), the instance's own RECORD
+INPUT (`set-sampler-record-input`), and the LAST KEY PLAYED, which the shell's
+key tap writes (proposal 56 §4.10, §11 "Q6 as built"; the invariants headed
+"Q6" below).
+
 Since Q5 (QBX-271) an armed sampler track is PLAYED LIVE through the live
 lane (proposal 56 §4.9, DESIGN §9.4). No line of this slice, of tw/sampler or
 of the live lane changed for it: the sampler is a generator in slot 0 and
@@ -356,6 +363,47 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     install nor `setSample` may reset the instance or drop a swap while a
     voice sounds.
 
+### Q6 (QBX-272): recording into the instrument
+
+Unnumbered here, because the Q5 and Q8 changes add invariants
+in parallel; they are renumbered when those land.
+
+- **THE VIEW, THE SELECTED PAD AND THE RECORD INPUT ARE STATE OF THIS OBJECT,
+  NOT OF THE PROGRAM** (the author's answer of 2026-11-02, nassau-digital
+  DESIGN §13). `view` (Key by default), `padBank` (0..5), `pad` (0..15) and
+  `recordInput` (`audio:<device>:<mask>` or empty) are saved as attributes of
+  `<SSamplerProgram>`, each only when not the default — every earlier file is
+  byte-unchanged — and never in the program text, so an exported program never
+  carries them. A pad is key 36 + 16·bank + pad; a pad whose key would pass 127
+  does not exist and is never stored. A value this build cannot take on load
+  is announced and the default kept. Changed only by `set-sampler-view` and
+  `set-sampler-record-input`: undoable, absolute inverses, no sound, nothing
+  published; both create the program object (as add-zone does), a refused one
+  creates none.
+- **THE LAST KEY PLAYED IS LIVE AND COMES FROM THE DEVICE TAP**: `lastKey()`
+  is the last note-on (velocity > 0) the instance's own sink of its track's MIDI
+  input port delivered — the shell's `SSamplerKeyTaps`, the tap Q7.2 reads too,
+  never the engine's event feed, so a sequenced note does not move it. -1 until
+  a key is played; not saved, not undoable.
+- **WHERE A RECORDING LANDS IS DECIDED ONCE** (DESIGN §7). `place-sampler-
+  recording` resolves the target (`target`, else the view: Pad → pad, any other
+  view → key) and the key at its first apply, builds its children — add-zone,
+  add-layer or set-layer for the program, `create-file-asset` (through the
+  registry) for the asset — and HOLDS them, so the redo re-applies the same
+  children: the same zone and layer ids, the same asset name. Pad: the pad's
+  zone is the first zone with keyLo = keyHi = the pad's key; when it exists its
+  first layer is replaced (src, start, end, loop points reset, beats 0; every
+  other setting kept), else a one-key zone rooted there. Key on an empty
+  program: a zone over the whole keyboard at the core's default root (60). Key
+  on a program with zones: a one-key zone rooted on the last key played;
+  REFUSED when none has been played. A refusal changes nothing: the file is
+  pre-flighted before any child applies.
+- **THE RECORDING IS A FILE LAYER AND AN ASSET** (Q-4). The layer's src is
+  `file:<path>` (the capture's absolute path; fed by generations as every file
+  layer, invariant 12), start/end = the kept span. The asset is a separate
+  registered body (an `SCut` over the file), not a link the layer plays: the
+  layer never bounces it. One undo removes both.
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -497,6 +545,39 @@ absolute (there is nothing to be relative to).
   onsets at once, and the undo's render equals generation 4's bytes; back at
   120 BPM generation 7 is unstretched.
 - Sabotages that bite (QBX-268): see proposal 56 §11 "Q4 as built".
+
+- `qxa.sampler_q6_record` (QBX-272) — GATES Q6.1: record-start, stop, and
+  the take lands as a whole-keyboard zone; the next note plays it at
+  0.999967 / 0.999945 of the recording's RMS (left / right; the band is
+  ± 2 %), 0.49997 / 0.24998 absolute; ONE undo restores the program captured
+  before the press and removes the asset, the render is silent; the redo puts
+  the same zone and asset back and renders the same bytes; the asset places on
+  a lane.
+- `qxa.sampler_q6_land_pad`, `…_land_key_empty`, `…_land_key_zones` — GATES
+  Q6.2, one case each: the selected pad's key (bank 1 pad 5 = key 57, a new
+  one-key zone; a second take REPLACES its layer 1, same ids, nextId unmoved;
+  the undo of each); the whole keyboard on an empty program, played
+  chromatically (480 / 960 / 240 Hz at the root and an octave either side);
+  the LAST of two injected keys (67, not 64) on a program with zones, the drum
+  map untouched, and the refusal when no key has been played.
+- `qxa.sampler_q6_view_verbs` — the state verbs' undo, redo and refusals, the
+  last key from injected MIDI (velocity 0 and note-offs ignored, a channel the
+  input does not take ignored), place-sampler-recording driven directly
+  (refusals, the view's pad, an explicit key target), save and reload (the
+  state survives, the last key does not, the program text holds none of it).
+- Sabotages that bite (QBX-272): proposal 56 §11 "Q6 as built".
+
+## Not gated / known limits
+
+- Q6: the CYCLE and PUNCH regions do not apply to a take into the instrument:
+  the whole kept capture lands as one recording. Input MONITORING of the
+  instance's record input is not built (the live monitor monitors track
+  inputs). The capture opens the device the FIRST armed track names; a press
+  arming tracks on different input devices records them all from that one, as
+  for lanes. A layer src is the capture's absolute path (relocation is not
+  Q6's, as in Q2). A pad cannot be reassigned to another key yet (DESIGN §7
+  allows it; no verb does it), and the core's zone `pad` attribute is not set.
+  A new instance starts in the Key view, not the per-user default (Q7.1).
 
 - `qxa.sampler_q5_live_play` (QBX-271) — Q5.1, transport stopped: the
   sampler (panned left) and the test sine (panned right) armed on one MIDI

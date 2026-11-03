@@ -27,8 +27,12 @@
 // registerNassauDigital(); a test that builds slots without an SApplication
 // calls it itself. Idempotent.
 
+#include <QList>
+
 class QString;
 class SProject;
+class SSamplerProgram;
+class STrack;
 
 namespace ssamplerwiring {
 
@@ -53,6 +57,16 @@ bool settleBeforeRender( SProject *project, QString *why );
 int  settleBoundMs();
 // TEST SEAM (set-sampler-render-gate settleBoundMs=): < 0 restores the default.
 void setSettleBoundOverrideMs( int ms );
+
+// RECORDING INTO THE INSTRUMENT (proposal 56 Q6, Q-1 answered 2026-11-01).
+// The first NassauDigital slot on `track` whose program has a RECORD INPUT,
+// with its slot index; null when there is none. An armed track holding one
+// records INTO that instance from the instance's own input (SAudioRecorder),
+// whatever the track's own input is.
+SSamplerProgram *recordTargetOf( STrack *track, int *slotIndex );
+
+// Every NassauDigital program on `track`'s chain (the key taps' walk).
+QList<SSamplerProgram *> programsOf( STrack *track );
 
 }  // namespace ssamplerwiring
 

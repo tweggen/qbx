@@ -50,10 +50,13 @@ public:
     // the buffer that was current at its note-on until it ends.
     virtual void setSample( std::uint32_t layerId,
                             std::shared_ptr<const twSamplerSample> sample ) = 0;
-    // Which aux outputs are routed: bit k = aux k+1 (DESIGN §3.1). Until Q8 the
-    // instrument reports ONE output bus (proposal 56 B7), so an aux zone plays
-    // on main whatever this says; it is stored and read by process() now so the
-    // seam is there when the buses are.
+    // Which aux outputs are routed: bit k = aux k+1 (DESIGN §3.1), the core's
+    // own mask. Since Q8 the slot processor sets it through
+    // twPlugin::setRoutedOutBuses (the host's bus mask >> 1, derived from the
+    // return tracks that name the slot), which also says which outBuses
+    // entries process() may read; a direct call here can therefore only
+    // NARROW what is heard (an aux bit the host gave no bus for has no buffer
+    // and plays on main), and the next host mask change replaces it.
     virtual void setRoutedOutputs( std::uint32_t mask ) = 0;
     // Free replaced buffers no voice holds any more. Host thread, NEVER the
     // audio thread; process() never drops the last reference to a buffer.
