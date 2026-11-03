@@ -16,6 +16,18 @@
 //     blocks, split at the boundary, so a page's choices depend on that page
 //     alone whatever the block grid.
 //   * twProcessContext::tempoBpm -> nd::Instrument::setTempo, per chunk.
+//   * THE AUX OUTPUTS (proposal 56 Q8, DESIGN §3.1): nine stereo buses, bus 0
+//     main and bus k aux k, exactly the core's outBuses layout. The host's
+//     routed mask (twPlugin::setRoutedOutBuses, which the slot processor calls
+//     from what proposal 55's return tracks ask of the slot) is the core's
+//     routed mask shifted by one, and it is the ONLY thing that says which
+//     outBuses entries this instance may read (plugins inv. 61). A routed bus
+//     the host hands no buffer for in one call (the processor's pre-roll and
+//     a bypass, which render with the side page absent) is rendered into this
+//     instance's own scratch, so the core still sees it as ROUTED and a voice
+//     started there takes the aux output it will sound on once the buffer is
+//     back (the core decides a voice's output at its note-on, and a missing
+//     buffer would otherwise send it to main for its whole life).
 //
 // THREADING (R3, proposal 56 invariant 3). Every twSamplerHost setter is
 // reached only through twPluginSlotProcessor::applyToInstances(), under the
@@ -46,6 +58,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <string>
 #include <vector>
 
 namespace audio {
@@ -60,6 +73,13 @@ constexpr std::uint16_t kStateVersion    = 1;
 
 // The round-robin cell: the page grid every frozen render is cut on.
 constexpr std::int64_t kRrCellFrames = (std::int64_t)twOutputPage::FRAME_CAPACITY;
+
+// Main + the eight aux outputs (DESIGN §3.1), every one a stereo pair.
+constexpr std::size_t kNumBuses     = (std::size_t)nd::Instrument::kNumOutputs;
+constexpr std::size_t kBusChannels  = 2;
+// The scratch a routed aux bus renders into while the host hands it no buffer;
+// a segment is never longer than this.
+constexpr std::uint32_t kScratchFrames = 4096;
 
 // Room for a whole block of host events plus one wildcard note-off expanded to
 // every key.
@@ -91,14 +111,40 @@ public:
     twSamplerInstrument()
     {
         io_.audioInputs  = 0;   // a generator
-        io_.audioOutputs = 2;   // stereo out (DESIGN §9.3, A17); ONE bus until Q8 (B7)
+        io_.audioOutputs = 2;   // stereo main (DESIGN §9.3, A17); 8 stereo aux buses beside it (Q8)
         ndEvents_.resize( kMaxNdEvents );
+        // Allocated here, never in process() (R3).
+        scratch_.assign( kNumBuses * kBusChannels * (std::size_t)kScratchFrames, 0.0f );
+        for( std::size_t b = 0; b < kNumBuses; ++b ) legacyBuses_[b] = nullptr;
         std::fill( std::begin( held_ ), std::end( held_ ), false );
     }
 
     // --- twPlugin -----------------------------------------------------------
 
     const twPluginIoLayout &ioLayout() const override { return io_; }
+
+    // Nine stereo output buses: main, then aux 1..8 (proposal 56 Q8, B7 and
+    // invariant 10 discharged: proposal 55's host passes every routed bus).
+    std::size_t     audioOutBusCount() const override { return kNumBuses; }
+    twPluginBusInfo audioOutBus( std::size_t i ) const override
+    {
+        twPluginBusInfo b;
+        if( i >= kNumBuses ) return b;
+        b.channels = (std::uint16_t)kBusChannels;
+        b.isMain   = ( i == 0 );
+        b.name     = ( i == 0 ) ? std::string( "Main" ) : "Aux " + std::to_string( i );
+        return b;
+    }
+
+    // WHICH BUSES THE HOST WILL READ (bit b = bus b; bit 0, main, ignored).
+    // Called by the slot processor under its mutex, between process() calls,
+    // on a routing change (followed by prepare() and reset()). It is the
+    // core's routed mask, shifted: bit k of the core's = aux k+1 = bus k+1.
+    void setRoutedOutBuses( std::uint32_t busMask ) override
+    {
+        hostBusMask_ = busMask & ( ( 1u << kNumBuses ) - 1u ) & ~1u;
+        setRoutedOutputs( hostBusMask_ >> 1 );
+    }
 
     void prepare( std::uint32_t sampleRate, std::uint32_t maxBlock ) override
     {
@@ -177,8 +223,12 @@ public:
         const twEventList      noEvents{};
         twEventOut             noSink;
         const twProcessContext noCtx{};
-        float *const *const    buses[1] = { out };
-        process( in, buses, nframes, noEvents, noSink, noCtx );
+        // A full-length array (plugins inv. 61): once a bus is routed the
+        // event-aware call reads outBuses[b] for it, so this overload must
+        // never hand it a one-element array. The aux entries stay null here: a
+        // routed bus with no buffer renders into scratch.
+        legacyBuses_[0] = out;
+        process( in, legacyBuses_, nframes, noEvents, noSink, noCtx );
     }
 
     void process( const float *const *in, float *const *const *outBuses,
@@ -231,14 +281,24 @@ public:
                 const std::int64_t toEdge = ( cell + 1 ) * kRrCellFrames - at;
                 if( toEdge < (std::int64_t)len ) len = (std::uint32_t)toEdge;
             }
+            // A routed bus may render into scratch, which holds kScratchFrames.
+            if( hostBusMask_ != 0 && len > kScratchFrames ) len = kScratchFrames;
             // This segment's events, rebased onto it.
             std::size_t first = ev;
             while( ev < nEv && (std::uint32_t)ndEvents_[ev].offset < done + len ) {
                 ndEvents_[ev].offset -= (std::int32_t)done;
                 ++ev;
             }
-            core_.process( pos + (std::int64_t)done, nEv > first ? &ndEvents_[first] : nullptr,
-                           (int)( ev - first ), outL + done, outR + done, (int)len );
+            if( hostBusMask_ == 0 ) {
+                // Nothing routed: the main-only call, exactly as before Q8, so
+                // every render without a return track is byte-identical.
+                core_.process( pos + (std::int64_t)done, nEv > first ? &ndEvents_[first] : nullptr,
+                               (int)( ev - first ), outL + done, outR + done, (int)len );
+            } else {
+                core_.process( pos + (std::int64_t)done, nEv > first ? &ndEvents_[first] : nullptr,
+                               (int)( ev - first ), segmentBuses( outBuses, done ), (int)kNumBuses,
+                               (int)len );
+            }
             done += len;
         }
 
@@ -264,7 +324,11 @@ public:
         recomputeTail();
     }
 
-    void setRoutedOutputs( std::uint32_t mask ) override { routedMask_ = mask; }
+    void setRoutedOutputs( std::uint32_t mask ) override
+    {
+        routedMask_ = mask;
+        core_.setRoutedOutputs( mask );
+    }
 
     int collectRetired() override { return core_.collectGarbage(); }
 
@@ -286,6 +350,27 @@ private:
         std::int64_t q = a / b;
         if( ( a % b ) != 0 && ( ( a < 0 ) != ( b < 0 ) ) ) --q;
         return q;
+    }
+
+    // The core's outBuses for the segment starting `done` frames into the
+    // chunk: main from the host; a ROUTED aux bus from the host when it handed
+    // one, else from scratch (see the file header); an unrouted aux bus null,
+    // and its host entry is never read (plugins inv. 61).
+    float *const *const *segmentBuses( float *const *const *outBuses, std::uint32_t done )
+    {
+        for( std::size_t b = 0; b < kNumBuses; ++b ) {
+            segBuses_[b] = nullptr;
+            const bool routed = ( b == 0 ) || ( hostBusMask_ & ( 1u << b ) );
+            if( !routed ) continue;
+            float *const *host = outBuses ? outBuses[b] : nullptr;
+            for( std::size_t c = 0; c < kBusChannels; ++c ) {
+                float *ptr = ( host && host[c] ) ? host[c] + done : nullptr;
+                if( !ptr ) ptr = scratch_.data() + ( b * kBusChannels + c ) * (std::size_t)kScratchFrames;
+                segPtrs_[b][c] = ptr;
+            }
+            segBuses_[b] = segPtrs_[b];
+        }
+        return segBuses_;
     }
 
     void resetPageTracking()
@@ -384,7 +469,15 @@ private:
     std::shared_ptr<const twSamplerProgram>                          program_;
     std::uint64_t                                                    programSerial_ = 0;
     std::map<std::uint32_t, std::shared_ptr<const twSamplerSample> > samples_;
-    std::uint32_t                                                    routedMask_ = 0;
+    std::uint32_t                                                    routedMask_ = 0;   // the core's: bit k = aux k+1
+    std::uint32_t                                                    hostBusMask_ = 0;  // the host's: bit b = bus b
+
+    // The aux outputs (Q8): scratch for a routed bus with no host buffer, and
+    // the per-segment pointer tables (no allocation in process()).
+    std::vector<float> scratch_;
+    float             *segPtrs_[kNumBuses][kBusChannels] = {};
+    float *const      *segBuses_[kNumBuses]               = {};
+    float *const      *legacyBuses_[kNumBuses];
 
     // Render state.
     std::vector<nd::Event> ndEvents_;
@@ -419,8 +512,8 @@ twPluginDescriptor nassauDigitalDescriptor()
     d.emitsNotes     = false;
     d.eventPortsIn   = 1;
     d.eventPortsOut  = 0;
-    d.nOutBuses      = 1;          // until Q8 (proposal 56 B7, invariant 10)
-    d.outBusChannels = { 2 };
+    d.nOutBuses      = (std::uint16_t)kNumBuses;   // main + 8 stereo aux (Q8; B7 until then)
+    d.outBusChannels.assign( kNumBuses, (std::uint16_t)kBusChannels );
     return d;
 }
 

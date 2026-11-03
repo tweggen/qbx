@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q8_reference">
+
+  <!-- PROPOSAL 56 Q8 (QBX-273): THE THREE GOLDENS THE Q8 CASES COMPARE WITH,
+       RENDERED WITH NOTHING ROUTED.
+
+       sampler_q8_outputs states Q8.1 and Q8.3 as byte identity with three
+       committed goldens. This case is where each golden comes from: a
+       NassauDigital slot with NO return track, so every zone plays on main
+       (an aux output nobody listens to falls back to main, DESIGN 3.1), and
+       the program edited down to the zones the golden is about.
+
+         ../goldens/sampler_q8_mixed.wav  kick AND hat, both heard on main
+         ../goldens/sampler_q8_kick.wav   the kick alone (the hat zone removed)
+         ../goldens/sampler_q8_hat.wav    the hat alone (the kick zone removed)
+
+       The kit is the same as sampler_q8_outputs':
+         kick  zone 1 (layer 2): key 36, root 36, one-shot, output aux1,
+               ../test_clipsaw.wav (2 s, a sawtooth, RMS 0.5485)
+         hat   zone 3 (layer 4): key 42, root 42, one-shot, main,
+               ../test_autosaw.wav
+       Kicks at tick 0 (frame 0: the render's FIRST frame carries the kick)
+       and tick 2400 (frame 60000: its 96000 frames cross the page boundary at
+       65536, so the second page starts inside a sounding kick). Hats at tick
+       1200 and 3600 (frames 30000 and 90000). 120 BPM, PPQ 960: 25 frames per
+       tick. Velocity 127 plays a layer at unity.
+
+       The kick zone names aux1 here too, and is heard on main only because
+       nothing routes aux 1: the fallback, not a different program. Each
+       golden fixes the core's arithmetic as the Q0 and Q2 goldens do; a core
+       bump that moves them says why (proposal 56 section 4.1). -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Drums"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Beat"/>
+    <add-note clip="0,0" tick="0"    dur="480" key="36" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="1200" dur="480" key="42" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="2400" dur="480" key="36" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="3600" dur="480" key="42" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36"
+              mode="oneshot" output="aux1" level="-15">
+      <layer src="file:../test_clipsaw.wav"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="42" keyHi="42" rootKey="42" mode="oneshot" level="-12">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3"
+                            scope="zone" id="1" attr="output" value="aux1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+
+    <!-- ================================================ mixed: both on main -->
+    <render filename="sq8r_mixed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8r_mixed.wav" expected="../goldens/sampler_q8_mixed.wav"/>
+    <!-- The first frames are the kick: "from the first frame" has something
+         to hear. -->
+    <assert-audio-energy filename="sq8r_mixed.wav" startFrame="0" frameCount="1024"
+                         channel="0" minRms="0.08" maxRms="1.0"/>
+
+    <!-- ========================================== kick: the hat zone removed -->
+    <remove-zone trackPath="0" slotIndex="0" zone="3"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq8r_kick.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8r_kick.wav" expected="../goldens/sampler_q8_kick.wav"/>
+    <undo count="1"/>
+
+    <!-- =========================================== hat: the kick zone removed -->
+    <remove-zone trackPath="0" slotIndex="0" zone="1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq8r_hat.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8r_hat.wav" expected="../goldens/sampler_q8_hat.wav"/>
+    <assert-audio-energy filename="sq8r_hat.wav" startFrame="0" frameCount="24000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <undo count="1"/>
+
+    <!-- The three must differ pairwise, or an identity with one of them says
+         nothing about which zones were heard. -->
+    <assert-file-identical actual="sq8r_mixed.wav" expected="../goldens/sampler_q8_kick.wav"
+                           expectReject="true"/>
+    <assert-file-identical actual="sq8r_mixed.wav" expected="../goldens/sampler_q8_hat.wav"
+                           expectReject="true"/>
+    <assert-file-identical actual="sq8r_kick.wav" expected="../goldens/sampler_q8_hat.wav"
+                           expectReject="true"/>
+  </actions>
+</SActionScript>
