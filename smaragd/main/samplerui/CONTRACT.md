@@ -193,10 +193,20 @@ geometry or a grab (sizes are asserted as constraints, minimum == maximum).
 | `sampler_q7_views` | Q7.1: the strip's Edit opens this window and no slider editor; the four views at their fixed sizes; a switch is one undo step and the window follows undo, redo and a script; the view and the flag survive a save and reload; a close clears the flag |
 | `sampler_q7_default_view` | Q7.1: a new instance starts in the per-user default (editor without a program; the program a verb creates, by `add-zone` and by a pad-only `set-sampler-view`); an existing instance keeps its view; an unknown value reads as Key; saved views survive a reload whatever the setting says |
 | `sampler_q7_hand_select` | Q7.2: one key selects its zone, two keys select both (each zone once, in key order), a chord grows while a key is held, the selection stays after release, another key replaces it, velocity 0 releases, a key with no zone empties it; no undo step (one undo takes back the view switch made before every key); the tap follows the input and its channel, exists only while the window is open, starts empty; a sequenced note selects nothing; not saved |
-| `sampler_q7_xml_pane` | Q7.3: one apply is one undo step (`undoIndex`), the address implied or written; five refusals add no step and say why; verb and attribute completion, the address and written attributes left out, nothing inside a value or outside a tag, the cursor deciding |
+| `sampler_q7_xml_pane` | Q7.3: one apply is one undo step (`undoIndex`), the address implied (on a second instance on track 1: the verbs' own `trackPath` default is "0", so track 0 cannot show it) or written; five refusals add no step and say why; verb and attribute completion, the address and written attributes left out, nothing inside a value or outside a tag, the cursor deciding |
 | `sampler_q7_knobs` | one drag one step, two drags two, no press one step per move; layer knobs; several selected zones in one step; the verbs' gesture merge without the widget, and what never merges (relative, other targets, other parameters) |
 | `sampler_q7_select_views` | what the views are handed (zones, gaps with clamping, a layerless zone, a closed gap, pad keys with a reassigned pad); Key and Map presses select (undoable, editing nothing); pad and bank presses; bank F's keyless pads |
 | `sampler_q7_drop` | a file on an empty key, on a covered key, on a key two zones cover (refused, unchanged), on a Map rectangle and on empty Map grid, an asset as one composite (one undo), on a pad, on the Zone view's zone with and without a layer; media and unknown payloads and a hidden view refused |
+
+### Sabotages (QBX-279)
+
+38, each watched failing (the harness restores every file from its own saved
+bytes and touches it); 37 bite. The one that cannot: an asset drop on an empty
+key without the explicit zone id — `add-zone` takes `nextId` anyway, the same
+id the composite's `set-layer` names, so the id only pins what already holds.
+Two needed the cases sharpened first: the implied address (the instance moved
+to track 1, see above) and completion inside a quoted value (a value holding a
+blank). The full list is in proposal 56 §11 "Q7 as built".
 
 ## Not gated / known limits
 

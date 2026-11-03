@@ -123,7 +123,11 @@
     <!-- Another verb, another list: set-pad-key declares n and key. -->
     <sampler-editor trackPath="0" slotIndex="0" action="xml-type" text="&lt;set-pad-key "/>
     <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=n,key|"/>
-    <!-- Inside a quoted value, or with no tag open, nothing. -->
+    <!-- Inside a quoted value, or with no tag open, nothing (a blank inside
+         the value would otherwise look like the start of an attribute). -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zones=&quot;1 ke"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=|xml="/>
     <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
                     text="&lt;set-zone zone=&quot;ke"/>
     <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=|xml="/>
@@ -135,10 +139,24 @@
                     text="&lt;set-la zone=&quot;1&quot;/&gt;" cursor="7"/>
     <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=set-layer|"/>
     <sampler-editor trackPath="0" slotIndex="0" action="xml-accept" choice="set-zone" expect="0"/>
+
+    <!-- THE ADDRESS IS THIS INSTANCE'S, not track 0's: a second instance on
+         track 1, its own editor, a verb with no address lands there. -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <sampler-editor trackPath="1" slotIndex="0" action="open"/>
+    <sampler-editor trackPath="1" slotIndex="0" action="xml-type"
+                    text="&lt;add-zone keyLo=&quot;0&quot; keyHi=&quot;127&quot;&gt;&lt;layer src=&quot;test:z&quot;/&gt;&lt;/add-zone&gt;"/>
+    <sampler-editor trackPath="1" slotIndex="0" action="xml-apply"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" zoneIds="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3"/>
   </actions>
 
   <assertions>
-    <assert-track-count equals="1"/>
+    <assert-track-count equals="2"/>
   </assertions>
 
 </SActionScript>
