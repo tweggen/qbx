@@ -1805,10 +1805,14 @@ nassau-digital#29). The answers are applied in §4.5 and §4.10 above.
    - Pad reassignment to another key, and the core's zone `pad` attribute, are
      not built.
    - A new instance starts in the Key view, not the per-user default (Q7.1).
-   - Assumptions DESIGN.md does not state, each taken as the simplest reading:
-     - Map and Zone views land as Key.
-     - "The pad's zone" is a one-key zone exactly on the pad's key.
-     - The whole-keyboard zone takes the core's default root, 60.
-     - A Key-view take onto a key that already has a one-key zone adds a
-       second zone there rather than replacing it.
+   - Still open (not yet asked): what the core's zone `pad` attribute means,
+     and how a pad reassigned to another key is stored.
+10. **Accepted by the author 2026-11-03** (built as the simplest reading of a
+    point DESIGN.md did not state, then put to the author):
+    - Map and Zone views land a take as the Key view does.
+    - The pad's zone is the first one-key zone on the pad's key; a new take
+      replaces its layer 1.
+    - The whole-keyboard zone is rooted on key 60.
+    - A Key-view take onto a key that already has a one-key zone adds a second
+      zone there rather than replacing it.
 
