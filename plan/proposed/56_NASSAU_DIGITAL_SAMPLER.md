@@ -1834,6 +1834,15 @@ part H. Where the text above did not survive the build:
 
 ### Q6 as built (QBX-272, 2026-11-02)
 
+*Correction (2026-11-03, QBX-277):* two readings below are SUPERSEDED by the
+author's pad answers (nassau-digital DESIGN §13, "Settled on 2026-11-03,
+pads"): a pad is no longer "key 36 + 16·bank + pad" (item 1) but the key the
+program's `<Pads>` table gives it, default 36 + n; and the pad's zone is no
+longer "the first zone with keyLo = keyHi = the pad's key" (items 5 and 10)
+but the zone COVERING the key, refused when more than one does. Banks stay
+0..5, and pads 92..95 now exist with a table row. Item 9's "pad reassignment … not built" and its open question are
+answered and built. See "QBX-277 pads" below.
+
 The author answered the four questions DESIGN.md left open about §7 before
 the build (nassau-digital DESIGN §13, "Settled on 2026-11-02",
 nassau-digital#29). The answers are applied in §4.5 and §4.10 above.
@@ -2122,3 +2131,112 @@ item 6). Where the text above did not survive the build, or needed reading:
    directly, so if that content holds an ARMED instrument track the freeze
    reaches a live-owned processor, is refused and counted, and the bounce is
    silent for that span. No case builds it.
+
+### QBX-277 pads (2026-11-03)
+
+The author's pad answers (nassau-digital DESIGN §13, "Settled on 2026-11-03,
+pads", nassau-digital#29), built in two PRs: the core grammar first
+(nassau-digital#32), then qbx on it. `NASSAU_DIGITAL_GIT_REF` points at
+nassau-digital main `eba2961` (#32 merged as `9d55932`; #33 on top is docs only).
+
+1. **The core's `<Pads>` table.** One `<Pad n key/>` row per pad off its
+   default key 36 + n, n = 16·(bank − 1) + (pad − 1) counting banks and
+   pads from 1. It is written after the zones and only when it has a row,
+   so no earlier program, and no golden, moves. The core validates it: n
+   and key 0..127, no duplicate n, one table. It also owns the rules a host
+   and the later player share: `padKey`, `setPadKey`, `padsOnKey`,
+   `padSelectedByKey`, `zonesCoveringKey`. `tw/sampler`'s
+   `twSamplerProgramModel` forwards each, so qbx reads no program attribute
+   itself (invariant 8). The zone attribute `pad` is still read and written
+   and means nothing.
+2. **`set-pad-key`** (`n`, `key`) sits beside `set-sampler-view` and edits
+   the PROGRAM through `SSamplerProgram::edit`, as the program verbs do:
+   - the table travels into an export, unlike the view state;
+   - the default key removes the pad's row;
+   - its inverse is `set-pad-key` with the previous key.
+3. **A pad exists when it has a key.** Six banks, pads 0..95 (the author,
+   2026-11-03): `n` above 95 is refused by the core and so by `set-pad-key`.
+   Without a row, bank 5 holds pads 0..11. Pads 12..15 of bank 5 (n 92..95)
+   have no default key, and once a row gives one a key `set-sampler-view`
+   accepts it.
+   `set-sampler-view` checks only a pad being chosen, so a view switch is
+   never refused over the pad already selected.
+4. **Pad landing** (`place-sampler-recording`, target pad):
+   - The pad's zone is the zone covering its key, at any velocity.
+   - Exactly one zone: its layer 1 is replaced, so every pad on that zone
+     hears the take.
+   - None: a new one-key zone.
+   - More than one: REFUSED with a reason naming the key and the zones.
+   - A pad with no key: REFUSED.
+5. **A device note selects the pad on its key.** `SSamplerKeyTaps`, which
+   sets the last key played, also calls `SSamplerProgram::selectPadByKey`:
+   - it switches bank when the pad is in another;
+   - on a shared key, the selected pad stays when it is one of them,
+     otherwise the lowest-numbered pad is selected;
+   - a key no pad plays changes nothing.
+   It works in every view. The change is live, not an undo step, and the
+   selection it leaves is saved (the author, 2026-11-03). `sampler_q6_view_verbs` injected notes and then landed on the
+   selected pad, so it now re-selects that pad after the notes.
+6. **Gates**, one .qxa each, all landing through the verb (the recorder's
+   half stays gated by `sampler_q6_record`):
+   - `sampler_pads_toms`: three pads on one tom zone (45..50, root 48, a
+     480 Hz sine), each at its own key, measured at **538.8 / 480 / 403.6 Hz**
+     (bands 533–545, 475–485, 399–408).
+   - `sampler_pads_record_shared`: a take on pad 5 replaces the shared zone's
+     layer 1. No zone is added and no id is spent. All three pads then play
+     it at those pitches, the root at the take's level (± 2 %). A take on
+     pad 6 replaces it again, and undo and redo are exact.
+   - `sampler_pads_refuse_layers`:
+     - two velocity zones on key 38 refuse a take, also on a reassigned pad
+       and with an explicit `key`, changing nothing and registering no asset;
+     - a pad with no covering zone lands a new one-key zone;
+     - a wide zone makes the keys covered twice and three times, and both
+       are refused.
+   - `sampler_pads_reassign`:
+     - undo, redo and back-to-default;
+     - eight refusals, n 96 and 100 among them, none creating a program
+       object;
+     - pad 93 (bank 5 pad 13) exists only with a row, and bank 6 is refused;
+     - save and reload carry the table and the selection.
+   - `sampler_pads_program`: a loaded program carries the table, with rows
+     out of order and an unknown row attribute. It is equal to its file
+     after the load, through an edit, and after a save and a reload.
+   - `sampler_pads_select_key`: the shared-key rule, the bank switch, keys
+     no pad plays, velocity 0 and note-off, and the selection saved.
+7. **Sabotages that bite**: nine, each watched failing. The harness restores
+   every file from its saved bytes and touches it; the cases run each time are
+   the six above plus `sampler_q6_view_verbs`.
+   - `set-pad-key`'s inverse restores the new key: `reassign`.
+   - `padKey()` ignores the table and uses 36 + n: all six pads cases.
+   - The pad's zone is the first one-key zone (the Q6 rule):
+     `record_shared`, `refuse_layers`.
+   - Several covering zones take the first, with no refusal:
+     `refuse_layers`.
+   - The key tap selects no pad: `select_key`, `q6_view_verbs`.
+   - A shared key always selects the lowest pad: `select_key`.
+   - The key tap selects only inside the visible bank: `select_key`,
+     `q6_view_verbs`.
+   - `set-sampler-view` accepts only pads on their default key: `reassign`.
+   - The saved program loses its table: `reassign`, `program`.
+   - *(Six banks, 2026-11-03)* the core's `setPadKey` taking n up to 127,
+     built through qbx: `reassign`.
+   Raising qbx's own `kPadBanks` back to 8 bites nothing, and cannot: the
+   core has 96 pads, so a pad of bank 6 or 7 never has a key and is refused
+   either way. The bound lives in the core.
+   The core's own sabotages (ten) are in nassau-digital GATES C1.
+8. **Not gated / not built**:
+   - No qbx verb exports a program yet. The cases read the program text an
+     export writes.
+   - The device-note pad selection does not mark the project modified.
+   - A library overlay cannot reassign a pad: the core has no overlay verb
+     for the table. That is the follow-up QBX-278.
+   - A row on its default key, read from a file, is kept, not normalised
+     away (the author's answer). Reassigning such a pad and undoing it removes the row rather than
+     restoring it. The pad plays the same key either way, but the program is
+     not structurally equal to before.
+9. **The author's answers (2026-11-03)** to the four readings this build put
+   to them, applied above and in nassau-digital DESIGN §13 (#32):
+   - six banks, pads 0..95; the core refuses a larger `n`;
+   - device-note selection works in every view and is not undoable, as built;
+   - a row already on its default key is kept, as built;
+   - pads in a library overlay are the follow-up QBX-278.

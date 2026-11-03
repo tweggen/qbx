@@ -118,6 +118,26 @@ public:
     bool layerXml( std::uint32_t id, std::string *xml, std::uint32_t *zoneId,
                    std::size_t *index ) const;
 
+    // --- the pads (nassau-digital DESIGN §7, §13 "Settled on 2026-11-03, pads") --
+    // A pad names a KEY; its zone is the zone covering that key. Pad n is the
+    // index over all banks (n = 16·bank + pad, counting from 0) and defaults to
+    // key 36 + n; the program's <Pads> table holds the pads off their default.
+    // All of it is the core's (nd::Program::padKey, padsOnKey, ...).
+    static constexpr int kNumPads = 96;   // six banks of 16 (the author, 2026-11-03)
+    // Pad n's key: its table row's, else 36 + n, else -1 (n 92..95 with no row,
+    // or n out of 0..95).
+    int padKey( int n ) const;
+    // The table as rows (n, key) in the order the core writes them.
+    std::vector<std::pair<int, int>> padRows() const;
+    // The pads playing `key`, lowest first.
+    std::vector<int> padsOnKey( int key ) const;
+    // The pad a device note on `key` selects: `currentPad` if it plays the
+    // key, else the lowest-numbered pad that does; -1 when none does.
+    int padSelectedByKey( int key, int currentPad ) const;
+    // The zones covering `key` (keyLo <= key <= keyHi, any velocity), in
+    // program order.
+    std::vector<std::uint32_t> zonesCoveringKey( int key ) const;
+
     static twSamplerParamKind       paramKind( twSamplerScope scope, const std::string &attr );
     static std::vector<std::string> paramNames( twSamplerScope scope );
 
@@ -153,6 +173,13 @@ public:
     bool reinsertZone( const std::string &xml, std::size_t index, std::string *error );
     bool reinsertLayer( const std::string &xml, std::uint32_t zoneId, std::size_t index,
                         std::string *error );
+
+    // Point pad n at `key` (the core's nd::setPadKey): only the key changes,
+    // the default key removes the row. `priorKey` receives the key before the
+    // edit, which undoes it (-1 for a pad that had none, which is a valid
+    // `key` for exactly such a pad). Refused (false, `error`): n out of 0..95,
+    // key out of 0..127.
+    bool setPadKey( int n, int key, int *priorKey, std::string *error );
 
     struct Impl;
 

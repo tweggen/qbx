@@ -543,7 +543,7 @@ bool SSamplerProgram::viewFromText( const QString &text, View &out )
 
 void SSamplerProgram::setViewState( View view, int padBank, int pad )
 {
-    if( !padExists( padBank, pad ) ) return;
+    if( !padInRange( padBank, pad ) ) return;
     if( view == view_ && padBank == padBank_ && pad == pad_ ) return;
     view_    = view;
     padBank_ = padBank;
@@ -591,6 +591,20 @@ unsigned SSamplerProgram::recordInputMask() const
 {
     unsigned m = 0;
     return splitRecordInput( recordInput_, nullptr, &m ) ? m : 0u;
+}
+
+bool SSamplerProgram::selectPadByKey( int key )
+{
+    if( key < 0 || key > 127 || !isReadable() ) return false;
+    const int n = model_.padSelectedByKey( key, padNumber() );
+    // -1: no pad plays the key. The core's pads are exactly the six banks
+    // (0..95), so the bound below is a guard, never met.
+    if( n < 0 || n >= kPadBanks * kPadsPerBank ) return false;
+    const int bank = n / kPadsPerBank;
+    const int pad  = n % kPadsPerBank;
+    if( bank == padBank_ && pad == pad_ ) return false;
+    setViewState( view_, bank, pad );
+    return true;
 }
 
 void SSamplerProgram::setLastKey( int key )
@@ -1583,7 +1597,7 @@ SLink *SSamplerProgram::instantiateFromDomElement( SProjectLoader &loader, QDomE
         }
         const int bank = element.attribute( QStringLiteral( "padBank" ), "0" ).toInt();
         const int pad  = element.attribute( QStringLiteral( "pad" ), "0" ).toInt();
-        if( padExists( bank, pad ) ) {
+        if( prog->padExists( bank, pad ) ) {
             prog->view_    = v;
             prog->padBank_ = bank;
             prog->pad_     = pad;

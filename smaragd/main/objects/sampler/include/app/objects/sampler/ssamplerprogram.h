@@ -185,17 +185,26 @@ public:
     // set-sampler-view and set-sampler-record-input (ssamplerrecordactions.h);
     // they change no sound and publish nothing.
     enum class View { Key, Pad, Map, Zone };
-    // Pads are banks of 16 consecutive keys from key 36 (DESIGN §7): pad p of
-    // bank b plays key 36 + 16·b + p. Banks 0..5; a pad whose key would pass
-    // 127 does not exist (bank 5 holds pads 0..11).
-    static constexpr int kPadBaseKey  = 36;
-    static constexpr int kPadsPerBank = 16;
-    static constexpr int kPadBanks    = 6;
-    static int  padKeyOf( int bank, int pad ) { return kPadBaseKey + kPadsPerBank * bank + pad; }
-    static bool padExists( int bank, int pad )
+    // THE PADS (DESIGN §7; §13 "Settled on 2026-11-03, pads", QBX-277). Pads
+    // are banks of 16: pad p of bank b is pad n = 16·b + p over all banks,
+    // which the CORE maps to a key — its row in the program's <Pads> table,
+    // else its default 36 + n. A pad names a key, not a zone; its zone is
+    // the zone covering that key. Six banks, 0..5 (the core's 96 pads; the
+    // author, 2026-11-03); a pad EXISTS when it has a key, so without a table
+    // row bank 5 holds pads 0..11, and pads 12..15 of bank 5 (n 92..95, whose
+    // defaults would pass 127) exist only once a row gives them a key.
+    static constexpr int kPadDefaultBaseKey = 36;
+    static constexpr int kPadsPerBank       = 16;
+    static constexpr int kPadBanks          = 6;
+    static int  padNumberOf( int bank, int pad ) { return kPadsPerBank * bank + pad; }
+    static bool padInRange( int bank, int pad )
     {
-        return bank >= 0 && bank < kPadBanks && pad >= 0 && pad < kPadsPerBank &&
-               padKeyOf( bank, pad ) <= 127;
+        return bank >= 0 && bank < kPadBanks && pad >= 0 && pad < kPadsPerBank;
+    }
+    // In range AND the program gives the pad a key.
+    bool padExists( int bank, int pad ) const
+    {
+        return padInRange( bank, pad ) && model_.padKey( padNumberOf( bank, pad ) ) >= 0;
     }
     static QString viewText( View v );
     static bool    viewFromText( const QString &text, View &out );
@@ -203,9 +212,20 @@ public:
     View view() const { return view_; }
     int  padBank() const { return padBank_; }
     int  pad() const { return pad_; }
-    int  padKey() const { return padKeyOf( padBank_, pad_ ); }
-    // Callers validate (padExists); a pad that does not exist is not stored.
+    int  padNumber() const { return padNumberOf( padBank_, pad_ ); }
+    // The selected pad's key, from the program's table (-1: the pad has none,
+    // which only an undone set-pad-key on a pad past the defaults can leave).
+    int  padKey() const { return model_.padKey( padNumber() ); }
+    // Callers validate (padExists); a bank or pad out of range is not stored.
     void setViewState( View view, int padBank, int pad );
+    // A NOTE FROM THE DEVICE INPUT SELECTS THE PAD MAPPED TO ITS KEY (DESIGN
+    // §13, 2026-11-03), switching bank when the pad is in another: when
+    // several pads share the key the selected pad stays if it is one of them,
+    // otherwise the lowest-numbered one (the core's padSelectedByKey). A key
+    // no pad plays changes nothing. Live, from SSamplerKeyTaps, not an undo
+    // step; the selection it leaves is saved like any other. True when the
+    // selection changed.
+    bool selectPadByKey( int key );
 
     // Q-1 (answered 2026-11-01): the instance's OWN record input, spelled as a
     // track input is, `audio:<device>:<mask>` (<mask> hex), or empty for none.

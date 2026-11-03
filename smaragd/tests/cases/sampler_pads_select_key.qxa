@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-277 (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"): A NOTE
+  FROM THE DEVICE INPUT SELECTS THE PAD MAPPED TO ITS KEY, "in the visible
+  bank, and switches bank when the pad is in another one. When several pads
+  share that key, the selected pad stays selected if it is one of them;
+  otherwise the lowest-numbered one is selected."
+
+  The note comes through the instance's device MIDI input tap (the shell's
+  SSamplerKeyTaps, the tap that gives the last key played), injected with
+  midi-in-event on the capture port. Pads 3 and 20 are pointed at key 40,
+  where pad 4 sits by default: three pads share key 40.
+
+    selected pad 0 (key 36), a note on 40       -> pad 3, the lowest
+    selected pad 20 (bank 1 pad 4), a note on 40 -> stays 20
+    selected pad 4, a note on 40                 -> stays 4
+    a note on 60 (only pad 24 plays it)          -> bank 1 pad 8: bank switched
+    a note on 39 (pad 3's default, reassigned)   -> nothing changes
+    a velocity-0 note-on, a note-off             -> nothing changes
+    a note on 20 (no pad plays it)               -> nothing changes
+-->
+<SActionScript version="1" name="sampler_pads_select_key">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="60" mode="oneshot">
+      <layer src="test:kit"/>
+    </add-zone>
+    <set-pad-key trackPath="0" slotIndex="0" n="3" key="40"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="20" key="40"/>
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="0" pad="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padsOnKey="3;4;20" onKey="40"
+                            padBank="0" pad="0" padKey="36"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- Not one of them: the lowest-numbered, pad 3. -->
+    <midi-in-event kind="noteon" key="40" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="40" padBank="0" pad="3" padKey="40"/>
+
+    <!-- Pad 20 selected: it plays 40, so it stays. -->
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="1" pad="4"/>
+    <midi-in-event kind="noteon" key="40" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="1" pad="4" padKey="40"/>
+
+    <!-- Pad 4 selected (its default is 40): it stays. -->
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="0" pad="4"/>
+    <midi-in-event kind="noteon" key="40" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="0" pad="4"/>
+
+    <!-- Key 60: pad 24 alone, in bank 1: the bank switches. -->
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="60" padBank="1" pad="8" padKey="60"/>
+
+    <!-- Key 39: pad 3's default, which no pad plays now. -->
+    <midi-in-event kind="noteon" key="39" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="39" padBank="1" pad="8"/>
+
+    <!-- A velocity-0 note-on and a note-off select nothing. -->
+    <midi-in-event kind="noteon" key="40" velocity="0" channel="0"/>
+    <midi-in-event kind="noteoff" key="41" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="39" padBank="1" pad="8"/>
+
+    <!-- Key 20: below every pad. -->
+    <midi-in-event kind="noteon" key="20" velocity="100" channel="0"/>
+    <wait-ms ms="200"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="20" padBank="1" pad="8"/>
+
+    <!-- The selection the notes left is saved like any other. -->
+    <save-project path="../../build/sampler_pads_select_key.qxp"/>
+    <load-project path="../../build/sampler_pads_select_key.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="1" pad="8" padKey="60"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

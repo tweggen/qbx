@@ -575,4 +575,46 @@ bool twSamplerProgramModel::reinsertLayer( const std::string &xml, std::uint32_t
     return true;
 }
 
+static_assert( twSamplerProgramModel::kNumPads == nd::kNumPads, "the pad count is the core's" );
+
+// --- the pads ----------------------------------------------------------------------
+
+int twSamplerProgramModel::padKey( int n ) const
+{
+    return impl_->program.padKey( n );
+}
+
+std::vector<std::pair<int, int>> twSamplerProgramModel::padRows() const
+{
+    std::vector<std::pair<int, int>> out;
+    for( const nd::PadRow &r : impl_->program.pads ) out.emplace_back( r.n, r.key );
+    return out;
+}
+
+std::vector<int> twSamplerProgramModel::padsOnKey( int key ) const
+{
+    return nd::padsOnKey( impl_->program, key );
+}
+
+int twSamplerProgramModel::padSelectedByKey( int key, int currentPad ) const
+{
+    return nd::padSelectedByKey( impl_->program, key, currentPad );
+}
+
+std::vector<std::uint32_t> twSamplerProgramModel::zonesCoveringKey( int key ) const
+{
+    return nd::zonesCoveringKey( impl_->program, key );
+}
+
+bool twSamplerProgramModel::setPadKey( int n, int key, int *priorKey, std::string *error )
+{
+    const nd::PadEditResult r = nd::setPadKey( impl_->program, n, key );
+    if( !r.ok ) {
+        if( error ) *error = r.error;
+        return false;
+    }
+    if( priorKey ) *priorKey = r.priorKey;
+    return true;
+}
+
 }  // namespace audio

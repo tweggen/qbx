@@ -27,7 +27,11 @@ class SSamplerProgram;
  * (SMidiInputHub's fan-out: its own SPSC ring, filled on the device thread),
  * the tap Q7.2's hand selection will read as well. A main-thread poll drains
  * the rings and hands each note-on (velocity > 0) to
- * SSamplerProgram::setLastKey(). Live state: nothing here is saved.
+ * SSamplerProgram::setLastKey(), and since QBX-277 to
+ * SSamplerProgram::selectPadByKey(): a device note selects the pad mapped to
+ * its key (DESIGN §13, "Settled on 2026-11-03, pads"). The last key is live
+ * and not saved; the pad selection it leaves is the program object's saved
+ * state, changed here without an undo step.
  *
  * WHICH INSTANCES: every NassauDigital program on the chain of a track whose
  * input is MIDI (`midi:<port>:<ch|any>` or `keyboard`), armed or not, under

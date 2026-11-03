@@ -11,6 +11,16 @@
 //                             with all three previous values. Brought forward
 //                             from Q7 into Q6 (the author, 2026-11-02): the
 //                             editor will drive this same verb.
+//   set-pad-key               `n` (the pad over all banks, 0..95), `key`
+//                             (0..127). Points the pad at another key in the
+//                             program's <Pads> table (DESIGN §13, 2026-11-03,
+//                             QBX-277): only the key changes, no zone moves;
+//                             the pad's default key (36 + n) removes its row.
+//                             It EDITS THE PROGRAM (it travels into an
+//                             export), through SSamplerProgram::edit like the
+//                             program verbs. The inverse is set-pad-key with
+//                             the previous key (`key` = -1 only for a pad
+//                             past the defaults, 92..95, that had no key).
 //   set-sampler-record-input  `input` = audio:<device>:<mask> | "" (none).
 //                             The instance's own record input (Q-1). Absolute;
 //                             the inverse is itself with the previous value.
@@ -28,12 +38,17 @@
 // remembered, so a redo lands it where it landed:
 //   target   `target` when given, else the instance's view: Pad -> pad, any
 //            other view -> key.
-//   pad      key K = `key` when given, else the selected pad's key. The pad's
-//            zone is the first zone with keyLo == keyHi == K: when it exists
-//            its FIRST layer is replaced (src, start, end; loop points reset to
-//            the whole sample and beats to 0; every other layer setting kept),
-//            when it has no layer one is added; otherwise a new one-key zone
-//            on K, rootKey K.
+//   pad      key K = `key` when given, else the selected pad's key (the
+//            program's <Pads> table; refused when the pad has none). The
+//            pad's zone is THE ZONE COVERING K (keyLo <= K <= keyHi, any
+//            velocity; DESIGN §13, "Settled on 2026-11-03, pads", QBX-277),
+//            so several pads may share it: when exactly one zone covers K its
+//            FIRST layer is replaced (src, start, end; loop points reset to
+//            the whole sample and beats to 0; every other layer setting kept)
+//            and every pad on that zone hears the take; when it has no layer
+//            one is added. No zone covering K: a new one-key zone on K,
+//            rootKey K. MORE THAN ONE (velocity layers, round-robin zones):
+//            REFUSED with a reason, nothing changes.
 //   key      a program with no zones: a zone over the whole keyboard (keyLo 0,
 //            keyHi 127, the core's default root key, 60). A program with zones:
 //            a new one-key zone on K = `key` when given, else the LAST KEY
@@ -66,6 +81,25 @@ private:
     QString view_;          // empty = keep
     int     padBank_ = -1;  // -1 = keep
     int     pad_     = -1;  // -1 = keep
+};
+
+class SSetPadKeyAction : public SSamplerAction {
+public:
+    SSetPadKeyAction() = default;
+    SSetPadKeyAction( const QString &trackPath, int slotIndex, int n, int key )
+        : SSamplerAction( trackPath, slotIndex ), n_( n ), key_( key ), hasN_( true ),
+          hasKey_( true ) {}
+    QString name() const override { return QStringLiteral( "set-pad-key" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    int  n_      = -1;
+    int  key_    = -1;
+    bool hasN_   = false;
+    bool hasKey_ = false;
 };
 
 class SSetSamplerRecordInputAction : public SSamplerAction {

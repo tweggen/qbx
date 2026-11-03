@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-277 (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"):
+  RECORDING ONTO A SHARED ZONE. "Recording onto a pad replaces layer 1 of the
+  zone covering the pad's key, so every pad on that zone hears the new
+  sample."
+
+  The tom zone of sampler_pads_toms (zone 1: keys 45..50, root 48), playing
+  test_autosaw.wav at first, with pads 4, 5 and 6 on keys 50, 48 and 45. A
+  KICK zone on key 36 (zone 3) stands beside it and must not move.
+
+  The take lands through place-sampler-recording itself (the verb the
+  recorder submits at stop; sampler_q6_record gates the recorder's half), in
+  the Pad view, with pad 5 (key 48, INSIDE the zone, not its edge) selected:
+  the zone covering 48 is zone 1, so its layer 1 (layer 2) is REPLACED by
+  test_stereo.wav (a 480 Hz sine). No zone is added, no id is spent. Then all
+  three pads hear the take: each pad's key plays the sine at its own pitch
+  (538.8, 480, 403.6 Hz), which the saw it replaced does not. At the root
+  key the note plays the take at its own level (ratio 1 +/- 2 %).
+
+  A take on pad 6 (key 45, the zone's lower edge) replaces the same layer
+  again. One undo puts the first take back exactly, the next one the saw.
+-->
+<SActionScript version="1" name="sampler_pads_record_shared">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="45" keyHi="50" rootKey="48" mode="gated">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36" mode="oneshot">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <set-pad-key trackPath="0" slotIndex="0" n="4" key="50"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="48"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="6" key="45"/>
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="0" pad="5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="5"
+                            pads="4:50;5:48;6:45" padKey="48" capture="saw"/>
+
+    <insert-midi-clip trackPath="0" timePos="0" duration="11520" name="Toms"/>
+    <add-note clip="0,0" tick="40" dur="960" key="50" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="1960" dur="960" key="48" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="3880" dur="960" key="45" velocity="127" channel="0"/>
+
+    <!-- .............................................. the take on pad 5 -->
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_stereo.wav"/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: pad key 48: layer 2 of zone 1 replaced" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="5"
+                            differsFromCaptured="saw"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="src"
+                            value="file:../test_stereo.wav"/>
+    <!-- The kick zone is untouched, and so is the tom zone's key range. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="4" attr="src"
+                            value="file:../test_autosaw.wav"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyLo" value="45"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyHi" value="50"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="take1"/>
+
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="spads_shared.wav" format="wav" quality="10" durationSec="3.5"/>
+    <!-- All three pads hear the take, each at its own key. -->
+    <assert-audio-frequency filename="spads_shared.wav" channel="0" startFrame="2000"
+                            frameCount="16000" minHz="533" maxHz="545"/>
+    <assert-audio-frequency filename="spads_shared.wav" channel="0" startFrame="50000"
+                            frameCount="16000" minHz="475" maxHz="485"/>
+    <assert-audio-frequency filename="spads_shared.wav" channel="0" startFrame="98000"
+                            frameCount="16000" minHz="399" maxHz="408"/>
+    <!-- At the root (pad 5's key, tick 1960 = frame 49000) at the take's level. -->
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="2" filename="spads_shared.wav"
+                                    noteFrame="49000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+
+    <!-- ...................... a take on pad 6 (the zone's lower edge) -->
+    <set-sampler-view trackPath="0" slotIndex="0" pad="6"/>
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_autosaw.wav"/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: pad key 45: layer 2 of zone 1 replaced" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="5"
+                            differsFromCaptured="take1"/>
+
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="take1"/>
+    <undo/>
+    <!-- The set-sampler-view to pad 6. -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saw" assetAbsent="Recording 1"
+                            padKey="48"/>
+    <redo/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="take1" padKey="45"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

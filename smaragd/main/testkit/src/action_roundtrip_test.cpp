@@ -116,6 +116,9 @@ const Fixture kFixtures[] = {
       "<set-sampler-view trackPath='0' slotIndex='0' view='pad' padBank='1' pad='5'/>" },
     { "set-sampler-record-input",
       "<set-sampler-record-input trackPath='0' slotIndex='0' input='audio:dev:3'/>" },
+    // QBX-277: a pad's key, in the program's <Pads> table.
+    { "set-pad-key",
+      "<set-pad-key trackPath='Drums:0' slotIndex='1' n='20' key='45'/>" },
     { "place-sampler-recording",
       "<place-sampler-recording trackPath='Drums:0' slotIndex='1' filePath='take.wav'"
       " srcOffset='480' length='96000' target='key' key='67'/>" },
@@ -1206,6 +1209,7 @@ const LaneRow kLaneRows[] = {
     // Proposal 56 Q6: aimed at a NassauDigital program as the Q1 verbs are.
     { "set-sampler-view",         Accept, "as add-zone; instance state only" },
     { "set-sampler-record-input", Accept, "as add-zone; instance state only" },
+    { "set-pad-key",              Accept, "as add-zone; edits the program's <Pads> table" },
     { "place-sampler-recording",  Accept, "lands in a NassauDigital program, which a system lane cannot hold; never on the lane" },
     { "assert-sampler-recording-level", Accept, "read-only" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
