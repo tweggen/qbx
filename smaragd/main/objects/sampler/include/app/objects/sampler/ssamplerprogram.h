@@ -189,12 +189,13 @@ public:
     // are banks of 16: pad p of bank b is pad n = 16·b + p over all banks,
     // which the CORE maps to a key — its row in the program's <Pads> table,
     // else its default 36 + n. A pad names a key, not a zone; its zone is
-    // the zone covering that key. Banks 0..7 (the core's 128 pads); a pad
-    // EXISTS when it has a key, so without a table row bank 5 holds pads
-    // 0..11 and banks 6 and 7 hold none (their defaults would pass 127).
+    // the zone covering that key. Six banks, 0..5 (the core's 96 pads; the
+    // author, 2026-11-03); a pad EXISTS when it has a key, so without a table
+    // row bank 5 holds pads 0..11, and pads 12..15 of bank 5 (n 92..95, whose
+    // defaults would pass 127) exist only once a row gives them a key.
     static constexpr int kPadDefaultBaseKey = 36;
     static constexpr int kPadsPerBank       = 16;
-    static constexpr int kPadBanks          = 8;
+    static constexpr int kPadBanks          = 6;
     static int  padNumberOf( int bank, int pad ) { return kPadsPerBank * bank + pad; }
     static bool padInRange( int bank, int pad )
     {

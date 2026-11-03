@@ -123,9 +123,9 @@ public:
     // index over all banks (n = 16·bank + pad, counting from 0) and defaults to
     // key 36 + n; the program's <Pads> table holds the pads off their default.
     // All of it is the core's (nd::Program::padKey, padsOnKey, ...).
-    static constexpr int kNumPads = 128;
-    // Pad n's key: its table row's, else 36 + n, else -1 (n >= 92 with no row,
-    // or n out of 0..127).
+    static constexpr int kNumPads = 96;   // six banks of 16 (the author, 2026-11-03)
+    // Pad n's key: its table row's, else 36 + n, else -1 (n 92..95 with no row,
+    // or n out of 0..95).
     int padKey( int n ) const;
     // The table as rows (n, key) in the order the core writes them.
     std::vector<std::pair<int, int>> padRows() const;
@@ -177,7 +177,7 @@ public:
     // Point pad n at `key` (the core's nd::setPadKey): only the key changes,
     // the default key removes the row. `priorKey` receives the key before the
     // edit, which undoes it (-1 for a pad that had none, which is a valid
-    // `key` for exactly such a pad). Refused (false, `error`): n out of 0..127,
+    // `key` for exactly such a pad). Refused (false, `error`): n out of 0..95,
     // key out of 0..127.
     bool setPadKey( int n, int key, int *priorKey, std::string *error );
 

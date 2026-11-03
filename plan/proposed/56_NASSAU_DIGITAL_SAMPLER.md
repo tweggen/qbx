@@ -1834,8 +1834,8 @@ author's pad answers (nassau-digital DESIGN §13, "Settled on 2026-11-03,
 pads"): a pad is no longer "key 36 + 16·bank + pad" (item 1) but the key the
 program's `<Pads>` table gives it, default 36 + n; and the pad's zone is no
 longer "the first zone with keyLo = keyHi = the pad's key" (items 5 and 10)
-but the zone COVERING the key, refused when more than one does. Banks are
-0..7 now. Item 9's "pad reassignment … not built" and its open question are
+but the zone COVERING the key, refused when more than one does. Banks stay
+0..5, and pads 92..95 now exist with a table row. Item 9's "pad reassignment … not built" and its open question are
 answered and built. See "QBX-277 pads" below.
 
 The author answered the four questions DESIGN.md left open about §7 before
@@ -1967,9 +1967,11 @@ that PR's branch commit `91aac9a` until it merges, then at the merge commit.
    - the table travels into an export, unlike the view state;
    - the default key removes the pad's row;
    - its inverse is `set-pad-key` with the previous key.
-3. **A pad exists when it has a key.** Banks are 0..7 (the core's 128 pads).
-   Without a row, bank 5 holds pads 0..11 and banks 6–7 hold none. A row
-   gives such a pad a key, and `set-sampler-view` then accepts it.
+3. **A pad exists when it has a key.** Six banks, pads 0..95 (the author,
+   2026-11-03): `n` above 95 is refused by the core and so by `set-pad-key`.
+   Without a row, bank 5 holds pads 0..11. Pads 12..15 of bank 5 (n 92..95)
+   have no default key, and once a row gives one a key `set-sampler-view`
+   accepts it.
    `set-sampler-view` checks only a pad being chosen, so a view switch is
    never refused over the pad already selected.
 4. **Pad landing** (`place-sampler-recording`, target pad):
@@ -1985,8 +1987,8 @@ that PR's branch commit `91aac9a` until it merges, then at the merge commit.
    - on a shared key, the selected pad stays when it is one of them,
      otherwise the lowest-numbered pad is selected;
    - a key no pad plays changes nothing.
-   The change is live, not an undo step, and the selection it leaves is
-   saved. `sampler_q6_view_verbs` injected notes and then landed on the
+   It works in every view. The change is live, not an undo step, and the
+   selection it leaves is saved (the author, 2026-11-03). `sampler_q6_view_verbs` injected notes and then landed on the
    selected pad, so it now re-selects that pad after the notes.
 6. **Gates**, one .qxa each, all landing through the verb (the recorder's
    half stays gated by `sampler_q6_record`):
@@ -2005,8 +2007,9 @@ that PR's branch commit `91aac9a` until it merges, then at the merge commit.
        are refused.
    - `sampler_pads_reassign`:
      - undo, redo and back-to-default;
-     - six refusals, none creating a program object;
-     - pad 100 (bank 6) exists only with a row;
+     - eight refusals, n 96 and 100 among them, none creating a program
+       object;
+     - pad 93 (bank 5 pad 13) exists only with a row, and bank 6 is refused;
      - save and reload carry the table and the selection.
    - `sampler_pads_program`: a loaded program carries the table, with rows
      out of order and an unknown row attribute. It is equal to its file
@@ -2028,15 +2031,25 @@ that PR's branch commit `91aac9a` until it merges, then at the merge commit.
      `q6_view_verbs`.
    - `set-sampler-view` accepts only pads on their default key: `reassign`.
    - The saved program loses its table: `reassign`, `program`.
-   The core's own eight sabotages are in nassau-digital GATES C1.
+   - *(Six banks, 2026-11-03)* the core's `setPadKey` taking n up to 127,
+     built through qbx: `reassign`.
+   Raising qbx's own `kPadBanks` back to 8 bites nothing, and cannot: the
+   core has 96 pads, so a pad of bank 6 or 7 never has a key and is refused
+   either way. The bound lives in the core.
+   The core's own sabotages (ten) are in nassau-digital GATES C1.
 8. **Not gated / not built**:
    - No qbx verb exports a program yet. The cases read the program text an
      export writes.
    - The device-note pad selection does not mark the project modified.
    - A library overlay cannot reassign a pad: the core has no overlay verb
-     for the table.
+     for the table. That is the follow-up QBX-278.
    - A row on its default key, read from a file, is kept, not normalised
-     away. Reassigning such a pad and undoing it removes the row rather than
+     away (the author's answer). Reassigning such a pad and undoing it removes the row rather than
      restoring it. The pad plays the same key either way, but the program is
      not structurally equal to before.
-
+9. **The author's answers (2026-11-03)** to the four readings this build put
+   to them, applied above and in nassau-digital DESIGN §13 (#32):
+   - six banks, pads 0..95; the core refuses a larger `n`;
+   - device-note selection works in every view and is not undoable, as built;
+   - a row already on its default key is kept, as built;
+   - pads in a library overlay are the follow-up QBX-278.

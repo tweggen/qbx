@@ -10,10 +10,11 @@
   equals its capture); a reassignment back to the default and its undo;
   the refusals (n 128, key 128, key -1 on a pad that has a default, a
   missing n or key), each changing nothing and creating no program object
-  when there is none; a pad PAST the defaults (pad 100, bank 6 pad 4) that
-  exists only once a row gives it a key, which set-sampler-view then
-  accepts; and a save and reload carrying the table, the selection on that
-  pad and its key.
+  when there is none; six banks, so n 96 and 100 are refused (the author's
+  answer of 2026-11-03); a pad PAST the defaults (pad 93, bank 5 pad 13,
+  whose default 129 would pass 127) that exists only once a row gives it a
+  key, which set-sampler-view then accepts; and a save and reload carrying
+  the table, the selection on that pad and its key.
 -->
 <SActionScript version="1" name="sampler_pads_reassign">
 
@@ -63,9 +64,13 @@
 
     <!-- ......................................................... refusals -->
     <set-pad-key trackPath="0" slotIndex="0" n="128" key="40" expectReject="true"/>
-    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: pad 128 is not a pad (0..127)" minCount="1"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: pad 128 is not a pad (0..95)" minCount="1"/>
     <set-pad-key trackPath="0" slotIndex="0" n="-1" key="40" expectReject="true"/>
-    <assert-log contains="REFUSED: pad -1 is not a pad (0..127)" minCount="1"/>
+    <assert-log contains="REFUSED: pad -1 is not a pad (0..95)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="96" key="40" expectReject="true"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: pad 96 is not a pad (0..95)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="100" key="40" expectReject="true"/>
+    <assert-log contains="REFUSED: pad 100 is not a pad (0..95)" minCount="1"/>
     <set-pad-key trackPath="0" slotIndex="0" n="5" key="128" expectReject="true"/>
     <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: key 128 is not a MIDI key (0..127)" minCount="1"/>
     <set-pad-key trackPath="0" slotIndex="0" n="5" key="-1" expectReject="true"/>
@@ -77,24 +82,26 @@
     <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5"/>
 
     <!-- ........................................ a pad past the defaults -->
-    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="4" expectReject="true"/>
-    <set-pad-key trackPath="0" slotIndex="0" n="100" key="70"/>
-    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60;100:70"/>
-    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="4"/>
-    <assert-sampler-program trackPath="0" slotIndex="0" padBank="6" pad="4" padKey="70"/>
-    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="5" expectReject="true"/>
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="5" pad="13" expectReject="true"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="93" key="70"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60;93:70"/>
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="5" pad="13"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="5" pad="13" padKey="70"/>
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="5" pad="14" expectReject="true"/>
+    <!-- Six banks: bank 6 is no bank. -->
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="0" expectReject="true"/>
     <assert-sampler-program trackPath="0" slotIndex="0" capture="saved"/>
 
     <!-- ................................................... save, reload -->
     <save-project path="../../build/sampler_pads_reassign.qxp"/>
     <assert-file-contains path="../../build/sampler_pads_reassign.qxp"
-                          text="&lt;Pad n=&quot;100&quot; key=&quot;70&quot;/&gt;"/>
+                          text="&lt;Pad n=&quot;93&quot; key=&quot;70&quot;/&gt;"/>
     <load-project path="../../build/sampler_pads_reassign.qxp"/>
     <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saved" installed="1"
-                            pads="5:60;100:70" view="pad" padBank="6" pad="4" padKey="70"/>
+                            pads="5:60;93:70" view="pad" padBank="5" pad="13" padKey="70"/>
     <!-- The reloaded program reassigns and undoes like a fresh one. -->
-    <set-pad-key trackPath="0" slotIndex="0" n="100" key="71"/>
-    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60;100:71" padKey="71"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="93" key="71"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60;93:71" padKey="71"/>
     <undo/>
     <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saved" padKey="70"/>
   </actions>

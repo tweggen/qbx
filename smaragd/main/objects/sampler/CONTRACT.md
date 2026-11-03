@@ -347,12 +347,13 @@ in parallel; they are renumbered when those land.
 
 - **THE VIEW, THE SELECTED PAD AND THE RECORD INPUT ARE STATE OF THIS OBJECT,
   NOT OF THE PROGRAM** (the author's answer of 2026-11-02, nassau-digital
-  DESIGN §13). `view` (Key by default), `padBank` (0..7 since QBX-277), `pad` (0..15) and
+  DESIGN §13). `view` (Key by default), `padBank` (0..5), `pad` (0..15) and
   `recordInput` (`audio:<device>:<mask>` or empty) are saved as attributes of
   `<SSamplerProgram>`, each only when not the default — every earlier file is
   byte-unchanged — and never in the program text, so an exported program never
   carries them. *Since QBX-277:* pad n = 16·bank + pad plays the key the
-  PROGRAM gives it (below); a pad exists when it has a key. A bank or pad out
+  PROGRAM gives it (below); six banks (the author, 2026-11-03), and a pad
+  exists when it has a key, so pads 92..95 exist only with a table row. A bank or pad out
   of range is never stored. A value this build cannot take on load
   is announced and the default kept. Changed only by `set-sampler-view` and
   `set-sampler-record-input`: undoable, absolute inverses, no sound, nothing
@@ -375,8 +376,9 @@ in parallel; they are renumbered when those land.
   bank when the pad is in another; on a key several pads share, the selected
   pad stays if it is one of them, otherwise the lowest-numbered one is
   selected (the core's `padSelectedByKey`). A key no pad plays changes
-  nothing. The selection it leaves is saved like any other; the change is not
-  an undo step and does not mark the project modified.
+  nothing. It works in every view. The selection it leaves is saved like any
+  other; the change is not an undo step (the author, 2026-11-03) and does not
+  mark the project modified.
 - **THE LAST KEY PLAYED IS LIVE AND COMES FROM THE DEVICE TAP**: `lastKey()`
   is the last note-on (velocity > 0) the instance's own sink of its track's MIDI
   input port delivered — the shell's `SSamplerKeyTaps`, the tap Q7.2 reads too,
@@ -575,8 +577,8 @@ absolute (there is nothing to be relative to).
   `…_refuse_layers` (two velocity zones on a key refuse the take, also
   through a reassigned pad and an explicit key; a pad with no covering zone
   lands a new one-key zone; three covering zones refused), `…_reassign`
-  (set-pad-key's undo, redo, back-to-default, six refusals, a pad past the
-  defaults, save and reload), `…_program` (a loaded program carrying the
+  (set-pad-key's undo, redo, back-to-default, eight refusals including n 96
+  and 100, pad 93 existing only with a row, save and reload), `…_program` (a loaded program carrying the
   table, rows out of order and an unknown row attribute, equal to its file
   and through an edit, a save and a reload), `…_select_key` (a device note
   selects the pad, shared-key rule, bank switch, keys no pad plays).
@@ -595,7 +597,7 @@ absolute (there is nothing to be relative to).
 - QBX-277: no qbx verb EXPORTS a program yet; the cases read the program text
   an export would write. The device-note pad selection changes saved state
   without marking the project modified. A library overlay cannot reassign a
-  pad (the core has no overlay verb for the table).
+  pad (the core has no overlay verb for the table); that is QBX-278.
 
 - Q4: a stretch DURING PLAYBACK (a tempo change while playing) installs like
   any generation and stales the track; no case plays. An analysis during a

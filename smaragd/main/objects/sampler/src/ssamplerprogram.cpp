@@ -597,9 +597,8 @@ bool SSamplerProgram::selectPadByKey( int key )
 {
     if( key < 0 || key > 127 || !isReadable() ) return false;
     const int n = model_.padSelectedByKey( key, padNumber() );
-    // -1: no pad plays the key. A pad past the last bank cannot be the
-    // lowest one playing a key unless every pad playing it is, so nothing
-    // selectable plays the key then either.
+    // -1: no pad plays the key. The core's pads are exactly the six banks
+    // (0..95), so the bound below is a guard, never met.
     if( n < 0 || n >= kPadBanks * kPadsPerBank ) return false;
     const int bank = n / kPadsPerBank;
     const int pad  = n % kPadsPerBank;

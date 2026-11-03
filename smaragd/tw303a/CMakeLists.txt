@@ -1062,7 +1062,7 @@ endif()
 # two are different numbers by design, and the configure log says which was
 # built. nassau-dsp, which the core takes from its gate C5 on, is found by the
 # core's own locator the same way (the suite passes NASSAU_DSP_DIR too).
-set(NASSAU_DIGITAL_GIT_REF "91aac9a0a196a53649099f45721a20ecb79ba00a")
+set(NASSAU_DIGITAL_GIT_REF "780e9f4a4dd8963d2d5ed92894e08807f1ed3a50")
 # This file sits two levels below the checkout's root (smaragd/tw303a/).
 get_filename_component(NASSAU_DIGITAL_SIBLING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/NassauDigital.cmake)

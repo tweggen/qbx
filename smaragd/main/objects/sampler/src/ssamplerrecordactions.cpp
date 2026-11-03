@@ -130,7 +130,7 @@ SApplyResult SSetPadKeyAction::apply( SProject *project )
 {
     QString why;
     if( !hasN_ || !hasKey_ ) return refuse( QStringLiteral( "set-pad-key needs n= and key=" ) );
-    // The core validates n and key (0..127; -1 only for a pad past the
+    // The core validates n (0..95) and key (0..127; -1 only for a pad past the
     // defaults): refused on a scratch copy first, so a refused edit never
     // creates the program object (invariant 4).
     {

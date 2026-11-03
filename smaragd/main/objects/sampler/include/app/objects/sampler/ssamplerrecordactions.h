@@ -6,12 +6,12 @@
 // landing rule reads.
 //
 //   set-sampler-view          `view` = key | pad | map | zone, `padBank`
-//                             (0..7), `pad` (0..15); each optional, at least
+//                             (0..5), `pad` (0..15); each optional, at least
 //                             one. Absolute; the inverse is set-sampler-view
 //                             with all three previous values. Brought forward
 //                             from Q7 into Q6 (the author, 2026-11-02): the
 //                             editor will drive this same verb.
-//   set-pad-key               `n` (the pad over all banks, 0..127), `key`
+//   set-pad-key               `n` (the pad over all banks, 0..95), `key`
 //                             (0..127). Points the pad at another key in the
 //                             program's <Pads> table (DESIGN §13, 2026-11-03,
 //                             QBX-277): only the key changes, no zone moves;
@@ -20,7 +20,7 @@
 //                             export), through SSamplerProgram::edit like the
 //                             program verbs. The inverse is set-pad-key with
 //                             the previous key (`key` = -1 only for a pad
-//                             past the defaults that had no key).
+//                             past the defaults, 92..95, that had no key).
 //   set-sampler-record-input  `input` = audio:<device>:<mask> | "" (none).
 //                             The instance's own record input (Q-1). Absolute;
 //                             the inverse is itself with the previous value.
