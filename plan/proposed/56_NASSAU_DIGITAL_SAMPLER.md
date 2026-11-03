@@ -2280,8 +2280,8 @@ CONTRACT, "The app-editor registry"; objects/sampler gained invariants 29–31.
    is every zone covering a key of the current chord (the core's
    `zonesCoveringKey`), set with `setSelection` directly (§4.11 said "Held keys
    become `select-zones`"; the author's answer 1 replaces that). A key no zone
-   covers starts a chord that selects nothing (an empty selection) — the
-   simplest reading, easily changed.
+   covers starts a chord that selects nothing (an empty selection);
+   accepted by the author 2026-11-03.
 5. **The XML pane** takes ONE element of one of the twelve forward sampler
    verbs (`reinsert-*` and `restore-sampler-values` are left out), refuses an
    undeclared attribute before submitting, fills `trackPath`/`slotIndex` when
@@ -2289,15 +2289,16 @@ CONTRACT, "The app-editor registry"; objects/sampler gained invariants 29–31.
    routine over `knownAttributes()`; `gesture` is left out of it like the
    address.
 6. **The knobs and the merge.** The Zone view edits EVERY selected zone
-   (DESIGN §2.1's "selected zones" scope; the view shows the first) and layers
+   (DESIGN §2.1's "selected zones" scope; the view shows the first;
+   accepted by the author 2026-11-03) and layers
    1..4 of the shown zone, always absolute. A knob is a 1000-step `QDial` over
    the core's range (cutoff log). One drag is one undo step through a new
    merge on `set-zone`/`set-layer`/`set-sampler-program`: same targets, same
    parameter names, same gesture (QBX-206); never for a relative value or an
    asset link. The set verbs now read a script's `gesture="n"`, so the merge is
    gated without the widget too.
-7. **Drops**, the simplest reading of DESIGN §9.3 (no rule was given),
-   mirroring §7's pad landing: a zone's layer 1 takes the source; a key's one
+7. **Drops**, mirroring §7's pad landing (accepted by the author
+   2026-11-03, DESIGN §13): a zone's layer 1 takes the source; a key's one
    covering zone is the target; no zone → a new one-key zone rooted on the key;
    several → refused with the zones named. `asset:` needs `set-layer` to link,
    so a new zone or layer for an asset is ONE composite (the add with an
@@ -2360,4 +2361,6 @@ CONTRACT, "The app-editor registry"; objects/sampler gained invariants 29–31.
    - `media:` drops and OS file drops; no Options-dialog control for
      `sampler/defaultView` (settable only in the INI, or by `set-option`).
    - A mouse click selecting zones (Key, Map) is an undo step, a held key is
-     not. A question for the author if that split is unwanted.
+     not; accepted by the author 2026-11-03, as are the empty selection for a
+     key no zone covers, zone knobs setting every selected zone, and the drop
+     rule.
