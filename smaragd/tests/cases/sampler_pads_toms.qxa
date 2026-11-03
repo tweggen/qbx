@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-277 (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"): THE TOM
+  CASE. A pad names a KEY, not a zone; its zone is the zone covering that key,
+  so several pads may play one zone at different keys.
+
+  One tonally playable tom zone (zone 1: keys 45..50, root 48, a 480 Hz sine,
+  key-tracked) and three pads pointed into it with set-pad-key: pad 4 on key
+  50 (hi), pad 5 on 48 (mid), pad 6 on 45 (lo). Their defaults (40, 41, 42)
+  are outside the zone. Pads 9..14 sit on 45..50 by default and keep them,
+  so key 48 is then shared by pads 5 and 12.
+
+  Each pad, selected, reports its own key from the program's Pads table, and
+  each of the three keys plays the ONE zone at its own pitch: 480 * 2^(2/12) =
+  538.8 Hz, 480 Hz and 480 * 2^(-3/12) = 403.6 Hz, measured in the render.
+  The table is the only place the keys live: pads="4:50;5:48;6:45".
+-->
+<SActionScript version="1" name="sampler_pads_toms">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="45" keyHi="50" rootKey="48" mode="gated">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1" pads=""
+                            padsOnKey="12" onKey="48"/>
+
+    <set-pad-key trackPath="0" slotIndex="0" n="4" key="50"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="48"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: pad 5 (bank 0, pad 5) plays key 48 (was 41)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="6" key="45"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="4:50;5:48;6:45"
+                            xmlContains='&lt;Pad n="4" key="50"/&gt;'/>
+
+    <!-- Each pad, selected, plays its own key. -->
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="0" pad="4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="50"/>
+    <set-sampler-view trackPath="0" slotIndex="0" pad="5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="48"/>
+    <set-sampler-view trackPath="0" slotIndex="0" pad="6"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="45"/>
+    <!-- Pad 7 kept its default. -->
+    <set-sampler-view trackPath="0" slotIndex="0" pad="7"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="43"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padsOnKey="4;14" onKey="50"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padsOnKey="5;12" onKey="48"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padsOnKey="" onKey="40"/>
+
+    <!-- The three pads' keys, one per second, all on the one tom zone. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="11520" name="Toms"/>
+    <add-note clip="0,0" tick="40" dur="960" key="50" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="1960" dur="960" key="48" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="3880" dur="960" key="45" velocity="127" channel="0"/>
+
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="spads_toms.wav" format="wav" quality="10" durationSec="3.5"/>
+    <!-- hi (pad 4, key 50) -->
+    <assert-audio-frequency filename="spads_toms.wav" channel="0" startFrame="2000"
+                            frameCount="16000" minHz="533" maxHz="545"/>
+    <!-- mid (pad 5, key 48): the root -->
+    <assert-audio-frequency filename="spads_toms.wav" channel="0" startFrame="50000"
+                            frameCount="16000" minHz="475" maxHz="485"/>
+    <!-- lo (pad 6, key 45) -->
+    <assert-audio-frequency filename="spads_toms.wav" channel="0" startFrame="98000"
+                            frameCount="16000" minHz="399" maxHz="408"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

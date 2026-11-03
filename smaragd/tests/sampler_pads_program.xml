@@ -1,0 +1,13 @@
+<NassauDigitalProgram version="1" name="Toms" polyphony="32" nextId="5">
+  <zone id="1" keyLo="36" keyHi="36" rootKey="36" mode="oneshot">
+    <layer id="2" src="test:kick"/>
+  </zone>
+  <zone id="3" keyLo="45" keyHi="50" rootKey="48" mode="oneshot" pad="9">
+    <layer id="4" src="test:tom"/>
+  </zone>
+  <Pads>
+    <Pad n="6" key="45"/>
+    <Pad n="4" key="50" color="red"/>
+    <Pad n="5" key="48"/>
+  </Pads>
+</NassauDigitalProgram>

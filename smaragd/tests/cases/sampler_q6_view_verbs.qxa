@@ -100,6 +100,13 @@
     <midi-in-event kind="noteon" key="41" velocity="90" channel="2"/>
     <wait-ms ms="200"/>
     <assert-sampler-program trackPath="0" slotIndex="0" lastKey="41"/>
+    <!-- QBX-277 (2026-11-03): a device note now also SELECTS THE PAD on its
+         key (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"), so the
+         notes above moved the selection: key 41 is pad 5 of bank 0 (key 64,
+         before it, was pad 12 of bank 1). sampler_pads_select_key gates the
+         rule; here the pad the rest of the case lands on is chosen again. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="0" pad="5" padKey="41"/>
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="2" pad="3"/>
 
     <!-- ............................ place-sampler-recording, driven directly -->
     <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36">

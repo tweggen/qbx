@@ -131,8 +131,11 @@ void SSamplerKeyTaps::poll()
         audio::MidiInMessage m;
         while( t.sink->pop( m ) ) {
             if( !t.program ) continue;          // drain a dead tap's ring anyway
-            if( m.status() == 0x90 && m.size >= 3 && m.bytes[2] > 0 )
+            if( m.status() == 0x90 && m.size >= 3 && m.bytes[2] > 0 ) {
                 t.program->setLastKey( m.bytes[1] & 0x7F );
+                // DESIGN §13 (2026-11-03): the note selects the pad on its key.
+                t.program->selectPadByKey( m.bytes[1] & 0x7F );
+            }
         }
     }
 }

@@ -347,16 +347,36 @@ in parallel; they are renumbered when those land.
 
 - **THE VIEW, THE SELECTED PAD AND THE RECORD INPUT ARE STATE OF THIS OBJECT,
   NOT OF THE PROGRAM** (the author's answer of 2026-11-02, nassau-digital
-  DESIGN §13). `view` (Key by default), `padBank` (0..5), `pad` (0..15) and
+  DESIGN §13). `view` (Key by default), `padBank` (0..7 since QBX-277), `pad` (0..15) and
   `recordInput` (`audio:<device>:<mask>` or empty) are saved as attributes of
   `<SSamplerProgram>`, each only when not the default — every earlier file is
   byte-unchanged — and never in the program text, so an exported program never
-  carries them. A pad is key 36 + 16·bank + pad; a pad whose key would pass 127
-  does not exist and is never stored. A value this build cannot take on load
+  carries them. *Since QBX-277:* pad n = 16·bank + pad plays the key the
+  PROGRAM gives it (below); a pad exists when it has a key. A bank or pad out
+  of range is never stored. A value this build cannot take on load
   is announced and the default kept. Changed only by `set-sampler-view` and
   `set-sampler-record-input`: undoable, absolute inverses, no sound, nothing
   published; both create the program object (as add-zone does), a refused one
-  creates none.
+  creates none. The one exception (QBX-277): a note from the device tap
+  selects the pad on its key (next item but one), live and not an undo step.
+- **A PAD NAMES A KEY, AND THE KEY IS THE PROGRAM'S** (QBX-277; nassau-digital
+  DESIGN §13, "Settled on 2026-11-03, pads"). The core's `<Pads>` table, one
+  `<Pad n key/>` row per pad off its default 36 + n, lives IN the program
+  text, so it travels into an export and a library; qbx never reads it
+  itself, only through `twSamplerProgramModel::padKey` / `padRows` /
+  `padsOnKey` / `padSelectedByKey` / `zonesCoveringKey`, each the core's own.
+  The pad's zone is the zone covering its key, so several pads share one
+  zone. `set-pad-key` (n, key) changes only the pad's key, through `edit()`
+  like every program verb (it publishes); the default key removes the row;
+  its inverse is `set-pad-key` with the previous key. The zone attribute
+  `pad` is kept by the core and means nothing to qbx.
+- **A DEVICE NOTE SELECTS THE PAD ON ITS KEY** (DESIGN §13, 2026-11-03): the
+  key tap that sets `lastKey()` also calls `selectPadByKey()`, which switches
+  bank when the pad is in another; on a key several pads share, the selected
+  pad stays if it is one of them, otherwise the lowest-numbered one is
+  selected (the core's `padSelectedByKey`). A key no pad plays changes
+  nothing. The selection it leaves is saved like any other; the change is not
+  an undo step and does not mark the project modified.
 - **THE LAST KEY PLAYED IS LIVE AND COMES FROM THE DEVICE TAP**: `lastKey()`
   is the last note-on (velocity > 0) the instance's own sink of its track's MIDI
   input port delivered — the shell's `SSamplerKeyTaps`, the tap Q7.2 reads too,
@@ -367,10 +387,14 @@ in parallel; they are renumbered when those land.
   view → key) and the key at its first apply, builds its children — add-zone,
   add-layer or set-layer for the program, `create-file-asset` (through the
   registry) for the asset — and HOLDS them, so the redo re-applies the same
-  children: the same zone and layer ids, the same asset name. Pad: the pad's
-  zone is the first zone with keyLo = keyHi = the pad's key; when it exists its
-  first layer is replaced (src, start, end, loop points reset, beats 0; every
-  other setting kept), else a one-key zone rooted there. Key on an empty
+  children: the same zone and layer ids, the same asset name. Pad (QBX-277;
+  Q6 took the first zone with keyLo = keyHi = the key): the pad's zone is THE
+  zone covering the pad's key — when exactly one covers it its first layer is
+  replaced (src, start, end, loop points reset, beats 0; every other setting
+  kept) and every pad on that zone hears it; when none does, a one-key zone
+  rooted there; when MORE THAN ONE does (velocity layers, round-robin zones),
+  REFUSED with a reason naming the key and the zones. A pad with no key is
+  refused too. Key on an empty
   program: a zone over the whole keyboard at the core's default root (60). Key
   on a program with zones: a one-key zone rooted on the last key played;
   REFUSED when none has been played. A refusal changes nothing: the file is
@@ -543,6 +567,19 @@ absolute (there is nothing to be relative to).
   (refusals, the view's pad, an explicit key target), save and reload (the
   state survives, the last key does not, the program text holds none of it).
 - Sabotages that bite (QBX-272): proposal 56 §11 "Q6 as built".
+- QBX-277, the pads (proposal 56 §11 "QBX-277 pads"):
+  `qxa.sampler_pads_toms` (three pads on one tom zone, each at its own key:
+  538.8 / 480 / 403.6 Hz measured), `…_record_shared` (a take on pad 5
+  replaces the shared zone's layer 1 and all three pads play it at their
+  pitches; a take on pad 6 replaces it again; undo and redo exact),
+  `…_refuse_layers` (two velocity zones on a key refuse the take, also
+  through a reassigned pad and an explicit key; a pad with no covering zone
+  lands a new one-key zone; three covering zones refused), `…_reassign`
+  (set-pad-key's undo, redo, back-to-default, six refusals, a pad past the
+  defaults, save and reload), `…_program` (a loaded program carrying the
+  table, rows out of order and an unknown row attribute, equal to its file
+  and through an edit, a save and a reload), `…_select_key` (a device note
+  selects the pad, shared-key rule, bank switch, keys no pad plays).
 
 ## Not gated / known limits
 
@@ -552,9 +589,13 @@ absolute (there is nothing to be relative to).
   inputs). The capture opens the device the FIRST armed track names; a press
   arming tracks on different input devices records them all from that one, as
   for lanes. A layer src is the capture's absolute path (relocation is not
-  Q6's, as in Q2). A pad cannot be reassigned to another key yet (DESIGN §7
-  allows it; no verb does it), and the core's zone `pad` attribute is not set.
-  A new instance starts in the Key view, not the per-user default (Q7.1).
+  Q6's, as in Q2). A new instance starts in the Key view, not the per-user
+  default (Q7.1). *(Pad reassignment, missing here at Q6, is built by
+  QBX-277.)*
+- QBX-277: no qbx verb EXPORTS a program yet; the cases read the program text
+  an export would write. The device-note pad selection changes saved state
+  without marking the project modified. A library overlay cannot reassign a
+  pad (the core has no overlay verb for the table).
 
 - Q4: a stretch DURING PLAYBACK (a tempo change while playing) installs like
   any generation and stales the track; no case plays. An analysis during a

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-277 (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"): THE
+  REFUSAL OVER VELOCITY LAYERS. "When more than one zone covers it (velocity
+  layers, round-robin groups), the take is refused with a reason."
+
+  A snare drawn as two velocity zones on key 38 (zone 1: velocity 0..63,
+  zone 3: 64..127). Pad 2 plays 38 by default; pad 9 is pointed at it too.
+  A take on either pad is REFUSED, naming the key and both zones, and
+  changes nothing: the program equals its capture, no asset is registered.
+  The same holds with an explicit key= on the verb.
+
+  Beside it, pad 1 (key 37) has no zone covering its key, so its take lands
+  as a NEW one-key zone on 37 (zone 5, root 37); and a zone covering key 37
+  as part of a wide range (zone 7: keys 30..40, added after) makes key 38
+  covered by THREE zones, still refused, while pad 1's key 37 is now covered
+  by two (5 and 7) and refused too.
+-->
+<SActionScript version="1" name="sampler_pads_refuse_layers">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="38" keyHi="38" rootKey="38" velHi="63" mode="oneshot">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="38" keyHi="38" rootKey="38" velLo="64" mode="oneshot">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <set-pad-key trackPath="0" slotIndex="0" n="9" key="38"/>
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="0" pad="2"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" padKey="38"
+                            padsOnKey="2;9" onKey="38" capture="layers"/>
+
+    <!-- Pad 2 (key 38 by default): refused. -->
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_stereo.wav"
+                             expectReject="true"/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: REFUSED: key 38 is covered by 2 zones" minCount="1"/>
+    <assert-log contains="key 38 is covered by 2 zones (1, 3: velocity layers or round-robin zones), so the pad has no one zone to record into; nothing changed" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="layers" assetAbsent="Recording 1"/>
+
+    <!-- Pad 9, reassigned onto 38: refused the same way. -->
+    <set-sampler-view trackPath="0" slotIndex="0" pad="9"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="38"/>
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_stereo.wav"
+                             expectReject="true"/>
+    <assert-log contains="key 38 is covered by 2 zones (1, 3" minCount="1"/>
+    <!-- An explicit key on the verb: the same rule. -->
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_stereo.wav"
+                             target="pad" key="38" expectReject="true"/>
+    <assert-log contains="key 38 is covered by 2 zones (1, 3" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="layers" assetAbsent="Recording 1"/>
+
+    <!-- Pad 1 (key 37): no zone covers it, so a new one-key zone. -->
+    <set-sampler-view trackPath="0" slotIndex="0" pad="1"/>
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_stereo.wav"/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: pad key 37: a new one-key zone" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="5" attr="keyLo" value="37"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="5" attr="keyHi" value="37"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="5" attr="rootKey" value="37"/>
+
+    <!-- A wide zone over 30..40 makes 37 covered twice and 38 three times. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="30" keyHi="40" mode="oneshot">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="wide"/>
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_autosaw.wav"
+                             expectReject="true"/>
+    <assert-log contains="key 37 is covered by 2 zones (5, 7" minCount="1"/>
+    <set-sampler-view trackPath="0" slotIndex="0" pad="2"/>
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_autosaw.wav"
+                             expectReject="true"/>
+    <assert-log contains="key 38 is covered by 3 zones (1, 3, 7" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="wide" assetAbsent="Recording 2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

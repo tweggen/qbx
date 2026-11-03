@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-277 (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"):
+  REASSIGNING A PAD. set-pad-key points pad n at another key in the program's
+  Pads table. "Reassigning a pad points it elsewhere. Only the pad's key
+  changes; no zone moves." The table holds only pads OFF their default
+  (36 + n), so pointing a pad back at its default removes its row.
+
+  Gated here: one undo and one redo per reassignment, exact (the program
+  equals its capture); a reassignment back to the default and its undo;
+  the refusals (n 128, key 128, key -1 on a pad that has a default, a
+  missing n or key), each changing nothing and creating no program object
+  when there is none; a pad PAST the defaults (pad 100, bank 6 pad 4) that
+  exists only once a row gives it a key, which set-sampler-view then
+  accepts; and a save and reload carrying the table, the selection on that
+  pad and its key.
+-->
+<SActionScript version="1" name="sampler_pads_reassign">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <!-- Refusals before any program exists create none. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="128" key="40" expectReject="true"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="128" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="40" keyHi="64" rootKey="52" mode="oneshot">
+      <layer src="test:wide"/>
+    </add-zone>
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="0" pad="5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="" padKey="41" capture="start"/>
+
+    <!-- ........................................ reassign, undo, redo -->
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="60"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60" padKey="60" differsFromCaptured="start"
+                            zoneIds="1"/>
+    <!-- No zone moved. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyLo" value="40"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="p5"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="start" pads="" padKey="41"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" padKey="60"/>
+
+    <!-- A second row goes in order of n, before 5. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="2" key="60"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="2:60;5:60" padsOnKey="2;5;24" onKey="60"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5"/>
+
+    <!-- Back to the default removes the row; its undo puts it back. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="41"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="" padKey="41" equalsCaptured="start"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" padKey="60"/>
+
+    <!-- ......................................................... refusals -->
+    <set-pad-key trackPath="0" slotIndex="0" n="128" key="40" expectReject="true"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: pad 128 is not a pad (0..127)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="-1" key="40" expectReject="true"/>
+    <assert-log contains="REFUSED: pad -1 is not a pad (0..127)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="128" expectReject="true"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: key 128 is not a MIDI key (0..127)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="-1" expectReject="true"/>
+    <assert-log contains="REFUSED: key -1 is not a MIDI key (0..127)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" expectReject="true"/>
+    <assert-log contains="REFUSED: set-pad-key needs n= and key=" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" key="40" expectReject="true"/>
+    <assert-log contains="REFUSED: set-pad-key needs n= and key=" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5"/>
+
+    <!-- ........................................ a pad past the defaults -->
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="4" expectReject="true"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="100" key="70"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60;100:70"/>
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="6" pad="4" padKey="70"/>
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="6" pad="5" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="saved"/>
+
+    <!-- ................................................... save, reload -->
+    <save-project path="../../build/sampler_pads_reassign.qxp"/>
+    <assert-file-contains path="../../build/sampler_pads_reassign.qxp"
+                          text="&lt;Pad n=&quot;100&quot; key=&quot;70&quot;/&gt;"/>
+    <load-project path="../../build/sampler_pads_reassign.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saved" installed="1"
+                            pads="5:60;100:70" view="pad" padBank="6" pad="4" padKey="70"/>
+    <!-- The reloaded program reassigns and undoes like a fresh one. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="100" key="71"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:60;100:71" padKey="71"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="saved" padKey="70"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

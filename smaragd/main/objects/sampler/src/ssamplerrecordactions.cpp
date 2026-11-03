@@ -47,15 +47,6 @@ SAction *makeByName( const QString &name, const QString &pathRoot, const Attrs &
     return a;
 }
 
-int zoneInt( const twSamplerProgramModel &m, std::uint32_t id, const char *attr, int dflt )
-{
-    std::string v;
-    if( !m.value( twSamplerScope::Zone, id, attr, &v ) ) return dflt;
-    bool ok = false;
-    const int i = QString::fromStdString( v ).toInt( &ok );
-    return ok ? i : dflt;
-}
-
 }  // namespace
 
 // ======================================================= set-sampler-view ===
@@ -78,11 +69,20 @@ SApplyResult SSetSamplerViewAction::apply( SProject *project )
     const SSamplerProgram::View newView = view_.isEmpty() ? oldView : v;
     const int newBank = padBank_ >= 0 ? padBank_ : oldBank;
     const int newPad  = pad_ >= 0 ? pad_ : oldPad;
-    if( !SSamplerProgram::padExists( newBank, newPad ) )
-        return refuse( QStringLiteral( "pad %1 of bank %2 does not exist (banks 0..%3 of %4 pads "
-                                       "from key %5; a pad's key is at most 127)" )
+    // A pad EXISTS when the program gives it a key: its <Pads> row, else its
+    // default 36 + n (QBX-277). Only a pad being CHOSEN is checked, so a view
+    // switch is never refused over the pad already selected.
+    const audio::twSamplerProgramModel emptyModel;
+    const audio::twSamplerProgramModel &m = prog ? prog->model() : emptyModel;
+    const int newN = SSamplerProgram::padNumberOf( newBank, newPad );
+    if( ( padBank_ >= 0 || pad_ >= 0 ) &&
+        ( !SSamplerProgram::padInRange( newBank, newPad ) || m.padKey( newN ) < 0 ) )
+        return refuse( QStringLiteral( "pad %1 of bank %2 does not exist (banks 0..%3 of %4 pads; "
+                                       "a pad exists when the program gives it a key, its <Pads> "
+                                       "row or its default %5 + n, at most 127)" )
                            .arg( newPad ).arg( newBank ).arg( SSamplerProgram::kPadBanks - 1 )
-                           .arg( SSamplerProgram::kPadsPerBank ).arg( SSamplerProgram::kPadBaseKey ) );
+                           .arg( SSamplerProgram::kPadsPerBank )
+                           .arg( SSamplerProgram::kPadDefaultBaseKey ) );
     if( !prog ) prog = program( project, true, &why );
     if( !prog ) return refuse( why );
 
@@ -91,7 +91,7 @@ SApplyResult SSetSamplerViewAction::apply( SProject *project )
                                          "pad %5 (key %6)" )
                              .arg( trackPath_ ).arg( slotIndex_ )
                              .arg( SSamplerProgram::viewText( newView ) ).arg( newBank )
-                             .arg( newPad ).arg( SSamplerProgram::padKeyOf( newBank, newPad ) );
+                             .arg( newPad ).arg( prog->padKey() );
     return { true, new SSetSamplerViewAction( trackPath_, slotIndex_,
                                               SSamplerProgram::viewText( oldView ), oldBank,
                                               oldPad ) };
@@ -122,6 +122,64 @@ QStringList SSetSamplerViewAction::knownAttributes() const
 {
     return addressAttributes() << QStringLiteral( "view" ) << QStringLiteral( "padBank" )
                                << QStringLiteral( "pad" );
+}
+
+// ============================================================ set-pad-key ===
+
+SApplyResult SSetPadKeyAction::apply( SProject *project )
+{
+    QString why;
+    if( !hasN_ || !hasKey_ ) return refuse( QStringLiteral( "set-pad-key needs n= and key=" ) );
+    // The core validates n and key (0..127; -1 only for a pad past the
+    // defaults): refused on a scratch copy first, so a refused edit never
+    // creates the program object (invariant 4).
+    {
+        audio::twSamplerProgramModel scratch;
+        SSamplerProgram *existing = program( project, false, nullptr );
+        if( existing ) scratch = existing->model();
+        std::string err;
+        if( !scratch.setPadKey( n_, key_, nullptr, &err ) )
+            return refuse( QString::fromStdString( err ) );
+    }
+    SSamplerProgram *prog = program( project, true, &why );
+    if( !prog ) return refuse( why );
+    int prior = -1;
+    std::string err;
+    if( !prog->edit( [&]( audio::twSamplerProgramModel &m ) { return m.setPadKey( n_, key_, &prior, &err ); },
+                     &why ) )
+        return refuse( err.empty() ? why : QString::fromStdString( err ) );
+    qInfo().noquote() << QStringLiteral( "set-pad-key: track %1 slot %2: pad %3 (bank %4, pad %5) "
+                                         "plays key %6 (was %7)" )
+                             .arg( trackPath_ ).arg( slotIndex_ ).arg( n_ )
+                             .arg( n_ / SSamplerProgram::kPadsPerBank )
+                             .arg( n_ % SSamplerProgram::kPadsPerBank ).arg( key_ ).arg( prior );
+    return { true, new SSetPadKeyAction( trackPath_, slotIndex_, n_, prior ) };
+}
+
+void SSetPadKeyAction::writeXml( QDomElement &elem ) const
+{
+    writeAddress( elem );
+    if( hasN_ ) elem.setAttribute( "n", n_ );
+    if( hasKey_ ) elem.setAttribute( "key", key_ );
+}
+
+bool SSetPadKeyAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    readAddress( elem );
+    bool ok = true;
+    hasN_ = elem.hasAttribute( "n" );
+    n_    = hasN_ ? elem.attribute( "n" ).toInt( &ok ) : -1;
+    if( !ok ) n_ = 1 << 20;   // not a number: refused by the core as a pad that does not exist
+    ok      = true;
+    hasKey_ = elem.hasAttribute( "key" );
+    key_    = hasKey_ ? elem.attribute( "key" ).toInt( &ok ) : -1;
+    if( !ok ) key_ = 1 << 20;
+    return true;
+}
+
+QStringList SSetPadKeyAction::knownAttributes() const
+{
+    return addressAttributes() << QStringLiteral( "n" ) << QStringLiteral( "key" );
 }
 
 // =============================================== set-sampler-record-input ===
@@ -222,12 +280,31 @@ SApplyResult SPlaceSamplerRecordingAction::apply( SProject *project )
     QString  landing;
     int      key = -1;
     if( target == QLatin1String( "pad" ) ) {
-        key = key_ >= 0 ? key_ : ( prog ? prog->padKey() : SSamplerProgram::padKeyOf( 0, 0 ) );
+        // The pad's key comes from the program's <Pads> table (QBX-277).
+        if( key_ >= 0 ) key = key_;
+        else if( prog ) key = prog->padKey();
+        else key = audio::twSamplerProgramModel().padKey( 0 );
+        if( key < 0 )
+            return refuse( QStringLiteral( "pad %1 has no key (its default would pass 127 and the "
+                                           "program's <Pads> table gives it none)" )
+                               .arg( prog ? prog->padNumber() : 0 ) );
+        // THE PAD'S ZONE IS THE ZONE COVERING ITS KEY (DESIGN §13, settled
+        // 2026-11-03, pads): several pads may share it, and all of them hear
+        // the take. More than one zone covering the key has no one zone to
+        // record into, so the take is refused rather than guessed.
         std::uint32_t padZone = 0;
-        if( prog )
-            for( std::uint32_t z : prog->model().zoneIds() )
-                if( zoneInt( prog->model(), z, "keyLo", -1 ) == key &&
-                    zoneInt( prog->model(), z, "keyHi", -1 ) == key ) { padZone = z; break; }
+        if( prog ) {
+            const std::vector<std::uint32_t> covering = prog->model().zonesCoveringKey( key );
+            if( covering.size() > 1 ) {
+                QStringList ids;
+                for( std::uint32_t z : covering ) ids << QString::number( z );
+                return refuse( QStringLiteral( "key %1 is covered by %2 zones (%3: velocity layers "
+                                               "or round-robin zones), so the pad has no one zone "
+                                               "to record into; nothing changed" )
+                                   .arg( key ).arg( covering.size() ).arg( ids.join( QStringLiteral( ", " ) ) ) );
+            }
+            if( covering.size() == 1 ) padZone = covering.front();
+        }
         if( padZone != 0 ) {
             const std::vector<std::uint32_t> layers = prog->model().layerIds( padZone );
             if( !layers.empty() ) {
@@ -339,6 +416,7 @@ QStringList SPlaceSamplerRecordingAction::knownAttributes() const
 static const bool s_reg_sampler_record_verbs = [] {
     SActionRegistry &r = SActionRegistry::instance();
     r.registerType( QStringLiteral( "set-sampler-view" ), [] { return new SSetSamplerViewAction; } );
+    r.registerType( QStringLiteral( "set-pad-key" ), [] { return new SSetPadKeyAction; } );
     r.registerType( QStringLiteral( "set-sampler-record-input" ),
                     [] { return new SSetSamplerRecordInputAction; } );
     r.registerType( QStringLiteral( "place-sampler-recording" ),

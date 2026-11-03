@@ -217,6 +217,9 @@ const QStringList &checkNames()
         QStringLiteral( "recordInput" ),  QStringLiteral( "lastKey" ),
         QStringLiteral( "recordedLayer" ), QStringLiteral( "recordedAsset" ),
         QStringLiteral( "assetAbsent" ),
+        // QBX-277: the program's <Pads> table, and the pads playing a key.
+        QStringLiteral( "pads" ),         QStringLiteral( "padsOnKey" ),
+        QStringLiteral( "onKey" ),
     };
     return n;
 }
@@ -385,6 +388,25 @@ SApplyResult SAssertSamplerProgramAction::apply( SProject *project )
         fails << QStringLiteral( "pad: want %1, got %2" ).arg( get( "pad" ) ).arg( prog->pad() );
     if( has( "padKey" ) && get( "padKey" ).toInt() != prog->padKey() )
         fails << QStringLiteral( "padKey: want %1, got %2" ).arg( get( "padKey" ) ).arg( prog->padKey() );
+    // QBX-277: `pads` = the table's rows as "n:key;n:key" in the order the
+    // core writes them ("" = no row: every pad on its default key);
+    // `padsOnKey` + `onKey` = the pads playing that key, lowest first.
+    if( has( "pads" ) ) {
+        QStringList rows;
+        for( const auto &r : m.padRows() ) rows << QStringLiteral( "%1:%2" ).arg( r.first ).arg( r.second );
+        const QString gotPads = rows.join( QLatin1Char( ';' ) );
+        if( gotPads != get( "pads" ) )
+            fails << QStringLiteral( "pads: want \"%1\", got \"%2\"" ).arg( get( "pads" ), gotPads );
+    }
+    if( has( "padsOnKey" ) != has( "onKey" ) )
+        fails << QStringLiteral( "padsOnKey and onKey go together" );
+    else if( has( "padsOnKey" ) ) {
+        QStringList on;
+        for( int n : m.padsOnKey( get( "onKey" ).toInt() ) ) on << QString::number( n );
+        if( on.join( QLatin1Char( ';' ) ) != get( "padsOnKey" ) )
+            fails << QStringLiteral( "padsOnKey (key %1): want \"%2\", got \"%3\"" )
+                         .arg( get( "onKey" ), get( "padsOnKey" ), on.join( QLatin1Char( ';' ) ) );
+    }
     if( has( "recordInput" ) && get( "recordInput" ) != prog->recordInput() )
         fails << QStringLiteral( "recordInput: want \"%1\", got \"%2\"" )
                      .arg( get( "recordInput" ), prog->recordInput() );

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-277 (nassau-digital DESIGN 13, "Settled on 2026-11-03, pads"): THE
+  TABLE TRAVELS WITH THE PROGRAM. "The table travels with the program, into
+  the library and into an export."
+
+  qbx has no program export verb yet; an export writes the program as the
+  core writes it, which is what this case reads. ../sampler_pads_program.qxp
+  holds a tom kit whose program carries a Pads table with its rows OUT of
+  order of n (6, 4, 5), an unknown attribute on a row (color="red") and the
+  superseded zone attribute pad="9" on the tom zone. ../sampler_pads_program.xml
+  is the same program on its own.
+
+  After the load the program is STRUCTURALLY equal to the file (the core's
+  equality, the table included), the rows keep their order and the unknown
+  attribute, the pads play the keys the table gives them, and zone pad="9"
+  is still there and means nothing: pad 9 plays its default key 45, beside
+  pad 6, and is not on the zone's root 48 (pads 5 and 12 are). An edit
+  of a row keeps its unknown attribute; after a save and reload the edited
+  program comes back equal, and undoing the edit on the reloaded program
+  gives the file again.
+-->
+<SActionScript version="1" name="sampler_pads_program">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sampler_pads_program.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="1" readable="1"
+                            equalsFile="../sampler_pads_program.xml" installed="1"
+                            pads="6:45;4:50;5:48"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            xmlContains='&lt;Pad n="6" key="45"/&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            xmlContains='&lt;Pad n="4" key="50" color="red"/&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="pad" value="9"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padsOnKey="5;12" onKey="48"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padsOnKey="6;9" onKey="45"/>
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" pad="4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="50"/>
+
+    <!-- An edit of a row keeps its unknown attribute and its place. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="4" key="49"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="6:45;4:49;5:48" padKey="49"
+                            xmlContains='&lt;Pad n="4" key="49" color="red"/&gt;'/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="edited"/>
+
+    <save-project path="../../build/sampler_pads_program_resave.qxp"/>
+    <load-project path="../../build/sampler_pads_program_resave.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="edited" installed="1"
+                            pads="6:45;4:49;5:48" padKey="49"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="4" key="50"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsFile="../sampler_pads_program.xml"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
