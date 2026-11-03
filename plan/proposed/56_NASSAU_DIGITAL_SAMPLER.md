@@ -480,11 +480,22 @@ nothing.
 | `set-sampler-program` | Q1 | `polyphony`, `level`, `tune`, `busDrive`, … | absolute |
 | `select-zones` | Q1 | `zones`, `mode` = `replace`\|`add`\|`toggle` | the previous selection |
 | `set-sampler-view` | Q7 | `view` = `key`\|`pad`\|`map`\|`zone`, `padBank` | absolute |
-| `set-sampler-routing` | Q8 | `mask` (DESIGN §3.1) | absolute |
+| ~~`set-sampler-routing`~~ | ~~Q8~~ | ~~`mask` (DESIGN §3.1)~~ | ~~absolute~~ — **struck 2026-11-03**, see below |
 | `place-sampler-recording` | Q6 | `filePath`, `srcOffset`, `length`, `target` = `pad`\|`key` (resolved by the recorder from the view, §4.10), `key` | `remove-layer` / `remove-zone`, whichever it created, or the replaced layer 1 |
 
 `select-zones` is an action because GATES Q1.1 asks that it be undone by one
 undo; it changes no sound and bumps nothing.
+
+*Correction (2026-11-03, the author's answer on qbx#340, QBX-273):*
+`set-sampler-routing` is **struck**. The return tracks (proposal 55) are the
+ONLY writer of the routed mask: the mixer pass derives it from the returns that
+name the slot and hands it to the instrument through
+`twPlugin::setRoutedOutBuses`. A verb setting the mask explicitly would be a
+second writer of the same state with no rule for which one wins.
+`twSamplerHost::setRoutedOutputs()` stays as an internal hook (tests, the host
+interface), never a verb: called directly it can only NARROW what is heard,
+because an aux bit the host gave no bus for has no buffer and the core plays
+that zone on main. §11 "Q8 as built" item 1.
 
 Test verbs (testkit): `assert-sampler-program` (structural equality against a
 program file or inline XML, and named fields), `assert-sampler-layer`
@@ -681,7 +692,8 @@ proposal designs only the sampler's side: from Q8 the instrument reports nine
 output buses (main + 8 stereo aux, B7), the routed mask comes from whatever
 proposal 55 makes the model say about which `(track, slot, output)` taps exist,
 and `setRoutedOutputs` is called with it through §4.3, as a state change.
-`set-sampler-routing` is the verb when the mask is set explicitly. Everything
+~~`set-sampler-routing` is the verb when the mask is set explicitly.~~ *(Struck
+2026-11-03: the return tracks are the only writer of the mask — §4.5.)* Everything
 about return tracks, their caches, their UI and sidechain inputs is proposal
 55's.
 
@@ -1714,8 +1726,10 @@ part H. Where the text above did not survive the build:
    host interface and sets the same core mask; called directly it can only
    NARROW what is heard (an aux bit the host gave no bus for has no buffer,
    which the core treats as unrouted), and the next host mask replaces it.
-   Open for the author: build the verb (and decide its precedence over the
-   returns), or strike it from §4.5.
+   *Answered 2026-11-03 by the author (qbx#340): struck.* The return tracks
+   are the only writer of the mask, and `setRoutedOutputs()` stays an
+   internal hook that can only narrow what is heard; §4.5 carries the dated
+   correction.
 2. **The host's mask is the only thing that says which `outBuses[b]` may be
    read** (plugins inv. 61), not `setRoutedOutputs()`. An unrouted bus is
    handed to the core as null, and the legacy three-argument `process()`
