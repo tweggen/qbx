@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7 (QBX-279; nassau-digital DESIGN 7): THE KEY, PAD AND MAP
+  VIEWS DISPLAY AND SELECT (the author, 2026-11-03: they edit nothing).
+
+  What a view DRAWS is read through describe(), which reports from the same
+  functions the views paint from (ssamplerzones): zones= the rectangles,
+  gaps= the velocity gaps the Map view hatches, padKeys= the keys of the
+  visible bank's 16 pads.
+
+  THE VELOCITY GAP (DESIGN 2): "a velocity inside the zone that no layer
+  covers plays nothing, and the Map view marks the gap". A layer's window is
+  clamped into its zone's.
+    zone 1   keys 36..47, vel 0..127, layers 0..40 and 80..127 -> gap 41-79
+    zone 4   keys 48..59, vel 50..90, layers 0..60 (clamped 50..60) and
+             100..127 (outside the zone: covers nothing)          -> 61-90
+    zone 7   keys 60..71, vel 0..127, layers 0..70 and 60..127   -> none
+  (Q7.4, the gap being VISIBLE, is the author's hand check; this gates that
+  the view is handed it.)
+
+  A press on the Key view selects the zones covering the key, on the Map view
+  the zones whose rectangle holds the point: select-zones, one undo step each
+  (the scripted verb; hand selection from the device is not one, see
+  sampler_q7_hand_select). A pad press selects the pad, a bank button the
+  bank: set-sampler-view.
+-->
+<SActionScript version="1" name="sampler_q7_select_views">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47">
+      <layer src="test:a" velLo="0" velHi="40"/>
+      <layer src="test:b" velLo="80" velHi="127"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="48" keyHi="59" velLo="50" velHi="90">
+      <layer src="test:c" velLo="0" velHi="60"/>
+      <layer src="test:f" velLo="100" velHi="127"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="71">
+      <layer src="test:d" velLo="0" velHi="70"/>
+      <layer src="test:e" velLo="60" velHi="127"/>
+    </add-zone>
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+
+    <!-- What the views are handed. -->
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|zones=1:36-47/0-127;4:48-59/50-90;7:60-71/0-127|gaps=1:41-79;4:61-90|"/>
+    <!-- A zone whose only layer lies outside it is one gap over its range;
+         so is a zone with no layer. -->
+    <remove-layer trackPath="0" slotIndex="0" layer="5"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|gaps=1:41-79;4:50-90|"/>
+    <remove-layer trackPath="0" slotIndex="0" layer="6"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|gaps=1:41-79;4:50-90|"/>
+    <undo count="2"/>
+    <!-- Closing a gap removes it from the view. -->
+    <set-layer trackPath="0" slotIndex="0" layer="3" velLo="41"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|gaps=4:61-90|"/>
+    <undo/>
+
+    <!-- KEY VIEW: a press selects the covering zones, one undo step. -->
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|view=key|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="key" key="40"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="key" key="65"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="key" key="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected=""/>
+    <!-- Only the view shown takes a press. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="40" vel="100" expect="0"/>
+
+    <!-- MAP VIEW: inside a rectangle, its zone; in a zone's key range but
+         outside its velocities, none; the press edits nothing. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="map"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="before-map"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="50" vel="70"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="4"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="50" vel="20"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected=""/>
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="36" vel="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1" equalsCaptured="before-map"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="71" vel="127"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7"/>
+    <!-- Overlapping zones: a Key press selects every zone covering the key,
+         a Map press every rectangle holding the point. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="40" keyHi="44" velLo="0" velHi="64">
+      <layer src="test:g"/>
+    </add-zone>
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="42" vel="30"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1;10"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="map" key="42" vel="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="key"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="key" key="42"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1;10"/>
+    <remove-zone trackPath="0" slotIndex="0" zone="10"/>
+
+    <!-- PAD VIEW: the bank's keys; a pad press, a bank button. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="pad"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|bank=0|pad=0|padKeys=36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51|"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="3" key="60"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|padKeys=36,37,38,60,40,"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="pad" pad="5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="0" pad="5"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|bank=0|pad=5|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="bank" bank="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="1" pad="5"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|bank=1|pad=5|padKeys=52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67|"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="0" pad="5"/>
+    <!-- Bank F holds pads 0..11 without a row: the four keyless pads draw
+         empty, a press on one is refused, and a switch to F from pad 13
+         lands on pad 0. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="pad" pad="13"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="bank" bank="5"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|bank=5|pad=0|padKeys=116,117,118,119,120,121,122,123,124,125,126,127,-,-,-,-|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="pad" pad="14" nestedRejects="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padBank="5" pad="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|status=&lt;set-sampler-view&gt; was refused"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

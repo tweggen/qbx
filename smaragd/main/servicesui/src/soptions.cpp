@@ -112,6 +112,8 @@ QVariant SOpt::def( const QString &key )
     // `any` restores the pre-option rule for whoever wants a lane that
     // monitors on its own.
     if( key == MonitorArming )       return QStringLiteral( "armed-only" );
+    // DESIGN §7 (decided): Key by default.
+    if( key == SamplerDefaultView )  return QStringLiteral( "key" );
     // Media browser (proposal 38 gate 2). "local" is the only source the MVP
     // registers, so remembering it is the honest default rather than an empty
     // string the combo would have to interpret. The mask is Audio (1) --

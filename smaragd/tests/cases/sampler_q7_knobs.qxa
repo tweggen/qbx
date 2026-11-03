@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7 (QBX-279): THE ZONE VIEW'S KNOBS ARE THE EDITING SURFACE (the
+  author, 2026-11-03: Key, Map and Pad display and select only). Each knob
+  change is a set-zone (for every selected zone, DESIGN 2.1's "the selected
+  zones" scope) or a set-layer, absolute; ONE DRAG IS ONE UNDO STEP.
+
+  A drag is the dial's own press and release (setSliderDown, Qt's spelling of
+  what a mouse press does), so the knob's production slots mint the gesture
+  token on press and drop it on release (QBX-206); set-zone and set-layer merge
+  on that token. press="0" moves the dial with no press: a wheel notch or a
+  key step, each its own undo step.
+
+  A knob is a QDial of 1000 steps over the parameter's range in the core's
+  table (cutoff on a log scale), so a value lands on the nearest step: 4000 Hz
+  is 3999.723739, 2 s of attack 1.98, -12 dB -11.952. The case asserts the
+  step, which is what the program holds.
+
+  Zones (ids from nextId, a zone and its layers consecutive): zone 1 = keys
+  36..47 with layers 2 (velocity 0..63) and 3 (64..127); zone 4 = keys 48..59
+  with layer 5.
+-->
+<SActionScript version="1" name="sampler_q7_knobs">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47">
+      <layer src="test:a" velLo="0" velHi="63"/>
+      <layer src="test:b" velLo="64" velHi="127"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="48" keyHi="59"><layer src="test:c"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;4"/>
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="zone"/>
+
+    <!-- No zone selected: no zone is shown and the knobs take no hand. -->
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|zoneShown=-|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="zone.cutoff"
+                    values="1000" expect="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="cutoff" value="20000"/>
+
+    <select-zones trackPath="0" slotIndex="0" zones="1"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|zoneShown=1|"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="zone.cutoff=2e+04,"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains=",layer1.level=0,"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains=",layer3.level=-,"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=6|"/>
+
+    <!-- ONE DRAG, ONE STEP: three positions, one undo restores the first. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="zone.cutoff"
+                    values="1000;2000;4000"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="cutoff"
+                            value="3999.723739"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=7|"/>
+    <!-- A second drag is a step of its own. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="zone.cutoff" values="500;300"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=8|"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="cutoff"
+                            value="3999.723739"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="cutoff" value="20000"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="zone.cutoff=2e+04,"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="cutoff"
+                            value="3999.723739"/>
+    <undo/>
+
+    <!-- Without a press (a wheel notch, a key step) each move is its own step. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="zone.attack"
+                    values="1;2" press="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="attack" value="1.98"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="attack" value="1.02"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="attack" value="0"/>
+
+    <!-- A LAYER KNOB is set-layer on that layer of the shown zone. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="layer2.pan"
+                    values="-0.5;-1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="3" attr="pan" value="-1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="pan" value="0"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="3" attr="pan" value="0"/>
+    <!-- A layer the zone does not have takes no hand. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="layer3.level"
+                    values="-3" expect="0"/>
+
+    <!-- SEVERAL ZONES SELECTED: a zone knob sets them all, one undo restores
+         all. The view shows the first. -->
+    <select-zones trackPath="0" slotIndex="0" zones="4;1"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|zoneShown=4|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="knob" knob="zone.level" values="-6;-12"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="level" value="-11.952"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="4" attr="level" value="-11.952"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="level" value="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="4" attr="level" value="0"/>
+
+    <!-- THE VERB'S HALF, without the widget: two set-zone of one gesture are
+         one step, of two gestures two (the script's gesture= numbers). -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" resonance="0.2" gesture="1"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" resonance="0.4" gesture="1"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="resonance" value="0"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" resonance="0.2" gesture="2"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" resonance="0.4" gesture="3"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="resonance" value="0.2"/>
+    <undo/>
+    <!-- A relative edit never merges: its redo would apply only the last step. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="+1" gesture="4"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="+1" gesture="4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="2"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="1"/>
+    <undo/>
+    <!-- Other targets or other parameters never merge, whatever the gesture. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" resonance="0.3" gesture="5"/>
+    <set-zone trackPath="0" slotIndex="0" zone="4" resonance="0.3" gesture="5"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="resonance" value="0.3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="4" attr="resonance" value="0"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" drive="0.5" gesture="6"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="drive" value="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="resonance" value="0.3"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

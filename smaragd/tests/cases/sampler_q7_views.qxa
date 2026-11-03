@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7.1 (QBX-279; nassau-digital GATES Q7.1, DESIGN 7): "Key, Pad,
+  Map and Zone views open at their fixed sizes; the view of an instance
+  survives a save and reload".
+
+  The editor is opened the way a user opens it: the FX strip row's Edit item
+  (plugin-row-command), which consults pluginui's app-editor registry before
+  the native editor and the slider list. Nothing is shown (a test-case run);
+  the window is built, registered and read through its describe() seam.
+
+  SIZES ARE CONSTRAINTS, NOT RECTANGLES: a test-case run never maps a window,
+  so the case asserts minimumSize == maximumSize (pageFixed, fixedAll) and the
+  size the stack is pinned to, which is the CURRENT page's (pageSize). A
+  QStackedWidget left to itself takes its LARGEST page, so pageSize moving with
+  the view is what says the window takes the view's own size.
+
+    Key   896 x 144   (128 keys of 7 px)
+    Pad   392 x 432   (4 x 4 cells of 88 px, gaps of 8, the bank row)
+    Map   808 x 416   (128 keys x 6 px, 128 velocities x 3 px, the axes)
+    Zone  760 x 400   (five knob rows)
+
+  A view switch is a click on the view button, which submits set-sampler-view:
+  undoable, and saved with the instance (the editorOpen flag too).
+-->
+<SActionScript version="1" name="sampler_q7_views">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" open="0" flag="0"/>
+
+    <!-- The FX strip's Edit opens THIS window: the registry is consulted first. -->
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" open="1" flag="1"/>
+    <plugin-generic-editor trackPath="0" slotIndex="0" action="assert" expectOpen="0"/>
+    <assert-plugin-editor-kind trackPath="0" slotIndex="0" expect="app"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="sizes=key:896x144,pad:392x432,map:808x416,zone:760x400|fixedAll=1"/>
+    <!-- A new instance with no program object: the default view, Key. -->
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=key|page=key|pageSize=896x144|pageFixed=1|"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|program=0|"/>
+
+    <!-- Each view at its own size. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="pad"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=pad|page=pad|pageSize=392x432|pageFixed=1|"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="pad"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="map"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=map|page=map|pageSize=808x416|pageFixed=1|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="zone"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=zone|page=zone|pageSize=760x400|pageFixed=1|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="key"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=key|page=key|pageSize=896x144|pageFixed=1|"/>
+
+    <!-- A switch is one undo step, and the window follows the undo. -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="zone"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=zone|page=zone|pageSize=760x400|"/>
+    <redo/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="open=1|view=key|page=key|"/>
+
+    <!-- A script's set-sampler-view moves the open window too. -->
+    <set-sampler-view trackPath="0" slotIndex="0" view="map"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=map|page=map|pageSize=808x416|"/>
+
+    <!-- Saved with the instance: the view, and that the editor was open. -->
+    <save-project path="../../build/sampler_q7_views.qxp"/>
+    <load-project path="../../build/sampler_q7_views.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="map"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" flag="1"/>
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=map|page=map|pageSize=808x416|pageFixed=1|"/>
+
+    <!-- Closed, the flag says so, and a save carries that. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="close"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" open="0" flag="0"/>
+    <save-project path="../../build/sampler_q7_views_closed.qxp"/>
+    <load-project path="../../build/sampler_q7_views_closed.qxp"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" open="0" flag="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="map"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

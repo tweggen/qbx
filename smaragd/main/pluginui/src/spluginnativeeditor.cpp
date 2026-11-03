@@ -1,4 +1,5 @@
 #include "app/pluginui/spluginnativeeditor.h"
+#include "app/pluginui/spluginappeditors.h"
 
 #include "app/model/splacements.h"
 #include "app/model/slink.h"
@@ -388,6 +389,11 @@ void SPluginNativeEditor::restoreOpenEditors( SProject *project,
         for( int i = 0; i < chain->getSlotCount(); ++i ) {
             SPluginSlot *slot = chain->getSlotAt( i );
             if( !slot || !slot->getEditorOpen() ) continue;
+            // An app-side editor (QBX-279) restores through its own entry.
+            if( spluginappeditors::hasEditorFor( slot ) ) {
+                spluginappeditors::openFor( t, slot, parentForPosition, true );
+                continue;
+            }
             // openFor() re-asserts the flag on success. On FAILURE it is left
             // exactly as the file had it, on purpose: the plugin may be missing
             // on this machine and back on the next one, and silently clearing

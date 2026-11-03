@@ -1,4 +1,5 @@
 #include "app/pluginui/splugineffectstrip.h"
+#include "app/pluginui/spluginappeditors.h"
 #include "app/model/suifonts.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/spluginslot.h"
@@ -979,6 +980,14 @@ void SPluginEffectStrip::openParamEditor(int slotIndex)
     // generic editor, which is a complete substitute and not an error state.
     if( pluginChain_ && track_ ) {
         if( SPluginSlot *slot = pluginChain_->getSlotAt( slotIndex ) ) {
+            // FIRST AN APP-SIDE EDITOR (proposal 56 §4.11, QBX-279): an
+            // instrument whose model lives in the app registered its own window
+            // by uid (spluginappeditors.h), and that window is its editor --
+            // neither a native GUI nor the slider list is.
+            if( spluginappeditors::hasEditorFor( slot ) ) {
+                spluginappeditors::openFor( track_, slot, this, showWindow );
+                return;
+            }
             // The TRACK and the SLOT, not a path and an index: the window
             // outlives this strip and derives its own address at every commit
             // (see SPluginNativeEditor::openFor).
@@ -997,8 +1006,10 @@ QString SPluginEffectStrip::editorKindFor( int slotIndex )
     if( !slot ) return QStringLiteral( "none" );
     if( trackPathString().isEmpty() ) return QStringLiteral( "none" );
 
-    // The SAME predicate openParamEditor() branches on, called rather than
+    // The SAME predicates openParamEditor() branches on, called rather than
     // restated: a second copy of the rule could drift from the one that runs.
+    if( track_ && spluginappeditors::hasEditorFor( slot ) )
+        return QStringLiteral( "app" );
     if( track_ && SPluginNativeEditor::isAvailableFor( slot ) )
         return QStringLiteral( "native" );
 

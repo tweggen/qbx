@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7.2 (QBX-279; nassau-digital GATES Q7.2, DESIGN 7 "your hands
+  choose what you edit"): holding a key selects its zone, holding two selects
+  both, through a tap of the DEVICE input (not the engine's event feed),
+  asserted with injected MIDI.
+
+  The author's answers of 2026-11-03, each a section below:
+    1. hand selection is NOT an undo step (the selection is set directly);
+    2. the selection stays after the keys are released, until another key
+       is held; several keys held together select all their zones;
+    3. the zone selection is not saved.
+
+  sampler-hold-keys injects into the CAPTURE MIDI input, the device input a
+  test-case run opens, so its notes reach every sink of that port's fan-out;
+  the editor's own sink is one of them and exists only while the editor is
+  open. A note injected while the editor is closed reaches no editor sink, so
+  opening the editor afterwards selects nothing.
+
+  Zones (ids from nextId):  1 = keys 36..47,  3 = keys 48..59,
+                            5 = keys 44..52 (overlaps both),  7 = keys 60..71.
+    key 40 -> 1        key 50 -> 3, 5       key 46 -> 1, 5
+    key 64 -> 7        key 100 -> none
+-->
+<SActionScript version="1" name="sampler_q7_hand_select">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47"><layer src="test:a"/></add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="48" keyHi="59"><layer src="test:b"/></add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="44" keyHi="52"><layer src="test:c"/></add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="71"><layer src="test:d"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;5;7" selected=""/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- No editor, no tap: the verb is refused, and a note played now
+         reaches no editor (the shell's key tap still sees it). -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40" expectReject="true"/>
+    <midi-in-event kind="noteon" key="40" velocity="100" channel="0"/>
+    <wait-ms ms="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="40" selected=""/>
+
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|tap=1|"/>
+    <wait-ms ms="100"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=|held=|"/>
+
+    <!-- An undoable step to undo later: the view to Map. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="map"/>
+
+    <!-- One key: its zone. Released: the selection stays. -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=1|held=40|"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" release="40"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=1|held=|"/>
+
+    <!-- Another key held replaces it: key 50 is covered by zones 3 and 5. -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="50"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="3;5"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" release="50"/>
+
+    <!-- Two keys held together: every zone of both, each once, in the order
+         the keys came. -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="64;46"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=7;1;5|held=46;64|"/>
+    <!-- One of them let go, a third added while the other is still held:
+         the chord grows. -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" release="64"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7;1;5"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="50"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7;1;5;3"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" release="46;50"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=7;1;5;3|held=|"/>
+
+    <!-- A velocity-0 note-on is a release, not a key. -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40" velocity="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=1|held=|"/>
+
+    <!-- A key no zone covers selects nothing. -->
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="100" release="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected=""/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="64" release="64"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7"/>
+
+    <!-- 1. NOT AN UNDO STEP: one undo takes back the view switch made before
+         every key above, and the hand's selection stays. -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="key" selected="7"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="map" selected="7"/>
+
+    <!-- The scripted verb stays undoable, beside it. -->
+    <select-zones trackPath="0" slotIndex="0" zones="3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="3"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7"/>
+
+    <!-- The tap follows the track's input: no MIDI input, no tap. -->
+    <set-track-input trackPath="0" input=""/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|tap=0|"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40" release="40"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|tap=1|"/>
+
+    <!-- A channel the input does not take reaches no tap. -->
+    <set-track-input trackPath="0" input="midi:capture:3"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40" release="40" channel="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="7"/>
+    <sampler-hold-keys trackPath="0" slotIndex="0" keys="40" release="40" channel="3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+
+    <!-- Closed, the tap is released: a note played now selects nothing, and
+         none is waiting in a ring when the editor opens again. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="close"/>
+    <midi-in-event kind="noteon" key="64" velocity="100" channel="0"/>
+    <midi-in-event kind="noteoff" key="64" channel="0"/>
+    <wait-ms ms="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" lastKey="64" selected="1"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="open"/>
+    <wait-ms ms="100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+
+    <!-- NOT THE ENGINE'S FEED: a sequenced note on key 64 plays through the
+         instrument and selects nothing (the tap reads the device port only). -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Seq"/>
+    <add-note clip="0,0" tick="0" dur="960" key="64" velocity="100" channel="0"/>
+    <render filename="sq7_hand_select.wav" format="wav" quality="10" durationSec="0.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected="1"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|selected=1|held=|"/>
+
+    <!-- 3. NOT SAVED. -->
+    <save-project path="../../build/sampler_q7_hand_select.qxp"/>
+    <load-project path="../../build/sampler_q7_hand_select.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;5;7" selected=""/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
