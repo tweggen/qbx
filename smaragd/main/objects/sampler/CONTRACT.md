@@ -502,7 +502,8 @@ absolute (there is nothing to be relative to).
   sampler (panned left) and the test sine (panned right) armed on one MIDI
   input, one injected note-on. The sampler's onset lag 4646–4936 frames over
   25 runs against the live lane's bound of 7168 (4 ring + 2 lead + 1 device
-  block); the sine's, from the same note, one frame later in every run,
+  block; the author's answer of 2026-11-03 to what GATES Q5.1's
+  "block-plus-lead bound" is); the sine's, from the same note, one frame later in every run,
   asserted as `refChannel` difference <= 64; each channel its own instrument
   at its closed-form level; `liveOwnedRefusals` 0.
 - `qxa.sampler_q5_live_playing` — Q5.1 with the transport running (Monitor
@@ -550,6 +551,10 @@ absolute (there is nothing to be relative to).
 - The bounce reads the asset's window as start + length in the content: a
   stretched, warped or looped asset window is bounced unstretched and
   unlooped (no qbx verb makes one today).
+- A bounce of an asset whose content holds an ARMED instrument track freezes
+  that track's live-owned processor directly: the freeze is refused and
+  counted, and the bounce is silent for that span. Untested, filed as
+  QBX-274 (found by QBX-271).
 - A bounce during PLAYBACK stales the sampler's track (invariant 14) but no
   case plays.
 

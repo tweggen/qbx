@@ -844,7 +844,8 @@ onsets aspect from proposal 27 M1. Scope: §4.8.
   perform or to claim.
 * **Q5.q1** A generation installed while a live voice sounds does not change
   that voice; the next note plays the new one (DESIGN §6.1 rule 4).
-* *As built (§11 "Q5 as built"): the bound is read as 7168 frames; the
+* *As built (§11 "Q5 as built"): the bound is 7168 frames (the author's
+  answer of 2026-11-03); the
   sampler is also measured against a reference instrument from the same
   note; the ownership half is asserted with the transport running, where it
   can fail. The Q5.2 procedure is item 6 there.*
@@ -1705,8 +1706,9 @@ plays through the LiveGraphPump exactly as the test CLAP sine does, with the
 first build. Gated: Q5.1, and Q5.q1. Not an agent's: Q5.2 (the procedure is
 item 6). Where the text above did not survive the build, or needed reading:
 
-1. **"The live lane's block-plus-lead bound" is read as 7168 frames** (§6
-   Q5.1, GATES Q5.1). Neither GATES nor this proposal gives the number, and
+1. **"The live lane's block-plus-lead bound" is 7168 frames** (§6 Q5.1,
+   GATES Q5.1; the author's answer of 2026-11-03, on #342). Neither GATES nor
+   this proposal gave the number, and
    the literal reading (one block plus the two-block lead, 3072 frames at the
    headless block) is a bound NO instrument meets: the test sine measures
    4025–5008 frames here and 4544 in live_instrument_play's first run, the
@@ -1716,9 +1718,10 @@ item 6). Where the text above did not survive the build, or needed reading:
    the RT pulls next, which is one device block past the one being
    delivered, and the ring is four blocks deep). live_instrument_play asserts
    12288 for headroom; Q5.1 asserts 7168, because the sabotage that holds the
-   sampler's notes back three blocks measures 8003 and would pass 12288. *An
-   author's reading, recorded as an open question in the PR: if "block plus
-   lead" meant something else, the number is one attribute.*
+   sampler's notes back three blocks measures 7991–8003 and would pass
+   12288. The build proposed this reading as an open question; the author
+   answered it on 2026-11-03: the bound is 7168 frames (4 ring + 2 lead + 1
+   device block).
 2. **The sampler is measured against a reference from the SAME note**
    (not in §4.9, which measures it against nassau-analogue by hand only).
    The sampler (panned hard left) and the test sine (hard right), both armed
@@ -1869,4 +1872,8 @@ item 6). Where the text above did not survive the build, or needed reading:
    are re-frozen by the readahead); live play of a TEMPO-mode zone (its
    stretch generations install like any other; no case plays one); the
    sampler's per-block cost at a large polyphony (C2.6 budgets it in the
-   core; the headless notes are single voices).
+   core; the headless notes are single voices). **Untested risk, filed as
+   QBX-274**: a sampler asset bounce (Q3) freezes the asset's content
+   directly, so if that content holds an ARMED instrument track the freeze
+   reaches a live-owned processor, is refused and counted, and the bounce is
+   silent for that span. No case builds it.
