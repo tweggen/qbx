@@ -903,6 +903,23 @@ foreach(_mrec midi_record_placement midi_record_modes midi_record_loop_takes
     endif()
 endforeach()
 
+# --- recording into NassauDigital (proposal 56 Q6, QBX-272) ------------------
+#
+# The three that RECORD (a real-time-paced take from the file input into the
+# instrument) are wall-clock tests like the audio recording cases: RUN_SERIAL,
+# SMARAGD_CAPTURE_SPEED=1. The input is test_stereo.wav, a looping sine of
+# CONSTANT RMS on both channels (0.5 / 0.25), so where the capture starts in
+# the file moves nothing a case asserts. sampler_q6_view_verbs records nothing
+# and needs none of it.
+foreach(_q6 sampler_q6_record sampler_q6_land_pad sampler_q6_land_key_empty
+            sampler_q6_land_key_zones)
+    if(TEST qxa.${_q6})
+        set_tests_properties(qxa.${_q6} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_AUDIO_INPUT_BACKEND=file:../test_stereo.wav")
+    endif()
+endforeach()
+
 # SMARAGD_CAPTURE_SPEED=1 is spelled out rather than left to the default: the
 # testkit maps a MIDI host time onto a project frame through the audio capture
 # backend's block log, and any other pacing changes what a project frame means

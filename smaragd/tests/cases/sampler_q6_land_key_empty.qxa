@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 56 Q6 (QBX-272): GATES Q6.2, Key view on an EMPTY program. "Key
+  view on an empty program: a zone over the whole keyboard." DESIGN 7: "a
+  zone across the whole keyboard, played chromatically around its root key".
+
+  Env as sampler_q6_record (RUN_SERIAL, real-time file input
+  test_stereo.wav: a 480 Hz sine, the instance's own record input, a MIDI
+  track input).
+
+  The instance was in the Pad view and is switched back to Key before the
+  take, so the landing reads the view as it is at the stop. The take lands
+  as zone 1 (keyLo 0, keyHi 127, root 60: the core's default root key), and
+  it plays CHROMATICALLY: a note on the root plays the recording at 480 Hz
+  and at its level, a note an octave up at 960 Hz, an octave down at 240 Hz.
+-->
+<SActionScript version="1" name="sampler_q6_land_key_empty">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <!-- Three notes, one per second: root, an octave up, an octave down. -->
+    <insert-midi-clip trackPath="0" timePos="0" duration="11520" name="Hits"/>
+    <add-note clip="0,0" tick="40" dur="960" key="60" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="1960" dur="960" key="72" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="3880" dur="960" key="48" velocity="127" channel="0"/>
+
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="1" pad="5"/>
+    <set-sampler-view trackPath="0" slotIndex="0" view="key"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="0" view="key"/>
+
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <set-sampler-record-input trackPath="0" slotIndex="0" input="audio:qxa-record-input:3"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: key view, empty program: a zone over the whole keyboard" minCount="1"/>
+
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1" recordedLayer="2"
+                            recordedAsset="Recording 1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyLo" value="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyHi" value="127"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="rootKey" value="60"/>
+
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq6_keyempty.wav" format="wav" quality="10" durationSec="3.5"/>
+    <!-- The root: the recording, at its level. -->
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="2" filename="sq6_keyempty.wav"
+                                    noteFrame="1000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+    <assert-audio-frequency filename="sq6_keyempty.wav" channel="0" startFrame="2000"
+                            frameCount="16000" minHz="475" maxHz="485"/>
+    <!-- An octave up (tick 1960 = frame 49000) and an octave down (frame 97000). -->
+    <assert-audio-frequency filename="sq6_keyempty.wav" channel="0" startFrame="50000"
+                            frameCount="16000" minHz="950" maxHz="970"/>
+    <assert-audio-frequency filename="sq6_keyempty.wav" channel="0" startFrame="98000"
+                            frameCount="16000" minHz="237" maxHz="243"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

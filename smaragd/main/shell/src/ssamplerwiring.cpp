@@ -135,6 +135,35 @@ void install()
 
 namespace ssamplerwiring {
 
+SSamplerProgram *recordTargetOf( STrack *track, int *slotIndex )
+{
+    SPluginChain *chain = track ? track->getPluginChain() : nullptr;
+    if( !chain ) return nullptr;
+    for( int i = 0; i < chain->getSlotCount(); ++i ) {
+        SPluginSlot *slot = chain->getSlotAt( i );
+        if( !slot || !hostsNassauDigital( *slot ) ) continue;
+        SSamplerProgram *p = programChild( *slot );
+        if( p && !p->recordInput().isEmpty() ) {
+            if( slotIndex ) *slotIndex = i;
+            return p;
+        }
+    }
+    return nullptr;
+}
+
+QList<SSamplerProgram *> programsOf( STrack *track )
+{
+    QList<SSamplerProgram *> out;
+    SPluginChain *chain = track ? track->getPluginChain() : nullptr;
+    if( !chain ) return out;
+    for( int i = 0; i < chain->getSlotCount(); ++i ) {
+        SPluginSlot *slot = chain->getSlotAt( i );
+        if( !slot || !hostsNassauDigital( *slot ) ) continue;
+        if( SSamplerProgram *p = programChild( *slot ) ) out.append( p );
+    }
+    return out;
+}
+
 int settleBoundMs()
 {
     int bound = 30000;

@@ -32,6 +32,9 @@
 #include "app/shell/slivemonitor.h"
 #include "app/servicesui/soptions.h"
 #include "app/shell/ssettings.h"
+#include "app/shell/ssamplerwiring.h"
+#include "app/objects/sampler/ssamplerprogram.h"
+#include "app/objects/sampler/ssamplerrecordactions.h"
 
 #include "tw/core/twlog.h"
 #include "tw/devices/audio_backend.h"
@@ -67,7 +70,14 @@ void collectArmed( SObject *container, const QList<int> &path,
             // matters here in particular, because without it a MIDI-armed
             // track would get an audio WAV sink and a growing audio clip out
             // of an input device it never asked for.
-            if( t->isArmedForRecording() && !t->hasMidiTrackInput() )
+            //
+            // EXCEPT A TRACK WHOSE NASSAUDIGITAL INSTANCE HAS A RECORD INPUT
+            // (proposal 56 Q6, the Q-1 answer): that track records AUDIO into
+            // the instrument from the instance's own input, whatever the
+            // track's own input is, and the MIDI recorder still takes its
+            // MIDI half.
+            if( t->isArmedForRecording() &&
+                ( !t->hasMidiTrackInput() || ssamplerwiring::recordTargetOf( t, nullptr ) ) )
                 out.push_back( { t, p } );
         }
         collectArmed( child, p, out );
@@ -141,6 +151,12 @@ bool SAudioRecorder::collectArmed_()
         a.track = pr.first;
         a.path  = pr.second;
         a.mask  = pr.first->getRecordingChannels();
+        int slot = -1;
+        if( SSamplerProgram *prog = ssamplerwiring::recordTargetOf( pr.first, &slot ) ) {
+            a.sampler     = prog;
+            a.samplerSlot = slot;
+            a.mask        = prog->recordInputMask();
+        }
         armed_.push_back( a );
     }
     return !armed_.empty();
@@ -180,7 +196,11 @@ bool SAudioRecorder::start()
     // monitor for the rest of the take.
     SLiveMonitor *mon = app_->liveMonitor();
     deviceName_.clear();
-    if( !armed_.empty() && armed_.front().track )
+    // A take INTO A SAMPLER asks for the instance's own record input device
+    // (proposal 56 Q6) where a lane take asks for the track's.
+    if( !armed_.empty() && armed_.front().sampler )
+        deviceName_ = armed_.front().sampler->recordInputDevice();
+    else if( !armed_.empty() && armed_.front().track )
         deviceName_ = armed_.front().track->trackInputAudioDevice();
     if( deviceName_.isEmpty() && mon ) deviceName_ = mon->inputDeviceId();
     if( deviceName_.isEmpty() )
@@ -283,6 +303,10 @@ void SAudioRecorder::placeGrowingClips_()
     // check_root_resolution: suspect QBX-247 -- the pass lands where collectArmed_ looked; QBX-247 decides which roots that is, and this must use the SAME one
     SObject *mixer = splacements::rootContainer( project );
     for( Armed &a : armed_ ) {
+        // A take into a sampler grows in no lane: it lands in the instrument,
+        // and only when it stops (DESIGN §7: "the sample is playable when
+        // recording stops").
+        if( a.sampler ) continue;
         // `placementLaneAt`, not `laneAt`, FOR SYMMETRY WITH THE VERB (plan 53
         // B6). `place-recording` already refuses a lane that does not accept
         // clips, and announces it; the growing clip is the same question asked
@@ -310,6 +334,16 @@ void SAudioRecorder::placeGrowingClips_()
 
 void SAudioRecorder::removeGrowingClips_()
 {
+    // A press whose every armed track records INTO a sampler (Q6) grew no
+    // cut, so no content link ever owned the growing content: release it
+    // here through the refcount's own path (deleteLater), or it and its
+    // capture pages would live as long as the project.
+    bool anyCut = false;
+    for( const Armed &a : armed_ ) if( a.link ) anyCut = true;
+    if( !anyCut && content_ && content_->refCount() == 0 ) {
+        content_->addRef();
+        content_->removeRef();
+    }
     for( Armed &a : armed_ ) {
         if( !a.link ) continue;
         // setParent(nullptr) first: ~SLink must not run its childRemoved
@@ -575,6 +609,7 @@ void SAudioRecorder::snapPassWide_( std::int64_t *a, std::int64_t *b ) const
     // members contribute nothing.
     QList<SObject *> lanes;
     for( const Armed &arm : armed_ ) {
+        if( arm.sampler ) continue;    // its lane gains nothing (Q6)
         SObject *lane = splacements::laneAt( mixer, arm.path );
         if( !lane ) continue;
         if( !lanes.contains( lane ) ) lanes.append( lane );
@@ -825,6 +860,7 @@ void SAudioRecorder::commitPlacement_()
     };
     QHash<int, GroupPlan> groups;
     for( const Armed &a : armed_ ) {
+        if( a.sampler ) continue;      // lands in the instrument (Q6)
         if( !QFileInfo( a.file ).exists() ) continue;
         SObject *lane = splacements::laneAt( mixer, a.path );
         const int gid = lane ? lane->getEditGroup() : 0;
@@ -892,6 +928,37 @@ void SAudioRecorder::commitPlacement_()
             skipped_.append( { a.path, a.file,
                                QStringLiteral( "its capture file was never "
                                                "written" ) } );
+            continue;
+        }
+
+        // ---- RECORDING INTO THE INSTRUMENT (proposal 56 Q6, §4.10) --------
+        //
+        // Not a lane pass: `place-sampler-recording` lands the take IN the
+        // instance by DESIGN §7's rule, read from the instance's view, pad and
+        // last key played NOW, and registers the file as an asset (Q-4).
+        // Inside the same commit scope as every lane of the press (Q6.q1: one
+        // undo for the press). The span is the whole kept capture: frames
+        // before the transport start are trimmed as for a lane, and the
+        // cycle and punch regions, which are positions on a timeline, do not
+        // apply to a sample (one recording per press).
+        if( a.sampler ) {
+            SActionHistory *hist = app_->actionHistory();
+            const int rejectedBefore = hist ? hist->rejectedCount() : 0;
+            app_->submitAction( new SPlaceSamplerRecordingAction(
+                splacements::specOf( project, a.track ), a.samplerSlot, a.file,
+                (qint64) trimmed_, (qint64) placeable ) );
+            const int rejectedAfter = hist ? hist->rejectedCount() : rejectedBefore;
+            if( rejectedAfter > rejectedBefore ) {
+                TW_LOGW( "shell", "[REC] the instrument refused the recording: %s",
+                         a.file.toStdString().c_str() );
+                skipped_.append( { a.path, a.file,
+                                   QStringLiteral( "the instrument refused the recording" ) } );
+            } else {
+                TW_LOGI( "shell", "[REC] recorded into NassauDigital slot %d: %s "
+                                  "[%lld, +%lld)",
+                         a.samplerSlot, a.file.toStdString().c_str(),
+                         (long long) trimmed_, (long long) placeable );
+            }
             continue;
         }
         // THE RECORDER RESOLVES THE MODE, per armed lane, and submits the

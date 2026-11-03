@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proposal 56 Q6 (QBX-272): GATES Q6.2, Pad view. "Pad view: the selected
+  pad's key." DESIGN 7: "on the selected pad's key, as that pad's zone
+  (replacing layer 1 if the zone exists)".
+
+  Env as sampler_q6_record (RUN_SERIAL, real-time file input
+  test_stereo.wav, the instance's own record input, a MIDI track input).
+
+  The program is NOT empty (a zone on key 36, the GM kick: zone 1, layer 2),
+  so the Key view's rules would not land the take where the pad does. The
+  selected pad is pad 5 of bank 1: key 36 + 16 + 5 = 57, a key no zone holds.
+
+  TAKE 1 makes the pad's zone: a one-key zone on 57, root 57 (zone 3, layer
+  4), zone 1 untouched; a note on 57 plays the recording at its level (the
+  Q6.1 measurement). TAKE 2 on the same pad REPLACES layer 1 of that zone:
+  still two zones, the same layer id now naming take 2's file, no id spent
+  (nextId stays 5); its undo puts take 1 back exactly.
+-->
+<SActionScript version="1" name="sampler_q6_land_pad">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="3840" name="Hit"/>
+    <add-note clip="0,0" tick="40" dur="960" key="57" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36" mode="oneshot">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="1" pad="5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1" view="pad" padKey="57"/>
+
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <set-sampler-record-input trackPath="0" slotIndex="0" input="audio:qxa-record-input:3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="before"/>
+
+    <!-- ............................................................ TAKE 1 -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: pad key 57: a new one-key zone" minCount="1"/>
+
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="5" recordedLayer="4"
+                            recordedAsset="Recording 1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="keyLo" value="57"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="keyHi" value="57"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="rootKey" value="57"/>
+    <!-- Zone 1 is untouched. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="keyHi" value="36"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="src"
+                            value="file:../test_autosaw.wav"/>
+
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq6_pad1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="4" filename="sq6_pad1.wav"
+                                    noteFrame="1000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" capture="take1"/>
+
+    <!-- .................................... TAKE 2: the pad's zone exists -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="500"/>
+    <record-start/>
+    <wait-ms ms="1500"/>
+    <record-stop/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: pad key 57: layer 4 of zone 3 replaced" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" nextId="5" recordedLayer="4"
+                            recordedAsset="Recording 2" differsFromCaptured="take1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="keyLo" value="57"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <render filename="sq6_pad2.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-sampler-recording-level trackPath="0" slotIndex="0" layer="4" filename="sq6_pad2.wav"
+                                    noteFrame="1000" offset="0" frameCount="20000"
+                                    tolerance="0.02"/>
+
+    <!-- Its undo puts take 1 back, exactly; take 1's asset stays. -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="take1"
+                            assetAbsent="Recording 2"/>
+    <!-- ...and the undo of take 1 the program before the takes. -->
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="before" ignoreNextId="1"
+                            assetAbsent="Recording 1" view="pad" padKey="57"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

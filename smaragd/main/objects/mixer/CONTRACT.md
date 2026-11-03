@@ -22,6 +22,11 @@ Invariants:
    order survives only through SObject::event's resurrection guard, whose
    warning `rename_asset.qxa` asserts absent). Gated by `rename_asset.qxa`
    and `sampler_q3_asset_link.qxa`.
+   `remove-asset` of a FILE-BACKED asset (an SCut over an extern file, as
+   objects/cut's `create-file-asset` registers a sampler recording, proposal 56
+   Q6) inverts to `create-file-asset` with the same file, window and name. The
+   container walk finds no path to a file, so before QBX-272 such a removal was
+   refused outright. Gated through `sampler_q6_record`'s undo.
    **A verb here that attaches X under Y asks `sarrangements::reaches(X, Y)`
    BEFORE it mutates, and refuses with the reason** (QBX-267): `place-asset`
    (which always asked), `reparent-track` (which asked only
