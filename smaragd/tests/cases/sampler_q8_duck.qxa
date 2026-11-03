@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q8_duck">
+
+  <!-- PROPOSAL 56 Q8 (QBX-273) = NassauDigital GATES Q8.2: THE 909 INTO A
+       DUCKED BASS. A compressor on a bass track, keyed from the return track
+       that carries the sampler's aux-1 kick, ducks the bass while the kick
+       sounds (measured RMS).
+
+       "Bass" (track 0) plays ../test_stereo.wav (3 s; channel 0 at RMS 0.5,
+       channel 1 at 0.25) through tw.test.clap.duck, proposal 55's keyed hard
+       gate: the key is on from the first frame whose |key| exceeds 0.01 until
+       2048 frames after the last such frame, and while it is on
+       out = in * 0.25, otherwise out = in. No attack, no release: the gain is
+       a closed form, and the windows are sidechain_duck_from_return's (M4).
+
+       "Drums" (track 1) is a NassauDigital slot with ONE zone, the kick: key
+       36, one-shot, output aux1, ../test_clipsaw.wav (2 s, a sawtooth at RMS
+       0.5485). One kick at tick 960 = frame 24000, so the key is on over
+       [24000, 120000 + 2048). Its aux 1 is routed to the return track "Drums
+       Aux 1" (track 2), which keys the duck at the pre tap.
+
+       THE FILE HOLDS THE BASS ALONE, and that is Q8.1 again from the other
+       side: the Drums track is NOT muted, so any of the kick left on main
+       would be in the file and move every window below; the return is MUTED,
+       which must not stop the key (proposal 55 D6).
+
+       Windows (each more than 2048 frames from a key edge):
+         inside   [28000, 116000)   0.25 x dry, +-1 %: ch0 0.125, ch1 0.0625
+         before   [0, 23000)        dry, +-1 %:        ch0 0.5,   ch1 0.25
+         after    [124000, 144000)  dry, +-1 %
+       Two-sided bands: silence satisfies "quieter than", never "0.25 x dry".
+
+       AND NOT WITHOUT IT: unrouting aux 1 (clear-return-source) takes the
+       kick off the return, so the key is silent and the bass is dry inside
+       the window (Q8.3's other half: the duck follows the routing from the
+       next render). The Drums track is muted for that render, because the
+       kick is back on its main. Undo routes it again and the duck is back.
+
+       Watched failing: see proposal 56 section 11, "Q8 as built". -->
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The bass, through the ducking compressor. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Bass"/>
+    <add-sample trackPath="0" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+
+    <!-- The 909: a kick zone on aux 1. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Drums"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="7680" name="Kick"/>
+    <add-note clip="1,0" tick="960" dur="480" key="36" velocity="127" channel="0"/>
+    <add-zone trackPath="1" slotIndex="0" keyLo="36" keyHi="36" rootKey="36"
+              mode="oneshot" output="aux1">
+      <layer src="file:../test_clipsaw.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="1" slotIndex="0" timeoutMs="15000"/>
+
+    <!-- Aux 1 to a return track, muted; the bass keyed from it. -->
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <assert-return-track trackPath="2" isReturn="1" source="1" slot="0" bus="1" routed="1"/>
+    <set-track-mute trackPath="2" muted="1"/>
+    <set-plugin-sidechain trackPath="0" slot="0" source="2"/>
+    <assert-plugin-sidechain trackPath="0" slot="0" keyed="1" source="2" tap="pre"
+                             wired="1" mapping="mapping=copy"/>
+
+    <render filename="sq8d_keyed.wav" format="wav" quality="10" durationSec="3.0"/>
+    <!-- inside the kick: 0.25 x dry, +-1 % -->
+    <assert-audio-energy filename="sq8d_keyed.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+    <assert-audio-energy filename="sq8d_keyed.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.061875" maxRms="0.063125"/>
+    <!-- before and after it: dry, +-1 % -->
+    <assert-audio-energy filename="sq8d_keyed.wav" startFrame="0" frameCount="23000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="sq8d_keyed.wav" startFrame="0" frameCount="23000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+    <assert-audio-energy filename="sq8d_keyed.wav" startFrame="124000" frameCount="20000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="sq8d_keyed.wav" startFrame="124000" frameCount="20000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+
+    <!-- ======================= AND NOT WITHOUT IT: aux 1 unrouted -->
+    <clear-return-source trackPath="2"/>
+    <set-track-mute trackPath="1" muted="1"/>
+    <render filename="sq8d_unrouted.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="sq8d_unrouted.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.495" maxRms="0.505"/>
+    <assert-audio-energy filename="sq8d_unrouted.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.2475" maxRms="0.2525"/>
+
+    <!-- Undo both: routed again, the Drums track audible, the duck back. -->
+    <undo count="2"/>
+    <assert-return-track trackPath="2" isReturn="1" source="1" slot="0" bus="1" routed="1"/>
+    <render filename="sq8d_rekeyed.wav" format="wav" quality="10" durationSec="3.0"/>
+    <assert-audio-energy filename="sq8d_rekeyed.wav" startFrame="28000" frameCount="88000"
+                         channel="0" minRms="0.12375" maxRms="0.12625"/>
+    <assert-audio-energy filename="sq8d_rekeyed.wav" startFrame="28000" frameCount="88000"
+                         channel="1" minRms="0.061875" maxRms="0.063125"/>
+  </actions>
+</SActionScript>

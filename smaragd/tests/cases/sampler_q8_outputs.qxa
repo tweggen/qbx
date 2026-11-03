@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_q8_outputs">
+
+  <!-- PROPOSAL 56 Q8 (QBX-273) = NassauDigital GATES Q8.1 AND Q8.3: THE
+       SAMPLER'S AUX OUTPUT ON A RETURN TRACK, AND BACK ON MAIN WHEN UNROUTED.
+
+       Q8.1  A kick zone on aux 1, aux 1 routed to a return track: the return
+             track carries the kick, main does not (cmp against a golden of
+             each).
+       Q8.3  Unrouting aux 1 sends the kick back to main, and the change is a
+             state change: the next render hears it from the first frame.
+
+       The kit and the notes are sampler_q8_reference's, which renders the
+       three goldens with nothing routed:
+         kick  zone 1 (layer 2): key 36, one-shot, output aux1, test_clipsaw.wav
+         hat   zone 3 (layer 4): key 42, one-shot, main,        test_autosaw.wav
+       Kicks at frames 0 and 60000 (the second crosses the 65536 page
+       boundary, so a page starts inside a sounding aux voice), hats at 30000
+       and 90000.
+
+       Q8.1, "the return carries the kick": the return SOLOED (solo is global,
+       so the Drums track is silenced and the file is the return alone) is
+       byte-identical to sampler_q8_kick.wav, the kick alone on main of a slot
+       with no return. "Main does not": the return MUTED, the file is the
+       Drums track alone, byte-identical to sampler_q8_hat.wav, the hat alone.
+       A main that still carried any of the kick could not be that file.
+
+       Q8.3, "back to main from the first frame": clear-return-source unroutes
+       aux 1; the very next render is byte-identical to sampler_q8_mixed.wav,
+       both zones on main, from frame 0 (where the first kick starts) to the
+       end. The same again after removing the return track outright. "A
+       state change": the Drums track's content epoch is captured before the
+       unroute and must have advanced after it, so every page rendered before
+       it is stale whether or not the render barrier would also have
+       re-rendered it. The render before the unroute fills the cache with
+       the routed pages, so a page served from it would carry no kick on main.
+
+       Undo re-routes, and the return carries the kick again (golden).
+
+       Watched failing (numbers in the PR): see proposal 56 section 11, "Q8
+       as built". -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Drums"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Beat"/>
+    <add-note clip="0,0" tick="0"    dur="480" key="36" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="1200" dur="480" key="42" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="2400" dur="480" key="36" velocity="127" channel="0"/>
+    <add-note clip="0,0" tick="3600" dur="480" key="42" velocity="127" channel="0"/>
+
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36"
+              mode="oneshot" output="aux1" level="-15">
+      <layer src="file:../test_clipsaw.wav"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="42" keyHi="42" rootKey="42" mode="oneshot" level="-12">
+      <layer src="file:../test_autosaw.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+
+    <!-- ========================================== Q8.1: aux 1 to a return -->
+    <add-return-track trackPath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1"
+                         routed="1" mapping="mapping=copy" mask="2"/>
+    <assert-track-name trackPath="1" name="Drums Aux 1"/>
+
+    <!-- The return alone: the kick, byte for byte. -->
+    <set-track-solo trackPath="1" solo="1"/>
+    <render filename="sq8_return.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8_return.wav" expected="../goldens/sampler_q8_kick.wav"/>
+    <set-track-solo trackPath="1" solo="0"/>
+
+    <!-- Main alone: the hat, byte for byte; no kick. -->
+    <set-track-mute trackPath="1" muted="1"/>
+    <render filename="sq8_main.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8_main.wav" expected="../goldens/sampler_q8_hat.wav"/>
+    <assert-audio-energy filename="sq8_main.wav" startFrame="0" frameCount="24000"
+                         channel="0" minRms="0.0" maxRms="0.00001"/>
+    <set-track-mute trackPath="1" muted="0"/>
+
+    <!-- The whole mix with the return audible: kick (from the return) plus
+         hat (from main). Fills the cache with routed pages for Q8.3. -->
+    <render filename="sq8_routed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-audio-energy filename="sq8_routed.wav" startFrame="0" frameCount="1024"
+                         channel="0" minRms="0.08" maxRms="1.0"/>
+
+    <!-- ===================================== Q8.3: unrouted, back on main -->
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" captureTrackEpoch="q8routed"/>
+    <clear-return-source trackPath="1"/>
+    <assert-return-track trackPath="1" isReturn="0"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2"
+                          trackEpochAdvancedSince="q8routed"/>
+    <render filename="sq8_unrouted.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8_unrouted.wav" expected="../goldens/sampler_q8_mixed.wav"/>
+    <assert-audio-energy filename="sq8_unrouted.wav" startFrame="0" frameCount="1024"
+                         channel="0" minRms="0.08" maxRms="1.0"/>
+
+    <!-- Undo routes it again: the return carries the kick, main does not. -->
+    <undo count="1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
+    <set-track-solo trackPath="1" solo="1"/>
+    <render filename="sq8_rerouted.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8_rerouted.wav" expected="../goldens/sampler_q8_kick.wav"/>
+    <set-track-solo trackPath="1" solo="0"/>
+
+    <!-- Removing the return track unroutes aux 1 too. -->
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" captureTrackEpoch="q8rerouted"/>
+    <remove-track trackPath="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2"
+                          trackEpochAdvancedSince="q8rerouted"/>
+    <render filename="sq8_removed.wav" format="wav" quality="10" durationSec="4.0"/>
+    <assert-file-identical actual="sq8_removed.wav" expected="../goldens/sampler_q8_mixed.wav"/>
+  </actions>
+</SActionScript>

@@ -437,7 +437,16 @@ void SStdMixer::rewireReturns()
         if( !ret ) continue;
         if( !ret->isReturnTrack() || ret->isSystemLane() ) {
             // A track whose aux source was cleared: back to its own clip mix.
-            if( ret->hasReturnTap() ) ret->unwireReturnTrack();
+            // Its route MOVED, exactly as a re-pointed return's below, and
+            // needs the same invalidateRenderPath(): the re-wire re-stamps
+            // the track's own chain, but not what it feeds over a routing
+            // edge -- a slot KEYED from it kept ducking from its cached pages
+            // after the unroute (QBX-273, measured: 0.25 x dry on the render
+            // after clear-return-source). The walk follows the key edge.
+            if( ret->hasReturnTap() ) {
+                ret->unwireReturnTrack();
+                ret->invalidateRenderPath();
+            }
             continue;
         }
         STrack *src = ret->auxSourceTrack();

@@ -27,6 +27,14 @@
 //   G. THE STATE BLOB HOLDS NO SAMPLE (A3, the engine half of Q0.4): it is the
 //      8-byte header before and after a 10 MB sample is installed, and a newer
 //      version is refused.
+//   H. THE AUX OUTPUTS (proposal 56 Q8, Q8.q1): nine stereo buses, reported
+//      by the descriptor and the instance. A zone on aux 1 with bus 1 routed
+//      sounds on the tap and not on main, and the tap's page is memcmp-equal
+//      to the same zone's main render unrouted (the core's C6.1, through the
+//      host); unrouted it is back on main. A voice whose note-on falls in the
+//      processor's PRE-ROLL (where the side page is absent, so the host hands
+//      the bus no buffer) still sounds on aux 1 in the page it was pre-rolled
+//      for: main stays silent there.
 
 #include "tw/sampler/twsamplerhost.h"
 #include "tw/sampler/twsamplerregistry.h"
@@ -34,6 +42,8 @@
 
 #include "tw/events/tweventsource.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/pages/tw_output_page.h"
+#include "tw/plugins/twpluginauxtap.h"
 #include "tw/plugins/twplugindescriptor.h"
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginslotproc.h"
@@ -205,8 +215,10 @@ void testRegistration()
     check( reg.findByUid( "tw", kNassauDigitalUid, d ), "registerNassauDigital() makes it resolvable" );
     check( d.isInstrument && d.acceptsNotes && d.io.audioInputs == 0 && d.io.audioOutputs == 2,
            "its descriptor is a 0 -> 2 instrument that accepts notes" );
-    check( d.nOutBuses == 1 && d.outBusChannels.size() == 1 && d.outBusChannels[0] == 2,
-           "it reports ONE stereo bus until Q8 (B7)" );
+    bool allStereo = d.outBusChannels.size() == 9;
+    for( std::uint16_t ch : d.outBusChannels ) allStereo = allStereo && ch == 2;
+    check( d.nOutBuses == 9 && allStereo,
+           "it reports NINE stereo buses, main + 8 aux (Q8.q1; one until Q8, B7)" );
     check( d.name.find( "Smaragd" ) == std::string::npos, "its name is not a code name" );
 
     auto countIt = [&]() {
@@ -237,6 +249,14 @@ void testRegistration()
     check( p && hostOf( *p ) != nullptr, "twSamplerHost is reached by capability (dynamic_cast)" );
     check( p && p->capabilities().isInstrument && p->capabilities().acceptsNotes,
            "the instance says it is an instrument" );
+    if( p ) {
+        bool busesOk = p->audioOutBusCount() == 9 && p->audioOutBus( 0 ).isMain;
+        for( std::size_t b = 0; b < 9; ++b )
+            busesOk = busesOk && p->audioOutBus( b ).channels == 2 &&
+                      p->audioOutBus( b ).isMain == ( b == 0 );
+        check( busesOk && p->audioOutBus( 1 ).name == "Aux 1" && p->audioOutBus( 9 ).channels == 0,
+               "the instance reports the same nine buses: main, then Aux 1..8, all stereo" );
+    }
 
     for( const char *uid : { "tw.passthrough", "tw.native.303" } ) {
         twPluginDescriptor o;
@@ -462,6 +482,125 @@ void testStateBlob( tw303aEnvironment &env, twPluginRegistry &reg )
     check( !p->loadState( newer ), "a NEWER version is refused, never guessed at" );
 }
 
+// --------------------------------------------------------------------- H ---
+
+// One one-shot zone over every key on AUX 1, root 60.
+std::string auxZoneProgram( std::uint32_t layerId )
+{
+    return "<NassauDigitalProgram version=\"1\" name=\"Q8\" nextId=\"" +
+           std::to_string( layerId + 1 ) +
+           "\"><zone id=\"1\" keyLo=\"0\" keyHi=\"127\" rootKey=\"60\" mode=\"oneshot\" "
+           "output=\"aux1\"><layer id=\"" + std::to_string( layerId ) +
+           "\" src=\"test:q8\"/></zone></NassauDigitalProgram>";
+}
+
+std::shared_ptr<twOutputPage> freezeAt( const std::shared_ptr<twComponent> &c, offset_t pos,
+                                        int rate )
+{
+    return c->requestPage( pos, nullptr, 0, (length_t)twOutputPage::FRAME_CAPACITY, rate,
+                           nullptr );
+}
+
+double pageMax( const std::shared_ptr<twOutputPage> &p, idx_t c, std::size_t from, std::size_t to )
+{
+    if( !p ) return -1.0;
+    double m = 0.0;
+    const float *s = p->channelPtr( c );
+    for( std::size_t i = from; i < to && i < p->validFrames; ++i )
+        m = std::max( m, (double)std::fabs( s[i] ) );
+    return m;
+}
+
+bool pagesEqual( const std::shared_ptr<twOutputPage> &a, const std::shared_ptr<twOutputPage> &b )
+{
+    if( !a || !b || a->channels() != b->channels() ) return false;
+    const std::size_t n = twOutputPage::FRAME_CAPACITY;
+    if( a->validFrames < n || b->validFrames < n ) return false;
+    for( idx_t c = 0; c < a->channels(); ++c )
+        if( std::memcmp( a->channelPtr( c ), b->channelPtr( c ), n * sizeof( float ) ) != 0 )
+            return false;
+    return true;
+}
+
+void testAuxOutputs( tw303aEnvironment &env, twPluginRegistry &reg )
+{
+    std::cout << "=== H: the aux outputs (Q8) ===" << std::endl;
+    const int           rate   = env.getSRate();
+    const std::uint32_t kLayer = 2;
+    const offset_t      P      = (offset_t)twOutputPage::FRAME_CAPACITY;
+    const Pcm           a      = makePcm( 20000, 440.0, 0.5 );
+    auto prog = twSamplerProgram::fromXml( auxZoneProgram( kLayer ) );
+    auto samp = toSample( a, 1 );
+    if( !check( prog && samp, "the aux-1 program is accepted by the core" ) ) return;
+
+    // Two rigs, one note each: at frame 1000 (inside page 0), and 1000 frames
+    // BEFORE page 1, so rendering page 1 cold pre-rolls across the note-on.
+    auto rigWith = [&]( std::int64_t noteAt ) {
+        Rig r = makeRig( env, reg, 2 );
+        r.proc->setEventSource( std::make_shared<OneNoteSource>( noteAt, 48000, 60, 127.0 ) );
+        r.proc->applyToInstances( [&]( twPlugin &p ) {
+            if( twSamplerHost *h = hostOf( p ) ) { h->setProgram( prog ); h->setSample( kLayer, samp ); }
+        } );
+        return r;
+    };
+
+    // Unrouted: the aux-1 zone falls back to main (DESIGN §3.1).
+    Rig u = rigWith( 1000 );
+    auto mainUnrouted = freezeAt( u.insert, 0, rate );
+    check( pageMax( mainUnrouted, 0, 1000, 8000 ) > 0.4,
+           "unrouted, the aux-1 zone plays through MAIN (the fallback)" );
+
+    // Routed: bus 1 to a tap. Main silent, the tap the zone, memcmp-equal to
+    // the unrouted main render.
+    Rig r = rigWith( 1000 );
+    r.proc->setRoutedOutBuses( 1u << 1 );
+    auto tap = std::make_shared<twPluginAuxTap>( env, 2, 1, 2 );
+    tap->init();
+    tap->setInput( 0, r.insert->linkOutput( 0 ) );
+    auto tapPage  = freezeAt( tap, 0, rate );
+    auto mainPage = freezeAt( r.insert, 0, rate );
+    std::cout << "       routed: main peak " << pageMax( mainPage, 0, 0, (std::size_t)P )
+              << ", aux 1 peak " << pageMax( tapPage, 0, 0, (std::size_t)P ) << std::endl;
+    check( pageMax( mainPage, 0, 0, (std::size_t)P ) == 0.0 &&
+               pageMax( mainPage, 1, 0, (std::size_t)P ) == 0.0,
+           "routed, MAIN is exactly silent: the zone does not also reach main" );
+    check( pagesEqual( tapPage, mainUnrouted ),
+           "routed, aux 1's page is memcmp-EQUAL to the zone's unrouted main render" );
+    std::vector<twPlugin *> inst = r.proc->plugins();
+    if( !inst.empty() && hostOf( *inst[0] ) )
+        check( hostOf( *inst[0] )->stats().routedMask == 0x1u,
+               "the host's bus mask 0x2 reached the core as its aux mask 0x1 (aux 1)" );
+
+    // THE PRE-ROLL: a cold render of page 1 whose note-on lies 1000 frames
+    // before it. The voice must take aux 1 although the pre-roll hands the bus
+    // no buffer.
+    Rig q = rigWith( P - 1000 );
+    q.proc->setRoutedOutBuses( 1u << 1 );
+    auto qtap = std::make_shared<twPluginAuxTap>( env, 2, 1, 2 );
+    qtap->init();
+    qtap->setInput( 0, q.insert->linkOutput( 0 ) );
+    q.proc->forgetContinuity();
+    auto qtapPage  = freezeAt( qtap, P, rate );
+    auto qmainPage = freezeAt( q.insert, P, rate );
+    std::cout << "       pre-rolled page 1: main peak " << pageMax( qmainPage, 0, 0, 20000 )
+              << ", aux 1 peak " << pageMax( qtapPage, 0, 0, 20000 ) << std::endl;
+    check( pageMax( qmainPage, 0, 0, (std::size_t)P ) == 0.0 &&
+               pageMax( qmainPage, 1, 0, (std::size_t)P ) == 0.0,
+           "a voice started in the PRE-ROLL does not land on main in the page it was rolled for" );
+    check( pageMax( qtapPage, 0, 0, 18000 ) > 0.4,
+           "...it sounds on aux 1 from the page's first frame" );
+
+    // Unrouted again: back on main, from the first frame of the next render.
+    q.proc->setRoutedOutBuses( 0 );
+    auto backMain = freezeAt( q.insert, P, rate );
+    Rig ref = rigWith( P - 1000 );
+    ref.proc->forgetContinuity();
+    auto refMain = freezeAt( ref.insert, P, rate );
+    check( pagesEqual( backMain, refMain ) && pageMax( backMain, 0, 0, 1000 ) > 0.4,
+           "unrouted again, main carries the zone from the page's first frame, memcmp-equal "
+           "to a slot that was never routed" );
+}
+
 }  // namespace
 
 int main()
@@ -480,6 +619,7 @@ int main()
     testInstall( env, reg );
     testRace( env, reg );
     testStateBlob( env, reg );
+    testAuxOutputs( env, reg );
 
     if( gFailures ) {
         std::cerr << gFailures << " check(s) FAILED" << std::endl;
