@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q5.q1 (QBX-271, DESIGN §6.1 rule 4): A GENERATION INSTALLED
+  WHILE A LIVE VOICE SOUNDS DOES NOT CHANGE THAT VOICE; THE NEXT NOTE PLAYS
+  THE NEW ONE.
+
+  The live lane, transport stopped, as sampler_q5_live_play. One one-shot
+  zone over every key, root 60, one file layer, velocity 127 (unity):
+
+      A = ../test_stereo.wav    3 s   ch0 rms 0.49999   ch1 rms 0.24999
+      B = ../test_autosaw.wav   4 s   ch0 rms 0.231     ch1 rms 0.231
+
+  Told apart by level AND balance, so a window cannot read one for the other.
+
+  THE TIMELINE (wall clock; every window is ANCHORED on the first onset,
+  because capture frame 0 is the device start, not the note):
+
+      note 1 on (A)       -> its onset is the anchor
+      +300 ms             set-layer src=B, waited for: generation 2 installed
+                          while note 1 sounds
+      +0.9 s .. +1.4 s    A's levels: the sounding voice kept its buffer
+      +3.0 s              A's one-shot ends (note-off is ignored by a
+                          one-shot; it is sent anyway, as a player would)
+      +~3.7 s             note 2 on
+      +4.1 s .. +4.6 s    B's levels on both channels: the next note plays
+                          the new generation
+
+  The gap before note 2 is longer than A, so the second window holds note 2
+  alone whatever the injection jitter (tens of ms against a 400 ms margin).
+
+  MEASURED (QBX-271): window 1 rms 0.499971 / 0.249976 (A), window 2
+  0.230373 / 0.230373 (B). Sabotages that bite (proposal 56 §11 "Q5 as
+  built"): an install that resets the instrument (window 1 silent), and an
+  install dropped while a voice sounds (window 2 reads A).
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (smaragd/CMakeLists.txt).
+-->
+<SActionScript version="1" name="sampler_q5_live_generation">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="file:../test_stereo.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1"/>
+
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <wait-ms ms="600"/>
+
+    <midi-in-event kind="noteon" key="60" velocity="127" channel="0"/>
+    <wait-ms ms="300"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:../test_autosaw.wav"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="2"/>
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+    <wait-ms ms="3400"/>
+    <midi-in-event kind="noteon" key="60" velocity="127" channel="0"/>
+    <wait-ms ms="1200"/>
+    <dump-playback-capture filename="sq5_gen.wav" minFrames="240000"/>
+
+    <assert-audio-energy filename="sq5_gen.wav" channel="0" anchorOnset="1"
+                         startFrame="43200" frameCount="24000"
+                         minRms="0.48" maxRms="0.52"/>
+    <assert-audio-energy filename="sq5_gen.wav" channel="1" anchorOnset="1"
+                         startFrame="43200" frameCount="24000"
+                         minRms="0.24" maxRms="0.26"/>
+    <assert-audio-energy filename="sq5_gen.wav" channel="0" anchorOnset="1"
+                         startFrame="196800" frameCount="24000"
+                         minRms="0.22" maxRms="0.24"/>
+    <assert-audio-energy filename="sq5_gen.wav" channel="1" anchorOnset="1"
+                         startFrame="196800" frameCount="24000"
+                         minRms="0.22" maxRms="0.24"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

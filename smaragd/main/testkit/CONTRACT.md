@@ -553,6 +553,13 @@ a typo in a `target` must never read as a passing assertion. Pair it with
     which shares no code with the pump, the ring or the event source. No
     latency term belongs in that comparison: the capture dump IS what the
     device was handed, and `frameAtHostTime` answers in exactly that domain.
+    `refChannel="N"` (QBX-271) measures the onset of `channel` MINUS the
+    onset of channel N in the same file, by the same scan, and the bounds
+    apply to its MAGNITUDE; it is refused beside `afterMidiIn`, because the
+    bounds can apply to one difference only. It exists for two instruments
+    hard-panned apart and played by ONE live note: the same pump blocks
+    render both, so the difference is what one adds over the other, free of
+    the scheduling jitter in each absolute lag (`sampler_q5_live_play`).
 
 15. **`assert-render-policy` grew a MINIMUM, and only one case may use it.**
     `minLiveOwnedRefusals` exists for `live_instrument_ownership`, which

@@ -838,6 +838,12 @@ endif()
 
 # --- live instruments (proposal 21 L2) ---------------------------------------
 #
+# Proposal 56 Q5 (QBX-271) adds the three sampler_q5_* cases: NassauDigital played
+# through the same live lane and measured the way live_instrument_play measures
+# (against the derived 7168-frame bound, and against the test sine from the
+# same note), played along to a running transport, and a generation installed
+# under a sounding live voice. Wall-clock in the same sense: same properties.
+#
 # All six PLAY a live instrument in real time and assert what the capture
 # backend was handed, so they are wall-clock tests in exactly the sense the
 # section above describes: RUN_SERIAL, with SMARAGD_CAPTURE_SPEED=1 spelled out
@@ -867,7 +873,9 @@ endif()
 
 foreach(_liveinst live_instrument_play live_instrument_merge
                   live_instrument_disarm_playback live_instrument_ownership
-                  live_instrument_thru live_instrument_keyboard)
+                  live_instrument_thru live_instrument_keyboard
+                  sampler_q5_live_play sampler_q5_live_playing
+                  sampler_q5_live_generation)
     if(TEST qxa.${_liveinst})
         set_tests_properties(qxa.${_liveinst} PROPERTIES
             RUN_SERIAL TRUE
