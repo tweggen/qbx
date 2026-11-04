@@ -403,6 +403,17 @@ if(TEST qxa.monitor_needs_arm)
     set_tests_properties(qxa.monitor_needs_arm PROPERTIES RUN_SERIAL TRUE)
 endif()
 
+# --- the sampler's per-user default view (QBX-281) ----------------------------
+#
+# `sampler_q7_default_view` writes `sampler/defaultView` (map, pad, piano,
+# zone) and restores `key` at the end. Every other sampler_q7_* case opens an
+# editor or creates a program object and so READS that key, expecting `key`:
+# beside the writer under `ctest -j4` they failed "view: want key, got map"
+# (QBX-278's gate and #345's CI). Same discipline as the two above.
+if(TEST qxa.sampler_q7_default_view)
+    set_tests_properties(qxa.sampler_q7_default_view PROPERTIES RUN_SERIAL TRUE)
+endif()
+
 # --- the deferred `media:` drop (proposal 38 gate 3) --------------------------
 #
 # Same INI argument as the three above (it writes media/lastSourceId and
