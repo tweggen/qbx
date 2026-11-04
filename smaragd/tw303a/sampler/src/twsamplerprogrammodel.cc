@@ -771,6 +771,17 @@ bool twSamplerLibrary::recordPad( int n, int key, int *priorKey, std::string *er
     return true;
 }
 
+bool twSamplerLibrary::hidePad( int n, std::string *error )
+{
+    nd::Program current = nd::applyOverlay( impl_->base, impl_->overlay ).program;
+    const nd::RecordedEdit rec = nd::recordHidePad( impl_->overlay, current, impl_->base, n );
+    if( !rec.ok ) {
+        setError( error, rec.error );
+        return false;
+    }
+    return true;
+}
+
 int twSamplerLibrary::rebase()
 {
     nd::Program current = nd::applyOverlay( impl_->base, impl_->overlay ).program;

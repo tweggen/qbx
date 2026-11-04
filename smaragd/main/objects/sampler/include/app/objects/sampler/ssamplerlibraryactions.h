@@ -32,6 +32,16 @@
 //                          Its own inverse is itself with the state it
 //                          replaced.
 //
+//   hide-pad               `n` (0..95; REQUIRED). Hides pad n's BASE <Pads> row
+//                          from what plays, as an overlay edit (the core's
+//                          hide-pad, the author's decision of 2026-11-04):
+//                          the pad goes back to its default key 36 + n, or a
+//                          pad 92..95 ceases to exist. Only on a library
+//                          instance. Inverse restore-sampler-state. REFUSED:
+//                          not a library, no n, n outside 0..95, a pad with no
+//                          base row, a row that does not play now (already
+//                          hidden, or set-pad-key put it on its default).
+//
 // set-pad-key on a library instance (ssamplerrecordactions.h) records the
 // core's overlay verb set-pad instead of editing the base. Every other
 // program verb is refused there (SSamplerProgram::edit).
@@ -63,6 +73,20 @@ public:
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
     QStringList knownAttributes() const override;
+};
+
+class SHidePadAction : public SSamplerAction {
+public:
+    SHidePadAction() = default;
+    QString name() const override { return QStringLiteral( "hide-pad" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
+
+private:
+    int  n_    = -1;
+    bool hasN_ = false;
 };
 
 class SRestoreSamplerStateAction : public SSamplerAction {

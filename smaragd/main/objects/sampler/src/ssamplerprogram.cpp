@@ -497,7 +497,7 @@ bool SSamplerProgram::edit( const std::function<bool( audio::twSamplerProgramMod
         // be lost at the next overlay edit and is never what the user meant.
         if( why )
             *why = QStringLiteral( "this instance plays a library program (%1); only a pad "
-                                   "reassignment (set-pad-key) is an overlay edit so far" )
+                                   "reassignment (set-pad-key) or hide-pad is an overlay edit so far" )
                        .arg( QString::fromStdString( library_->basePath() ) );
         return false;
     }

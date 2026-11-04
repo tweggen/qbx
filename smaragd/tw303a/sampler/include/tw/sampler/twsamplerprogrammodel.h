@@ -203,9 +203,10 @@ private:
 // `base` attribute says where it came from (qbx's library path, carried and
 // written back). Qt-free, main thread only, never on the audio thread.
 //
-// The only overlay edit qbx makes so far is the PAD REASSIGNMENT (`set-pad`,
+// The only overlay edits qbx makes so far are the PAD REASSIGNMENT (`set-pad`,
 // the author's decision of 2026-11-04): recordPad() appends one set-pad with
-// key.was (the pad's key before: its row's, its default 36 + n, or "none").
+// key.was (the pad's key before: its row's, its default 36 + n, or "none");
+// and hiding a base pad row (`hide-pad`, the same day): hidePad().
 // rebase() accepts the current base (the core's rebaseOverlay): every drifted
 // edit's `.was` becomes what the base has under it, so the report clears and
 // nothing that plays changes.
@@ -246,6 +247,12 @@ public:
     // Reassign pad n to `key` as an overlay edit (core recordPadEdit). False
     // (and `error`) when the core refuses: n outside 0..95, key outside 0..127.
     bool recordPad( int n, int key, int *priorKey, std::string *error );
+    // Hide pad n's BASE row from what plays as an overlay edit (core
+    // recordHidePad, the author's decision of 2026-11-04): the pad goes back
+    // to its default key, or a pad 92..95 ceases to exist. False (and
+    // `error`) when the core refuses: n outside 0..95, no base row, or the
+    // row does not play now.
+    bool hidePad( int n, std::string *error );
     // Accept the base: re-stamp baseVersion, refresh the drifted `.was`.
     // Returns how many edits were refreshed.
     int rebase();

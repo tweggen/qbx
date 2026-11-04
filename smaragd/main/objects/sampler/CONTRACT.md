@@ -476,7 +476,9 @@ changed for it.
     `restoreProgramState()`, which publish like `edit()`. `edit()` REFUSES on
     a library instance, so no program verb can write into what the next
     overlay edit would recompute away; `set-pad-key` there records the core's
-    `set-pad` (`n`, `key`, `key.was`). A newer base under the overlay
+    `set-pad` (`n`, `key`, `key.was`), and `hide-pad n=` the core's
+    `hide-pad` (a base `<Pads>` row left out of what plays; refused off a
+    library, and for a pad with no base row or a row that does not play). A newer base under the overlay
     (`set-sampler-library` again) keeps the overlay; an edit whose base value
     moved still applies and is reported drifted (`twSamplerLibrary::report()`);
     `rebase-sampler-library` accepts the base. Every inverse of these is
@@ -674,6 +676,9 @@ absolute (there is nothing to be relative to).
   set-pad-key writing the overlay (`key.was` the row's key or the default),
   undo/redo, the other verbs refused, save/reload, a newer base drifting the
   edit while the overlay's key plays, rebase clearing it, undo/redo of each.
+  `qxa.sampler_library_hide_pad`: hide-pad (pad back on its default, a pad
+  92..95 gone), undo/redo, set-pad after the hide, the refusals, save/reload,
+  a base without the row orphaning the hide, rebase keeping the orphan.
 
 ## Not gated / known limits
 
@@ -691,13 +696,14 @@ absolute (there is nothing to be relative to).
   without marking the project modified. A library overlay cannot reassign a
   pad (the core has no overlay verb for the table); that is QBX-278.
   *(Built by QBX-278: invariant 32.)*
-- QBX-278: on a library instance only the pad reassignment is an overlay
-  edit; set-zone / set-layer / set-sampler-program, add / remove, recording
+- QBX-278: on a library instance only the pad reassignment and hide-pad are
+  overlay edits (the rest is QBX-282); set-zone / set-layer / set-sampler-program, add / remove, recording
   and asset links are REFUSED there, not routed into the overlay (the core
   has the verbs; qbx does not make them yet). There is no flatten verb and no
   greyed orphan display in the editor. The library is read when
   `set-sampler-library` runs, never re-read on load: a newer library file on
-  disk is seen only when the verb is run again.
+  disk is seen only when the verb is run again (the author accepted both,
+  2026-11-04).
 
 - `qxa.sampler_q5_live_play` (QBX-271) — Q5.1, transport stopped: the
   sampler (panned left) and the test sine (panned right) armed on one MIDI

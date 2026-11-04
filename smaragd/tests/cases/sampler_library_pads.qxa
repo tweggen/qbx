@@ -84,7 +84,7 @@
 
     <!-- Every other program verb is refused on a library instance: the base is read-only. -->
     <set-zone trackPath="0" slotIndex="0" zone="3" tune="+2" expectReject="true"/>
-    <assert-log contains="only a pad reassignment (set-pad-key) is an overlay edit so far" minCount="1"/>
+    <assert-log contains="only a pad reassignment (set-pad-key) or hide-pad is an overlay edit so far" minCount="1"/>
     <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" overlayEdits="1"/>
 
     <!-- ............................................... save, reload -->

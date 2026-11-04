@@ -131,6 +131,50 @@ bool SRebaseSamplerLibraryAction::readXml( const QDomElement &elem, int /*versio
 
 QStringList SRebaseSamplerLibraryAction::knownAttributes() const { return addressAttributes(); }
 
+// ============================================================== hide-pad ===
+
+SApplyResult SHidePadAction::apply( SProject *project )
+{
+    QString why;
+    if( !hasN_ ) return refuse( QStringLiteral( "hide-pad needs n=" ) );
+    SSamplerProgram *prog = program( project, false, &why );
+    if( !prog ) return refuse( why );
+    if( !prog->isLibrary() )
+        return refuse( QStringLiteral( "this instance does not play a library program; hide-pad hides a "
+                                       "library's pad row (use set-pad-key on a program of its own)" ) );
+    const SSamplerProgram::ProgramState before = prog->programState();
+    const int keyBefore = prog->model().padKey( n_ );
+    std::string err;
+    if( !prog->editLibrary( [&]( audio::twSamplerLibrary &lib ) { return lib.hidePad( n_, &err ); }, &why ) )
+        return refuse( err.empty() ? why : QString::fromStdString( err ) );
+    qInfo().noquote() << QStringLiteral( "hide-pad: track %1 slot %2: pad %3's library row (key %4) is "
+                                         "hidden; the pad plays key %5" )
+                             .arg( trackPath_ ).arg( slotIndex_ ).arg( n_ ).arg( keyBefore )
+                             .arg( prog->model().padKey( n_ ) );
+    return { true, restoreOf( trackPath_, slotIndex_, before ) };
+}
+
+void SHidePadAction::writeXml( QDomElement &elem ) const
+{
+    writeAddress( elem );
+    if( hasN_ ) elem.setAttribute( "n", n_ );
+}
+
+bool SHidePadAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    readAddress( elem );
+    bool ok = true;
+    hasN_ = elem.hasAttribute( "n" );
+    n_    = hasN_ ? elem.attribute( "n" ).toInt( &ok ) : -1;
+    if( !ok ) n_ = 1 << 20;   // not a number: refused by the core as a pad that does not exist
+    return true;
+}
+
+QStringList SHidePadAction::knownAttributes() const
+{
+    return addressAttributes() << QStringLiteral( "n" );
+}
+
 // ================================================= restore-sampler-state ===
 
 SApplyResult SRestoreSamplerStateAction::apply( SProject *project )
@@ -186,6 +230,7 @@ static const bool s_reg_sampler_library_verbs = [] {
     r.registerType( QStringLiteral( "set-sampler-library" ), [] { return new SSetSamplerLibraryAction; } );
     r.registerType( QStringLiteral( "rebase-sampler-library" ),
                     [] { return new SRebaseSamplerLibraryAction; } );
+    r.registerType( QStringLiteral( "hide-pad" ), [] { return new SHidePadAction; } );
     r.registerType( QStringLiteral( "restore-sampler-state" ),
                     [] { return new SRestoreSamplerStateAction; } );
     return true;

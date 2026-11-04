@@ -2377,14 +2377,15 @@ Flatten writes the resulting `<Pads>` table. `key.was` for a pad with no
 base row is its default 36 + n. Undo removes the edit and writes the
 previous value back.
 
-1. **Core first** (nassau-digital #35, branch commit `58454e1`): the
+1. **Core first** (nassau-digital #35, branch commits `58454e1`, then
+   `5a6e895` with hide-pad): the
    overlay verb `set-pad`, `recordPadEdit()`, and `RecordedKind::SetPad`
    (appended). A pad 92..95 with no row has no key, so its `key.was` is
    written `none`. Undo restores the table exactly, rows and order. Doing it
    with `setPadKey(prior)` would drop a base row that sits on its default
    key: QBX-277's known limit, fixed for overlays here.
-   `NASSAU_DIGITAL_GIT_REF` is pinned to that BRANCH commit and must be
-   re-pinned to the merge commit once #35 merges.
+   `NASSAU_DIGITAL_GIT_REF` is pinned to the BRANCH commit `5a6e895` and
+   must be re-pinned to the merge commit once #35 merges.
 2. **qbx had no library support at all** before this ticket (§11 "Core
    bump to 793f4ce", item 5: "no qbx verb applies a library overlay yet").
    The ticket needs an instance whose program comes from a library, so the
@@ -2412,6 +2413,18 @@ previous value back.
    overlay edit and could never be what the user meant. Routing
    set-zone / set-layer / set-sampler-program / add / remove / recording /
    asset links into the core's overlay verbs is not this ticket.
+4a. **`hide-pad n=`** (the author's answer of 2026-11-04 to question 3
+   below; the core's `<hide-pad n/>`, hide-zone's mechanics). Pad n's BASE
+   `<Pads>` row is left out of what plays: the pad goes back to its default
+   key, or a pad 92..95 ceases to exist. The base keeps the row; undo puts it
+   back where it was; core flatten drops it; a base without the row orphans
+   the hide (`#i hide-pad orphaned n` in the report) and rebase leaves the
+   orphan alone. Only on a library instance. Refused with a reason: a pad
+   with no base row, including one only an overlay `set-pad` gave a row, and
+   a row that does not play now (already hidden, or `set-pad` put it on its
+   default). Interactions follow the simplest reversible reading: a set-pad
+   after the hide records the default as `key.was`; a hide after a set-pad
+   of a base row removes the row the set-pad changed.
 5. **Persistence.** `<library><base>CDATA</base><overlay>CDATA</overlay>
    </library>` is written after `<program>`, and `<program>` keeps the
    applied program for a reader that does not know `<library>`. The element
@@ -2445,7 +2458,18 @@ previous value back.
    - a second save and reload keeps the rebased state;
    - rebase on an instance that is not a library is refused.
 
-   `action_roundtrip_test` covers the three new verbs.
+   `qxa.sampler_library_hide_pad` (hide-pad):
+   - hide 93 (key 70 then plays only pad 34's default) and 5 (back on 41);
+   - pad 93 can no longer be selected;
+   - undo and redo, exact;
+   - a set-pad after the hide gets `key.was="41"`;
+   - the refusals: off a library, no program, no base row, already hidden,
+     n 96, no n;
+   - save and reload carry the hide and the base row;
+   - version 2 (no row 93) reports `libraryVersion 1->2; #0 hide-pad orphaned
+     93`, and rebase keeps `#0 hide-pad orphaned 93`.
+
+   `action_roundtrip_test` covers the four new verbs.
 7. **Sabotages**: 14, run through a harness that restores every file from its
    saved bytes and touches it. The cases run each time are
    `sampler_library_pads`, `sampler_pads_reassign`, `sampler_pads_program` and
@@ -2469,8 +2493,24 @@ previous value back.
    redo instead of the text its first apply read. The file does not change
    during a case, and no `.qxa` verb writes one.
 
-   The core's own 12 sabotages are in nassau-digital GATES C8.
+   hide-pad: six more, all bite in `sampler_library_hide_pad`:
+   - not refused off a library;
+   - the base-row check made against what plays;
+   - the inverse restoring the state after the hide;
+   - hide-pad recording nothing;
+   - the report leaving out orphans;
+   - `readXml` ignoring `n`.
+
+   Two of them (the off-a-library refusal and the base-row check) bite only
+   on the refusal's reason text. They are redundant defences:
+   `editLibrary()` refuses off a library, and the core refuses a row that
+   does not play.
+
+   The core's own sabotages (12 set-pad, 9 hide-pad) are in nassau-digital
+   GATES C8.
 8. **Not gated / not built**:
+   - The other program verbs as overlay edits on a library instance:
+     QBX-282.
    - No flatten verb in qbx, and no greyed orphan display in the editor. The
      editor's Pad view shows the applied table; nothing marks a drifted pad.
    - An orphaned or refused overlay edit cannot be made from qbx: only
@@ -2478,15 +2518,17 @@ previous value back.
    - The library is never re-read on load. A newer file on disk is seen only
      when `set-sampler-library` runs again (question 2 below).
    - An unreadable `<library>` kept verbatim is built but not gated.
-9. **Questions for the author** (the simplest reversible reading was built):
-   1. `key.was="none"` for a pad 92..95 with no base row. Would `-1`, or no
-      `key.was`, be preferred?
-   2. Should loading a project re-read the library file from its path, so a
-      newer library on disk shows as drift without running
-      `set-sampler-library` again? As built, the project carries a copy of the
-      base and plays exactly what was saved.
-   3. No `hide-pad`: an overlay can only send a base row back to the default
-      key, and that is impossible for pads 92..95. Is a hide needed?
-   4. On a library instance every other edit is refused. Should the zone,
-      layer and program verbs, and recording, become overlay edits next (the
-      core has the verbs), as a follow-up ticket?
+9. **The author's answers (2026-11-04)** to the four questions this build
+   put:
+   1. `key.was="none"` for a pad 92..95 with no base row: accepted as built.
+   2. Keep the saved library copy and never re-read the file on load:
+      accepted as built.
+   3. `hide-pad`: build it (item 4a).
+   4. The other verbs as overlay edits: filed as QBX-282.
+10. **Question left by hide-pad** (the simplest reversible reading was
+   built): a hide after a `set-pad` of the same base row removes the row the
+   set-pad changed, so both edits stay in the overlay, the later one winning.
+   A set-pad after the hide records the default as `key.was`.
+11. **The `-j4` flakes seen in the gate run**: `sampler_q7_hand_select`,
+   `_select_views` and `_views` race on the per-user `sampler/defaultView`
+   that `sampler_q7_default_view` writes (QBX-281). They pass serially.
