@@ -63,10 +63,10 @@ SApplyResult SSetSamplerViewAction::apply( SProject *project )
     // Validate against the state the program WILL have (or the defaults of
     // one not yet made) before the object is created.
     SSamplerProgram *prog = program( project, false, nullptr );
-    const SSamplerProgram::View oldView = prog ? prog->view() : SSamplerProgram::View::Key;
+    SSamplerProgram::View oldView = prog ? prog->view() : SSamplerProgram::View::Key;
     const int oldBank = prog ? prog->padBank() : 0;
     const int oldPad  = prog ? prog->pad() : 0;
-    const SSamplerProgram::View newView = view_.isEmpty() ? oldView : v;
+    SSamplerProgram::View newView = view_.isEmpty() ? oldView : v;
     const int newBank = padBank_ >= 0 ? padBank_ : oldBank;
     const int newPad  = pad_ >= 0 ? pad_ : oldPad;
     // A pad EXISTS when the program gives it a key: its <Pads> row, else its
@@ -83,8 +83,15 @@ SApplyResult SSetSamplerViewAction::apply( SProject *project )
                            .arg( newPad ).arg( newBank ).arg( SSamplerProgram::kPadBanks - 1 )
                            .arg( SSamplerProgram::kPadsPerBank )
                            .arg( SSamplerProgram::kPadDefaultBaseKey ) );
-    if( !prog ) prog = program( project, true, &why );
-    if( !prog ) return refuse( why );
+    if( !prog ) {
+        prog = program( project, true, &why );
+        if( !prog ) return refuse( why );
+        // A program object made NOW starts in the per-user default view
+        // (Q7.1, QBX-279: the resolver sets it), which is the view this verb
+        // keeps when it names none and the one its inverse restores.
+        oldView = prog->view();
+        if( view_.isEmpty() ) newView = oldView;
+    }
 
     prog->setViewState( newView, newBank, newPad );
     qInfo().noquote() << QStringLiteral( "set-sampler-view: track %1 slot %2: view %3, bank %4, "

@@ -449,11 +449,14 @@ SApplyResult SAssertPluginEditorKindAction::apply( SProject *project )
         return { false, nullptr };
     }
 
+    // `app` (QBX-279): an instrument whose editor is a window of the app's
+    // own, registered in pluginui's app-editor registry (NassauDigital).
     if( expect_ != QLatin1String( "native" ) &&
         expect_ != QLatin1String( "generic" ) &&
+        expect_ != QLatin1String( "app" ) &&
         expect_ != QLatin1String( "none" ) ) {
         qWarning() << "assert-plugin-editor-kind: expect must be one of "
-                      "native|generic|none, got" << expect_;
+                      "native|generic|app|none, got" << expect_;
         return { false, nullptr };
     }
 

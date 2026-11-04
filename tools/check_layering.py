@@ -246,6 +246,18 @@ APP_DEPS = {
                        'objects/wave', 'pluginui', 'selection', 'servicesui',
                        'shell'},
     'pluginui':       {'model', 'objects/mixer', 'objects/track', 'shell'},
+    # samplerui (proposal 56 Q7, QBX-279) sits at the RANK of pluginui: a UI
+    # slice editing ONE object kind (SSamplerProgram) through the action system.
+    # pluginui because it REGISTERS into pluginui's app-editor registry (the
+    # strip opens it without naming it; pluginui never depends back);
+    # objects/track for the slot and the track the window holds; shell for
+    # SApplication (submit, the MIDI input hub its hand-selection tap reads)
+    # and ssamplerwiring (the uid test, the program lookup and the per-user
+    # default view, each read in ONE place). Not servicesui: the default
+    # view's SOpt key is read by the shell (proposal 56 §4.4 named that edge;
+    # one reader is better than two).
+    'samplerui':      {'actions', 'model', 'objects/sampler', 'objects/track',
+                       'pluginui', 'shell'},
     # eventui (proposal 37 P4) sits at the RANK of pluginui: a UI slice that
     # edits ONE object kind through the action system and is hosted by the
     # shell. It deliberately does NOT reach `timeline`: the arranger's zoom and
@@ -346,11 +358,15 @@ APP_DEPS = {
     # save/load machinery a project file goes through.
     # testkit + objects/sampler since proposal 56 Q1: assert-sampler-program
     # reads a slot's SSamplerProgram through ssampler::programAt.
+    # testkit + samplerui since proposal 56 Q7 (QBX-279): sampler-editor,
+    # assert-sampler-editor and sampler-hold-keys drive and read the REAL
+    # editor window off screen, the assert-plugin-strip shape.
     'testkit':        {'actions', 'media', 'mediabrowser', 'mixerui', 'model',
                        'objects/cut', 'objects/fragment', 'objects/midi',
                        'objects/sampler',
                        'objects/mixer', 'objects/track', 'objects/wave',
-                       'persistence', 'pluginui', 'servicesui', 'shell'},
+                       'persistence', 'pluginui', 'samplerui', 'servicesui',
+                       'shell'},
 }
 
 # Which engine modules each app module may include (tw/<mod>/... paths).
@@ -450,6 +466,11 @@ APP_ENG = {
     'timeline':       _ENG_BASE | {'devices', 'events', 'metering', 'pages',
                                    'playback', 'sources'},
     'pluginui':       _ENG_BASE | {'plugins'},
+    # samplerui (QBX-279): devices for its MidiInFanout tap (A12), sampler for
+    # the program model it draws from (twSamplerProgramModel's readers and the
+    # parameter ranges its knobs span), plugins and events as proposal 56
+    # §4.4 declared the slice.
+    'samplerui':      _ENG_BASE | {'devices', 'events', 'plugins', 'sampler'},
     # eventui + events since proposal 37 P4: the ruler and the piano roll grid
     # read the project's twTempoMap, the single tempo authority (D2). No other
     # engine module is in reach - the editor never touches a page.

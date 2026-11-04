@@ -2240,3 +2240,127 @@ nassau-digital main `eba2961` (#32 merged as `9d55932`; #33 on top is docs only)
    - device-note selection works in every view and is not undoable, as built;
    - a row already on its default key is kept, as built;
    - pads in a library overlay are the follow-up QBX-278.
+
+### Q7 as built (QBX-279, 2026-11-03)
+
+The author answered four questions about the editor before the build
+(nassau-digital DESIGN §13, "Settled on 2026-11-03, editor"): hand selection
+is not an undo step; the selection persists after the keys are released until
+another key is held, and several held keys select all their zones; the zone
+selection is not saved; Key, Map and Pad display and select only, edits go
+through the Zone view's knobs, the XML pane and drag and drop (Map edge
+dragging is QBX-280). No core change; the core pin stays at `eba2961`.
+Contract: `smaragd/main/samplerui/CONTRACT.md`; pluginui's registry is in its
+CONTRACT, "The app-editor registry"; objects/sampler gained invariants 29–31.
+
+1. **The registry (§4.11 "pluginui gains a small registry").** As written:
+   `spluginappeditors.h`, keyed by descriptor uid, three functions per entry.
+   `openParamEditor()`, `editorKindFor()` (a new answer `app`) and
+   `restoreOpenEditors()` consult it first. The window, not the registry,
+   keeps the `editorOpen` flag, by the native editor's rule.
+2. **Layering differs from §4.4 in one edge.** `samplerui` has APP_DEPS
+   `{actions, model, objects/sampler, objects/track, pluginui, shell}` and
+   APP_ENG base + `{devices, events, plugins, sampler}`. No `servicesui`:
+   the default view's SOpt key (`sampler/defaultView`) is read ONCE, in
+   `ssamplerwiring::newInstanceView()` (shell), which both the resolver and the
+   editor call. `sampler` because the views draw from
+   `twSamplerProgramModel` and the knobs span its ranges: tw/sampler gained
+   `paramRange()` and `paramIsInteger()`, forwarding the core's table
+   (qbx code; no core change). `testkit -> samplerui` for the three verbs.
+3. **"A new instance starts in the per-user default view"**, read for a
+   program object that exists only from its first edit (§11 Q1 item 2): the
+   resolver gives a program object it CREATES the default view, and an editor
+   on an instance with no program object shows it. `set-sampler-view`
+   naming no view used to restore Key on a fresh object; it now keeps (and its
+   inverse restores) the created view. A file without a `view` attribute still
+   reads as Key. There is no Options-dialog control for the key yet (see 9).
+4. **Hand selection's tap (§4.11)** as written: the window's own
+   `MidiInFanout` sink of the track's MIDI input port, with the input's channel
+   mask, held only while the window is open, polled every 10 ms. The selection
+   is every zone covering a key of the current chord (the core's
+   `zonesCoveringKey`), set with `setSelection` directly (§4.11 said "Held keys
+   become `select-zones`"; the author's answer 1 replaces that). A key no zone
+   covers starts a chord that selects nothing (an empty selection);
+   accepted by the author 2026-11-03.
+5. **The XML pane** takes ONE element of one of the twelve forward sampler
+   verbs (`reinsert-*` and `restore-sampler-values` are left out), refuses an
+   undeclared attribute before submitting, fills `trackPath`/`slotIndex` when
+   absent and keeps them when written, and submits once. Completion is one
+   routine over `knownAttributes()`; `gesture` is left out of it like the
+   address.
+6. **The knobs and the merge.** The Zone view edits EVERY selected zone
+   (DESIGN §2.1's "selected zones" scope; the view shows the first;
+   accepted by the author 2026-11-03) and layers
+   1..4 of the shown zone, always absolute. A knob is a 1000-step `QDial` over
+   the core's range (cutoff log). One drag is one undo step through a new
+   merge on `set-zone`/`set-layer`/`set-sampler-program`: same targets, same
+   parameter names, same gesture (QBX-206); never for a relative value or an
+   asset link. The set verbs now read a script's `gesture="n"`, so the merge is
+   gated without the widget too.
+7. **Drops**, mirroring §7's pad landing (accepted by the author
+   2026-11-03, DESIGN §13): a zone's layer 1 takes the source; a key's one
+   covering zone is the target; no zone → a new one-key zone rooted on the key;
+   several → refused with the zones named. `asset:` needs `set-layer` to link,
+   so a new zone or layer for an asset is ONE composite (the add with an
+   explicit id from `nextId`, QBX-265, then `set-layer`). `media:` is refused
+   (the media cache's fetch hook is not reachable from samplerui).
+8. **Gates**, seven cases, each read through `describe()`/trigger seams over
+   the real widgets, sizes as constraints:
+   - `sampler_q7_views` (Q7.1): the strip's Edit opens this window, editor
+     kind `app`, no slider editor; Key 896×144, Pad 392×432, Map 808×416,
+     Zone 760×400, each fixed, the stack pinned to the view shown; a switch is
+     one undo step; view and `editorOpen` survive a save and reload; close
+     clears the flag.
+   - `sampler_q7_default_view` (Q7.1): default `map`, then `pad` for a second
+     instance made by a pad-only `set-sampler-view`, an unknown value reads as
+     Key; each kept across a reload whatever the setting.
+   - `sampler_q7_hand_select` (Q7.2): one key → its zone, two keys → both
+     (each zone once, in key order), the chord growing while a key is held,
+     persistence after release, replacement by the next key, velocity 0 as a
+     release, an uncovered key; one undo takes back a view switch made before
+     every key (no undo step added); the tap follows the input and its
+     channel, exists only while the window is open and starts empty; a
+     sequenced note selects nothing; not saved.
+   - `sampler_q7_xml_pane` (Q7.3): one apply = one undo step (`undoIndex`), the
+     address implied on a second instance on track 1 or written; five
+     refusals add no step; verb and attribute completion.
+   - `sampler_q7_knobs`, `sampler_q7_select_views`, `sampler_q7_drop`: the
+     knobs and the merge; what the views are handed (gaps included) and their
+     presses; the drop rule.
+   **Sabotages**: 38, each watched failing, the harness restoring every file
+   from its own saved bytes and touching it; 37 bite:
+   registry not consulted (all seven); no `app` kind; flag not set; flag not
+   cleared; stack not pinned; Map view not fixed; view button without the verb;
+   resolver ignoring the default; `set-sampler-view` keeping Key on a fresh
+   object; editor showing Key without a program; no chord union; selection
+   cleared on release; hand selection as `select-zones`; a closed window still
+   refreshing; tap ignoring the channel; velocity 0 as a key; address not
+   implied; any verb taken; undeclared attributes taken; completion offering
+   the address; offering written attributes; completing inside a value; model
+   not filled; no gesture on press; no merge; merge key without the gesture;
+   relative values merging; a zone knob setting only the shown zone;
+   `paramRange` returning nothing; gaps against 0..127; a bank switch keeping a
+   missing pad; two covering zones taking the first; a Map rectangle resolved
+   to its key; a drop on a hidden view; a closed window left in the registry;
+   `media:` taken; a Key press selecting only the first zone.
+   The one that cannot bite: an asset drop without the explicit zone id
+   (`add-zone` takes `nextId` anyway, the id the composite's `set-layer`
+   names). Two bit only after the cases were sharpened: the implied address
+   (the verbs' own `trackPath` default is "0") and completion inside a value
+   (a value holding a blank).
+   Found by the gates: a window closed with `WA_DeleteOnClose` stays alive in a
+   `--test-case` run (no DeferredDelete), so it re-acquired its tap on the next
+   `arrangementChanged` and went on selecting zones; it now closes dead
+   (`closed_`, signals dropped, registry left at once).
+9. **Not gated / not built**:
+   - Q7.4 (labels readable, the velocity gap visible) is the author's hand
+     check; the cases gate only that the Map view is handed the gaps.
+   - Nothing is painted in a gate; the completer popup is never shown.
+   - The reopen of an editor saved open (`restoreOpenEditors`) returns under
+     `--test-case`; the flag's round trip is gated.
+   - `media:` drops and OS file drops; no Options-dialog control for
+     `sampler/defaultView` (settable only in the INI, or by `set-option`).
+   - A mouse click selecting zones (Key, Map) is an undo step, a held key is
+     not; accepted by the author 2026-11-03, as are the empty selection for a
+     key no zone covers, zone knobs setting every selected zone, and the drop
+     rule.

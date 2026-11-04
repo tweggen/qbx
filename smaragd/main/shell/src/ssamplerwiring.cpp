@@ -10,6 +10,8 @@
 #include "app/objects/track/sinstrumenttracks.h"
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strack.h"
+#include "app/servicesui/soptions.h"
+#include "app/shell/ssettings.h"
 
 #include "tw/core/twlog.h"
 
@@ -79,6 +81,10 @@ SSamplerProgram *resolve( SProject *project, const QString &pathRoot, const QStr
         return fail( QStringLiteral( "slot %1 on track \"%2\" has no program yet (add a zone first)" )
                          .arg( slotIndex ).arg( trackPath ) );
     SSamplerProgram *p = new SSamplerProgram( project );
+    // Q7.1: a new instance starts in the per-user default view (DESIGN §7).
+    // Before the adopt, so nothing bound ever sees another view.
+    p->setViewState( static_cast<SSamplerProgram::View>( ssamplerwiring::newInstanceView() ),
+                     0, 0 );
     slot->adoptChild( *p );   // -> the child-adopted hook below binds it
     return p;
 }
@@ -162,6 +168,34 @@ QList<SSamplerProgram *> programsOf( STrack *track )
         if( SSamplerProgram *p = programChild( *slot ) ) out.append( p );
     }
     return out;
+}
+
+bool slotHostsNassauDigital( const SPluginSlot *slot )
+{
+    return slot && ::hostsNassauDigital( *slot );
+}
+
+QString nassauDigitalUid()
+{
+    return QString::fromLatin1( audio::kNassauDigitalUid );
+}
+
+SSamplerProgram *programOf( const SPluginSlot *slot )
+{
+    return slotHostsNassauDigital( slot ) ? programChild( *slot ) : nullptr;
+}
+
+int newInstanceView()
+{
+    const QString text = SSettings::instance()
+                             .value( SOpt::SamplerDefaultView,
+                                     SOpt::def( SOpt::SamplerDefaultView ) )
+                             .toString()
+                             .trimmed()
+                             .toLower();
+    SSamplerProgram::View v = SSamplerProgram::View::Key;
+    if( !SSamplerProgram::viewFromText( text, v ) ) v = SSamplerProgram::View::Key;
+    return static_cast<int>( v );
 }
 
 int settleBoundMs()

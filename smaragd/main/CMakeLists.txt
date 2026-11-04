@@ -462,14 +462,28 @@ set(APP_UI_FILES
     mixerui/src/smixerpane.cpp
     mixerui/src/smixerstrip.cpp
     # --- app/pluginui
+    pluginui/include/app/pluginui/spluginappeditors.h
     pluginui/include/app/pluginui/spluginbrowserdialog.h
     pluginui/include/app/pluginui/splugineffectstrip.h
     pluginui/include/app/pluginui/spluginnativeeditor.h
     pluginui/include/app/pluginui/spluginparamereditor.h
+    pluginui/src/spluginappeditors.cpp
     pluginui/src/spluginbrowserdialog.cpp
     pluginui/src/splugineffectstrip.cpp
     pluginui/src/spluginnativeeditor.cpp
     pluginui/src/spluginparamereditor.cpp
+    # --- app/samplerui (proposal 56 Q7, QBX-279). NassauDigital's editor
+    # WINDOW, at the rank of pluginui/eventui: it registers into pluginui's
+    # app-editor registry from a static initializer (legal in an OBJECT
+    # library), so the FX strip opens it without naming it.
+    samplerui/include/app/samplerui/ssamplereditor.h
+    samplerui/include/app/samplerui/ssamplerviews.h
+    samplerui/include/app/samplerui/ssamplerxmlpane.h
+    samplerui/include/app/samplerui/ssamplerzones.h
+    samplerui/src/ssamplereditor.cpp
+    samplerui/src/ssamplerviews.cpp
+    samplerui/src/ssamplerxmlpane.cpp
+    samplerui/src/ssamplerzones.cpp
     # --- app/servicesui
     servicesui/include/app/servicesui/scleanuptakesdialog.h
     servicesui/include/app/servicesui/slogmodel.h
@@ -579,6 +593,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/smiditestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/ssamplertestactions.h
+    testkit/include/app/testkit/ssampleruitestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
@@ -648,6 +663,7 @@ set(APP_UI_FILES
     testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/ssamplertestactions.cpp
+    testkit/src/ssampleruitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp
     testkit/src/ssidecartestactions.cpp
@@ -736,6 +752,7 @@ target_include_directories(app_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/mediabrowser/include
     ${CMAKE_CURRENT_SOURCE_DIR}/mixerui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/pluginui/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/samplerui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/servicesui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/shell/include
     ${CMAKE_CURRENT_SOURCE_DIR}/testkit/include

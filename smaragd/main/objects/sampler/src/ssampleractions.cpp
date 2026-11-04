@@ -30,8 +30,9 @@ namespace {
 // program parameter.
 bool isMetaAttribute( const QString &name )
 {
+    // `gesture` (QBX-206) is read by the set verbs, never a parameter.
     return name == QLatin1String( "expectReject" ) || name == QLatin1String( "version" ) ||
-           name == QLatin1String( "nestedRejects" );
+           name == QLatin1String( "nestedRejects" ) || name == QLatin1String( "gesture" );
 }
 
 QStringList names( twSamplerScope scope )
@@ -653,6 +654,58 @@ bool SSetSamplerValuesAction::readXml( const QDomElement &elem, int /*version*/ 
         selector_     = elem.attribute( s );
     }
     values_ = valueAttributes( elem, selectors );
+    // A script's `gesture="n"` (QBX-206; QBX-279 for these verbs): two
+    // elements naming one number are one gesture and merge (mergeWith). Offset
+    // into the script range, as set-track-volume does, so a script's small
+    // numbers never meet a token a real knob drag minted.
+    if( elem.hasAttribute( QStringLiteral( "gesture" ) ) ) {
+        const qulonglong g = elem.attribute( QStringLiteral( "gesture" ) ).toULongLong();
+        if( g ) setGesture( SCRIPT_GESTURE_BASE + g );
+    }
+    return true;
+}
+
+namespace {
+// Edits that cannot merge: an asset link (its first apply minted a link) and
+// a RELATIVE value (two `+1` in one gesture applied +2, and a merged forward
+// holding only the later `+1` would redo half of it).
+bool linksAnAsset( const SSamplerAttrList &values )
+{
+    for( const auto &a : values ) {
+        if( a.first == QLatin1String( "src" ) && a.second.startsWith( QLatin1String( "asset:" ) ) )
+            return true;
+        if( a.second.startsWith( QLatin1Char( '+' ) ) || a.second.startsWith( QLatin1Char( '-' ) ) )
+            return true;
+    }
+    return false;
+}
+QStringList attrNames( const SSamplerAttrList &values )
+{
+    QStringList out;
+    for( const auto &a : values ) out << a.first;
+    return out;
+}
+}  // namespace
+
+QString SSetSamplerValuesAction::mergeKey() const
+{
+    if( linksAnAsset( values_ ) ) return QString();
+    return QStringLiteral( "%1:%2:%3:%4:%5=%6:%7" )
+               .arg( name(), pathRoot_, trackPath_ )
+               .arg( slotIndex_ )
+               .arg( selectorAttr_, selector_, attrNames( values_ ).join( QLatin1Char( ',' ) ) )
+           + gestureKeySuffix();
+}
+
+bool SSetSamplerValuesAction::mergeWith( const SAction *later )
+{
+    const auto *o = dynamic_cast<const SSetSamplerValuesAction *>( later );
+    if( !o || o->scope_ != scope_ || o->trackPath_ != trackPath_ || o->slotIndex_ != slotIndex_ ||
+        o->selectorAttr_ != selectorAttr_ || o->selector_ != selector_ ||
+        attrNames( o->values_ ) != attrNames( values_ ) || linksAnAsset( values_ ) ||
+        linksAnAsset( o->values_ ) || !sameGesture( o ) )
+        return false;
+    values_ = o->values_;
     return true;
 }
 
@@ -661,7 +714,7 @@ QStringList SSetSamplerValuesAction::knownAttributes() const
     QStringList out = addressAttributes();
     if( scope_ == Scope::Zone )  out << QStringLiteral( "zone" ) << QStringLiteral( "zones" );
     if( scope_ == Scope::Layer ) out << QStringLiteral( "layer" ) << QStringLiteral( "layers" );
-    return out + names( scopeOf( scope_ ) );
+    return out + names( scopeOf( scope_ ) ) + QStringList{ QStringLiteral( "gesture" ) };
 }
 
 // =================================================== restore-sampler-values ===

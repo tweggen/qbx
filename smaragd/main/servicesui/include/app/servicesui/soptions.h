@@ -276,6 +276,15 @@ inline constexpr const char *SoloScope            = "mixer/soloScope";
 // disagree about what the INI says.
 inline constexpr const char *MonitorArming        = "mixer/monitorArming";
 
+// THE VIEW A NEW NASSAUDIGITAL INSTANCE STARTS IN (proposal 56 Q7.1, QBX-279;
+// nassau-digital DESIGN §7: "a new instance starts in the view a per-user
+// setting names (Key by default)"): "key" | "pad" | "map" | "zone". Read in ONE
+// place, ssamplerwiring::newInstanceView() (shell), when an instance's program
+// object is created and when an editor opens on an instance that has none
+// yet. An instance's own view is saved with it, so changing this never moves
+// an existing instance. An unrecognised value reads as "key".
+inline constexpr const char *SamplerDefaultView   = "sampler/defaultView";
+
 // MEDIA BROWSER (proposal 38 gate 2, design §B.4). Per-user and machine-local
 // for the reason every path in this table is: where this person keeps their
 // samples is a property of this machine, not of the song, and a project file

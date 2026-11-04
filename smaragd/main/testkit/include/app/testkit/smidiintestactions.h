@@ -5,6 +5,10 @@
 
 #include "app/actions/saction.h"
 
+namespace audio {
+class CaptureMidiInput;
+}
+
 /**
  * Headless MIDI INPUT (proposal 21 L0, design D9).
  *
@@ -45,6 +49,12 @@ namespace smidiin {
  */
 qint64 lastInjectedHostNs();
 void   setLastInjectedHostNs( qint64 ns );
+/**
+ * The capture port every MIDI-in verb injects into (null + `why` when the
+ * MIDI backend is not `capture`). Shared with sampler-hold-keys (QBX-279), so
+ * its notes take the same device input path as midi-in-event's.
+ */
+audio::CaptureMidiInput *injectionPort( QString &why );
 }  // namespace smidiin
 
 // midi-in-event — inject ONE message.

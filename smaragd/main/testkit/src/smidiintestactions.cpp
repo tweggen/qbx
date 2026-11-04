@@ -317,6 +317,11 @@ bool holdForFrame( qint64 frame, int timeoutMs, QString &why )
 
 }  // namespace
 
+audio::CaptureMidiInput *smidiin::injectionPort( QString &why )
+{
+    return ::injectionPort( why );
+}
+
 // ---------------------------------------------------------------- midi-in-event
 
 QStringList SMidiInEventAction::knownAttributes() const

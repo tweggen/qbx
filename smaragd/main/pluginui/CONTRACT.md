@@ -798,3 +798,34 @@ cannot be told apart from a no-op unless at least two formats are present.
 That read is one unchanged line, and the case's phase 0 checks the combo over
 the real registry as far as any machine allows: it must offer at least one
 format, which the built-ins guarantee.
+
+## The app-editor registry (proposal 56 §4.11, QBX-279)
+
+An instrument whose MODEL lives in the app — NassauDigital, whose truth is an
+`SSamplerProgram` — has no plugin GUI to embed and no flat parameter list the
+slider editor could show. Its editor is a window of the app's own, in a module
+ABOVE this one (`samplerui`), which this module may not name.
+
+`spluginappeditors.h` is the seam: a table keyed by the plugin's descriptor
+`uid`, each entry three functions (`open`, `isOpen`, `close`). The editor's
+module registers from a static initializer (legal in an OBJECT library). Rules:
+
+1. **The registry is consulted FIRST.** `SPluginEffectStrip::openParamEditor()`
+   opens a registered editor and returns, before the native editor and the
+   generic slider list; `editorKindFor()` answers `app` for such a slot (the
+   same predicate, called, not restated); `SPluginNativeEditor::
+   restoreOpenEditors()` restores an app editor through its entry when the
+   slot's `editorOpen` flag says so (and, like every restore, does nothing
+   under `--test-case`). A slot whose uid registered nothing takes the old
+   path unchanged.
+2. **The `editorOpen` flag is the registering window's to keep**, by the native
+   editor's rule: set when the window opens (before any show, so a headless
+   open is right), cleared when it is closed. The registry itself writes
+   nothing.
+3. **The edge points one way.** `pluginui` never includes the editor's module;
+   `samplerui -> pluginui` is declared in `tools/check_layering.py`.
+4. **Gated** through the real strip: `plugin-row-command command="edit"` on a
+   NassauDigital slot opens the sampler editor (`assert-sampler-editor
+   open="1" flag="1"`) and no generic editor (`plugin-generic-editor
+   action="assert" expectOpen="0"`), in `sampler_q7_views` and every other
+   `sampler_q7_*` case.

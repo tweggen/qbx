@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7.3 (QBX-279; nassau-digital GATES Q7.3, DESIGN 9.3): "The XML
+  command pane applies a verb as one undoable action and completes verb and
+  attribute names."
+
+  The pane is driven through the REAL widget: xml-type puts the text in the
+  editor with the cursor where the case says and runs the handler the typing
+  runs, which fills the completer's model (describe's completions= reads that
+  model, so the textChanged -> completion wiring is on the path); xml-accept
+  emits the completer's own activated signal; xml-apply clicks Apply.
+
+  ONE UNDOABLE ACTION: undoIndex= is the undo stack's index, so one apply moves
+  it by exactly one and a refusal by none. trackPath and slotIndex are implied
+  (DESIGN 9.3: "inside the instrument's own editor the pair is implied and may
+  be left out"), and may still be written.
+
+  Completion offers a verb right after the opening bracket, and inside a tag
+  after a blank the verb's DECLARED attributes (knownAttributes, the list the
+  script runner checks a case against) minus trackPath, slotIndex and what the
+  tag already has.
+-->
+<SActionScript version="1" name="sampler_q7_xml_pane">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=2|"/>
+
+    <!-- ONE APPLY, ONE UNDO STEP: a zone with its layer, address implied. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;add-zone keyLo=&quot;36&quot; keyHi=&quot;47&quot; rootKey=&quot;40&quot;&gt;&lt;layer src=&quot;test:a&quot;/&gt;&lt;/add-zone&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="zone" id="1" attr="rootKey" value="40"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|xmlStatus=Applied.|undoIndex=3|"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="0"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"/>
+
+    <!-- A second zone, then ONE apply that edits both: one undo restores both. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;add-zone keyLo=&quot;48&quot; keyHi=&quot;59&quot;&gt;&lt;layer src=&quot;test:b&quot;/&gt;&lt;/add-zone&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zones=&quot;1;3&quot; tune=&quot;=-2.5&quot;/&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="-2.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="tune" value="-2.5"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=5|"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="tune" value="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="tune" value="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=4|"/>
+
+    <!-- The address may still be written. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone trackPath=&quot;0&quot; slotIndex=&quot;0&quot; zone=&quot;3&quot; level=&quot;=-6&quot;/&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="3" attr="level" value="-6"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=5|"/>
+
+    <!-- REFUSALS add no undo step and say why. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;add-track index=&quot;-1&quot;/&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply" expect="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|xmlStatus=&lt;add-track&gt; is not a verb of this instrument|undoIndex=5|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;1&quot; cutof=&quot;100&quot;/&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply" expect="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|xmlStatus=&lt;set-zone&gt; has no attribute &quot;cutof&quot;|undoIndex=5|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;1&quot;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply" expect="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|xmlStatus=Not one XML element: "/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|undoIndex=5|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;select-zones zones=&quot;1&quot;/&gt;&lt;select-zones zones=&quot;3&quot;/&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply" expect="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|xmlStatus=Not one XML element: "/>
+    <assert-sampler-program trackPath="0" slotIndex="0" selected=""/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;99&quot; tune=&quot;1&quot;/&gt;"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-apply" expect="0" nestedRejects="1"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|xmlStatus=&lt;set-zone&gt; was refused (the log says why)|undoIndex=5|"/>
+
+    <!-- COMPLETION: verbs after the bracket. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type" text="&lt;set-"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|completions=set-zone,set-layer,set-sampler-program,set-sampler-view,set-pad-key,set-sampler-record-input|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type" text="&lt;set-zo"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=set-zone|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-accept" choice="set-zone"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|xml=&lt;set-zone |"/>
+
+    <!-- Attributes inside the tag: the verb's declared ones, the address left
+         out. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type" text="&lt;set-zone cut"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=cutoff|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-accept" choice="cutoff"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|xml=&lt;set-zone cutoff=&quot;&quot;|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type" text="&lt;set-zone "/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=zone,zones,keyLo,keyHi,"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" absent="trackPath,"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" absent=",slotIndex"/>
+    <!-- What the tag already has is not offered again. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;1&quot; key"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=keyLo,keyHi,keyTrack|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;1&quot; keyLo=&quot;3&quot; key"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=keyHi,keyTrack|"/>
+    <!-- Another verb, another list: set-pad-key declares n and key. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type" text="&lt;set-pad-key "/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=n,key|"/>
+    <!-- Inside a quoted value, or with no tag open, nothing (a blank inside
+         the value would otherwise look like the start of an attribute). -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zones=&quot;1 ke"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=|xml="/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;ke"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=|xml="/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-zone zone=&quot;1&quot;/&gt; ke"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=|xml="/>
+    <!-- The cursor decides, not the end of the text. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-type"
+                    text="&lt;set-la zone=&quot;1&quot;/&gt;" cursor="7"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|completions=set-layer|"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="xml-accept" choice="set-zone" expect="0"/>
+
+    <!-- THE ADDRESS IS THIS INSTANCE'S, not track 0's: a second instance on
+         track 1, its own editor, a verb with no address lands there. -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <sampler-editor trackPath="1" slotIndex="0" action="open"/>
+    <sampler-editor trackPath="1" slotIndex="0" action="xml-type"
+                    text="&lt;add-zone keyLo=&quot;0&quot; keyHi=&quot;127&quot;&gt;&lt;layer src=&quot;test:z&quot;/&gt;&lt;/add-zone&gt;"/>
+    <sampler-editor trackPath="1" slotIndex="0" action="xml-apply"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" zoneIds="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

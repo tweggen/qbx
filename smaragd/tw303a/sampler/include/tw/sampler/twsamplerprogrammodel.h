@@ -140,6 +140,12 @@ public:
 
     static twSamplerParamKind       paramKind( twSamplerScope scope, const std::string &attr );
     static std::vector<std::string> paramNames( twSamplerScope scope );
+    // A NUMERIC parameter's range as the core's table bounds it (QBX-279: the
+    // editor's knobs span it). False for an unknown or non-numeric parameter.
+    static bool paramRange( twSamplerScope scope, const std::string &attr, double *lo,
+                            double *hi );
+    // True when the core's table types the numeric parameter as an integer.
+    static bool paramIsInteger( twSamplerScope scope, const std::string &attr );
 
     // --- editing (all or nothing: a refusal changes nothing) -------------------
     // Set parameters on the program, on the listed zones / layers, or on every

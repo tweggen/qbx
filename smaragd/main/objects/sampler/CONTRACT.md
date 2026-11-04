@@ -144,7 +144,9 @@ Design: `plan/proposed/56_NASSAU_DIGITAL_SAMPLER.md` §4.4, §4.5, §11 (Q1).
     `select-zones` is undoable (GATES Q1.1), changes no sound, publishes
     nothing, and is NOT saved. `selectedZones()` reports only ids that exist,
     in selection order, so a removed zone drops out and comes back with its
-    undo. ASSUMPTION awaiting the author (proposal 56 §11 Q1).
+    undo. ASSUMPTION awaiting the author (proposal 56 §11 Q1). *Answered
+    2026-11-03 (the author, QBX-279): not saved, as built; a selection made by
+    holding keys is not an undo step (invariant 31).*
 
 12. **A `file:` LAYER IS FED BY GENERATIONS** (DESIGN §6.1 rule 1). After
     every committed edit and at bind time, `reconcileSamples_()` compares each
@@ -430,6 +432,38 @@ in parallel; they are renumbered when those land.
   registered body (an `SCut` over the file), not a link the layer plays: the
   layer never bounces it. One undo removes both.
 
+### Q7 (QBX-279): the editor's half
+
+The editor itself is `app/samplerui` (its CONTRACT); three rules of this slice
+changed for it.
+
+29. **A PROGRAM OBJECT MADE BY A VERB STARTS IN THE PER-USER DEFAULT VIEW**
+    (DESIGN §7: "a new instance starts in the view a per-user setting names";
+    proposal 56 Q7.1). The shell's resolver sets the view of a program it
+    CREATES from `ssamplerwiring::newInstanceView()` (`SOpt::SamplerDefaultView`,
+    default `key`) before adopting it; a program read from a file keeps the view
+    it was saved with (the attribute, or Key when absent). `set-sampler-view`
+    naming no view on an instance with no program object keeps that default
+    view, and its inverse restores it (it read Key before QBX-279).
+
+30. **ONE GESTURE OF `set-zone` / `set-layer` / `set-sampler-program` IS ONE
+    UNDO STEP.** `SSetSamplerValuesAction::mergeKey()` is the verb, the root,
+    the address, the selector, the parameter NAMES and the gesture
+    (`gestureKeySuffix`); `mergeWith()` takes a later edit of the same targets
+    and parameters within the same gesture (`sameGesture`), replacing the values
+    and keeping the inverse the first apply captured. Never merged: an asset
+    link (`src="asset:…"`: the first apply minted a link) and a RELATIVE value
+    (two `+1` applied +2; a merged forward of the later `+1` would redo half).
+    A script says "one gesture" with `gesture="n"` (QBX-206's script range); an
+    action nobody stamped is unique and merges with nothing, so every scripted
+    or pane edit stays its own step. The editor's knobs stamp a drag.
+
+31. **HAND SELECTION SETS THE SELECTION DIRECTLY** (the author, 2026-11-03):
+    keys held on the instance's device input while its editor is open call
+    `setSelection()` — not `select-zones` — so no undo step; the selection stays
+    model state of this object and is NOT saved (invariant 11, now the author's
+    answer, not an assumption). `select-zones` stays undoable.
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -605,6 +639,12 @@ absolute (there is nothing to be relative to).
   table, rows out of order and an unknown row attribute, equal to its file
   and through an edit, a save and a reload), `…_select_key` (a device note
   selects the pad, shared-key rule, bank switch, keys no pad plays).
+
+- Q7 (QBX-279), the editor's cases, listed with what each claims in
+  `samplerui/CONTRACT.md`: `qxa.sampler_q7_views`, `…_default_view` (invariant
+  29), `…_hand_select` (31), `…_xml_pane`, `…_knobs` (30: the knob drag and the
+  verbs' own `gesture=` merge, and what never merges), `…_select_views`,
+  `…_drop`.
 
 ## Not gated / known limits
 

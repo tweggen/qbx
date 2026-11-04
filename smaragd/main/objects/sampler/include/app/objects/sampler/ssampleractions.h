@@ -219,6 +219,18 @@ public:
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
     QStringList knownAttributes() const override;
+    // ONE KNOB DRAG, ONE UNDO STEP (QBX-279, the editor's Zone view): two
+    // edits of the same targets and the same parameters within ONE GESTURE
+    // (SAction::newGesture, minted on the knob's press) merge — the later
+    // values replace the earlier ones, and the inverse captured by the first
+    // apply stays, so one undo restores what was there before the drag. The
+    // key carries the root, the address, the selector, the parameter names
+    // and the gesture (QBX-206: both halves of the gesture boundary). An
+    // asset link (src="asset:…") never merges: its first apply minted a link;
+    // nor does a relative value, whose merged redo would apply only the last
+    // step.
+    QString mergeKey() const override;
+    bool    mergeWith( const SAction *later ) override;
 
 private:
     Scope            scope_;

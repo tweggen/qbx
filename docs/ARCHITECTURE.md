@@ -72,7 +72,7 @@ a STATIC lib would drop):
                 persistence,   wave, midi,     eventui, servicesui,
                 selection,     track, mixer)   shell, testkit,
                 media)                         mediabrowser, mixerui,
-                                               theme)
+                                               theme, samplerui)
 
 The layer boundaries are COMPILE-TIME ENFORCED: each layer target publishes
 only its own include dirs and links only the lower layers plus its declared
@@ -125,6 +125,7 @@ minimal.
 | app/timeline | the arrangement canvas + chrome | main/timeline/CONTRACT.md |
 | app/mediabrowser | the Media Browser DOCK and nothing else — source picker, tree, filter, search, drag out | main/mediabrowser/CONTRACT.md |
 | app/pluginui | plugin browser/editor widgets | main/pluginui/CONTRACT.md |
+| app/samplerui | NassauDigital's editor WINDOW (Key, Pad, Map, Zone views, the hand-selection tap, the XML command pane, drops), registered into pluginui's app-editor registry | main/samplerui/CONTRACT.md |
 | app/mixerui | the MIXER PANE dock and nothing else — one channel strip per track lane, MOUNTING the arranger's own meter, insert strip and sends strip rather than re-implementing them | main/mixerui/CONTRACT.md |
 | app/eventui | event editor (piano roll) + virtual keyboard | main/eventui/CONTRACT.md |
 | app/servicesui | render/record/options dialogs | main/servicesui/CONTRACT.md |

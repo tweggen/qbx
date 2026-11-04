@@ -325,6 +325,40 @@ std::vector<std::string> twSamplerProgramModel::paramNames( twSamplerScope scope
     return out;
 }
 
+namespace {
+template <typename T>
+bool rangeOf( const nd::ParamDesc<T> *p, double *lo, double *hi )
+{
+    if( !p || ( p->kind != nd::ParamKind::Int && p->kind != nd::ParamKind::Real ) ) return false;
+    if( lo ) *lo = p->minValue;
+    if( hi ) *hi = p->maxValue;
+    return true;
+}
+template <typename T>
+bool isIntParam( const nd::ParamDesc<T> *p ) { return p && p->kind == nd::ParamKind::Int; }
+}  // namespace
+
+bool twSamplerProgramModel::paramRange( twSamplerScope scope, const std::string &attr,
+                                        double *lo, double *hi )
+{
+    switch( scope ) {
+    case twSamplerScope::Program: return rangeOf( nd::findProgramParam( attr ), lo, hi );
+    case twSamplerScope::Zone:    return rangeOf( nd::findZoneParam( attr ), lo, hi );
+    case twSamplerScope::Layer:   return rangeOf( nd::findLayerParam( attr ), lo, hi );
+    }
+    return false;
+}
+
+bool twSamplerProgramModel::paramIsInteger( twSamplerScope scope, const std::string &attr )
+{
+    switch( scope ) {
+    case twSamplerScope::Program: return isIntParam( nd::findProgramParam( attr ) );
+    case twSamplerScope::Zone:    return isIntParam( nd::findZoneParam( attr ) );
+    case twSamplerScope::Layer:   return isIntParam( nd::findLayerParam( attr ) );
+    }
+    return false;
+}
+
 // ------------------------------------------------------------ editing --------
 
 bool twSamplerProgramModel::set( twSamplerScope scope, bool all,

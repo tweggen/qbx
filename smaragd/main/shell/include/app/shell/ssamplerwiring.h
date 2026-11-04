@@ -31,6 +31,7 @@
 
 class QString;
 class SProject;
+class SPluginSlot;
 class SSamplerProgram;
 class STrack;
 
@@ -67,6 +68,23 @@ SSamplerProgram *recordTargetOf( STrack *track, int *slotIndex );
 
 // Every NassauDigital program on `track`'s chain (the key taps' walk).
 QList<SSamplerProgram *> programsOf( STrack *track );
+
+// THE EDITOR'S HALF (proposal 56 Q7, QBX-279). samplerui sees objects/track
+// and objects/sampler, but the uid test and the program lookup are this
+// file's, and a second copy of either is how two readers come to disagree.
+//
+// Does `slot` host NassauDigital (format tw, uid tw.native.nassaudigital)?
+bool slotHostsNassauDigital( const SPluginSlot *slot );
+// The uid the pluginui editor registry is keyed by.
+QString nassauDigitalUid();
+// `slot`'s program object, or null when it has none yet (or is not one).
+SSamplerProgram *programOf( const SPluginSlot *slot );
+// THE VIEW A NEW INSTANCE STARTS IN (Q7.1; DESIGN §7): the per-user option
+// SOpt::SamplerDefaultView, read here and nowhere else. The resolver gives a
+// program object it CREATES this view (a program read from a file keeps the
+// one it was saved with), and the editor shows it for an instance that has no
+// program object yet.
+int newInstanceView();   // an SSamplerProgram::View, as int
 
 }  // namespace ssamplerwiring
 

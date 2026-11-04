@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7 (QBX-279; nassau-digital DESIGN 9.3): DRAG AND DROP of the
+  application/x-smaragd-resource payload onto a key, a pad or a zone.
+
+  The drop is a REAL QDragEnterEvent and QDropEvent at the target's position in
+  the view shown, so the view's own hit test resolves the key, the pad's key
+  or the zone. The rule (samplerui CONTRACT; the simplest reading of DESIGN
+  9.3, built to mirror DESIGN 7's pad landing):
+    * on a zone (the Zone view's, a Map rectangle): its layer 1 takes the
+      source; a zone with no layer gets one;
+    * on a key or a pad's key: the ONE zone covering it is the target; none:
+      a new one-key zone rooted there; more than one: REFUSED, with a reason;
+    * file:<path> is the layer's src as written; asset:<name> LINKS the
+      asset, which only set-layer can do, so a new zone for an asset is ONE
+      composite (add-zone with an explicit id from nextId, set-layer on the
+      layer id after it): one undo removes both;
+    * media: (a remote item) is refused.
+  Every drop that lands is one undo step.
+-->
+<SActionScript version="1" name="sampler_q7_drop">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <create-file-asset filePath="../test_stereo.wav" srcOffset="0" length="24000" assetName="Hit"/>
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+
+    <!-- A FILE ON AN EMPTY KEY: a new one-key zone rooted there. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_stereo.wav" target="key:60"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            scope="layer" id="2" attr="src" value="file:../test_stereo.wav"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|zones=1:60-60/0-127|"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1" attr="rootKey" value="60"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zones="0"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"/>
+
+    <!-- A FILE ON A COVERED KEY: that zone's layer 1. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47">
+      <layer src="test:a"/>
+      <layer src="test:b"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_autosaw.wav" target="key:40"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3"
+                            scope="layer" id="4" attr="src" value="file:../test_autosaw.wav"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="5" attr="src" value="test:b"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="4" attr="src" value="test:a"/>
+
+    <!-- A KEY TWO ZONES COVER IS REFUSED, and changes nothing. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="44" keyHi="50"><layer src="test:c"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6" capture="before-two"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_autosaw.wav" target="key:45" expect="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="|status=Key A2 is covered by zones 3, 6: drop on one zone instead"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="before-two"/>
+
+    <!-- ON A ZONE (a Map rectangle) the overlap does not matter: key 45 is
+         the key refused above, and the rectangle under the point is zone 3's
+         (the first holding it, in program order). -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="map"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_autosaw.wav" target="map:45:100"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="4" attr="src"
+                            value="file:../test_autosaw.wav"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="7" attr="src"
+                            value="test:c"/>
+    <undo/>
+    <!-- Empty Map grid takes the key, as the Key view does. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_stereo.wav" target="map:72:10"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains=";8:72-72/0-127|"/>
+    <undo/>
+
+    <!-- AN ASSET ON AN EMPTY KEY: one composite, the zone and the link. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="key"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop" payload="asset:Hit" target="key:84"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;10"
+                            scope="layer" id="11" attr="src" value="link:1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="10" attr="rootKey" value="84"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;10"
+                            scope="layer" id="11" attr="src" value="link:1"/>
+    <undo/>
+
+    <!-- A PAD: its key's one zone. Pad 4 of bank 0 plays key 40 (zone 3).
+         A new drop mints a new link id (ids are never reused); the redo above
+         named the link its first apply made. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="pad"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop" payload="asset:Hit" target="pad:4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="4" attr="src" value="link:2"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="4" attr="src" value="test:a"/>
+
+    <!-- THE ZONE VIEW: the zone it shows. -->
+    <select-zones trackPath="0" slotIndex="0" zones="6"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="view" view="zone"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_stereo.wav" target="zone"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="7" attr="src"
+                            value="file:../test_stereo.wav"/>
+    <undo/>
+    <!-- A zone with no layer gets one: the asset as a composite again. -->
+    <remove-layer trackPath="0" slotIndex="0" layer="7"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop" payload="asset:Hit" target="zone"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="12" attr="src" value="link:3"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6"/>
+
+    <!-- What is not taken: media, an unknown payload, a view not shown. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="media:webdav:x/y.wav" target="zone" expect="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|status=A remote media item cannot be dropped here yet"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop" payload="track:3" target="zone" expect="0"/>
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_stereo.wav" target="key:60" expect="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

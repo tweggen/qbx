@@ -119,6 +119,19 @@ const Fixture kFixtures[] = {
     // QBX-277: a pad's key, in the program's <Pads> table.
     { "set-pad-key",
       "<set-pad-key trackPath='Drums:0' slotIndex='1' n='20' key='45'/>" },
+    // QBX-279: the editor's seams. Every attribute non-default, so an unread
+    // one cannot hide behind the default it is compared against.
+    { "sampler-editor",
+      "<sampler-editor trackPath='Drums:0' slotIndex='1' action='drop' view='map' bank='2'"
+      " pad='7' key='60' vel='90' knob='zone.cutoff' values='1000;2000' press='0'"
+      " text='&lt;set-zone/&gt;' cursor='4' choice='set-zone' payload='file:a.wav'"
+      " target='key:60' expect='0'/>" },
+    { "assert-sampler-editor",
+      "<assert-sampler-editor trackPath='Drums:0' slotIndex='1' open='1' flag='0'"
+      " contains='|view=pad|' absent='|tap=1|'/>" },
+    { "sampler-hold-keys",
+      "<sampler-hold-keys trackPath='Drums:0' slotIndex='1' keys='40;52' release='40'"
+      " velocity='90' channel='3'/>" },
     { "place-sampler-recording",
       "<place-sampler-recording trackPath='Drums:0' slotIndex='1' filePath='take.wav'"
       " srcOffset='480' length='96000' target='key' key='67'/>" },
@@ -1212,6 +1225,11 @@ const LaneRow kLaneRows[] = {
     { "set-pad-key",              Accept, "as add-zone; edits the program's <Pads> table" },
     { "place-sampler-recording",  Accept, "lands in a NassauDigital program, which a system lane cannot hold; never on the lane" },
     { "assert-sampler-recording-level", Accept, "read-only" },
+    // Proposal 56 Q7 (QBX-279): the editor's seams, aimed at a NassauDigital
+    // slot, which a system lane cannot hold.
+    { "sampler-editor",        Accept, "drives the editor of a NassauDigital slot, which a system lane cannot hold; what a gesture submits is a verb with its own row" },
+    { "assert-sampler-editor", Accept, "read-only" },
+    { "sampler-hold-keys",     Accept, "injects into the device input and drains a NassauDigital editor's tap; a system lane holds no such editor" },
     { "add-automation-lane",   Accept, "AC5.4 self:Muted; and self:Volume on the master fader" },
     { "remove-automation-lane", Accept, "the inverse of the above" },
     { "add-automation-point",  Accept, "AC5.4. Gate: master_mute_audible" },

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PROPOSAL 56 Q7.1, third claim (QBX-279; nassau-digital DESIGN 7, decided):
+  "A new instance starts in the view a per-user setting names (Key by
+  default)."
+
+  The setting is SOpt::SamplerDefaultView, `sampler/defaultView`, read in one
+  place (ssamplerwiring::newInstanceView). It reaches an instance twice:
+    * the editor of an instance with NO program object yet shows it;
+    * the program object, when a verb CREATES it, starts in it (and a
+      non-default view is then saved with the instance, so the instance keeps
+      it whatever the setting says later).
+  A program read from a file keeps the view it was saved with.
+
+  The setting is written explicitly at every stage and put back to `key` at
+  the end, because it is a real per-user key (set-option's discipline).
+-->
+<SActionScript version="1" name="sampler_q7_default_view">
+
+  <setup project="new"/>
+
+  <actions>
+    <set-option key="sampler/defaultView" value="map"/>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <!-- No program object yet: the editor shows the per-user default. -->
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0"
+                           contains="open=1|view=map|page=map|pageSize=808x416|"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|program=0|"/>
+
+    <!-- The first edit creates the program object, in the default view. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="47">
+      <layer src="test:a"/>
+    </add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="map"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|program=1|"/>
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="open=1|view=map|page=map|"/>
+
+    <!-- The setting changes: the existing instance keeps its view, a new one
+         takes the new setting, also when its program is made by a view verb
+         that names only the pad. -->
+    <set-option key="sampler/defaultView" value="pad"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="map"/>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <set-sampler-view trackPath="1" slotIndex="0" padBank="0" pad="3"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" view="pad" pad="3"/>
+
+    <!-- An unknown value reads as Key. -->
+    <set-option key="sampler/defaultView" value="piano"/>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="2" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <plugin-row-command trackPath="2" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-editor trackPath="2" slotIndex="0" contains="open=1|view=key|page=key|"/>
+    <add-zone trackPath="2" slotIndex="0" keyLo="0" keyHi="127">
+      <layer src="test:a"/>
+    </add-zone>
+    <assert-sampler-program trackPath="2" slotIndex="0" view="key"/>
+
+    <!-- Saved with each instance, whatever the setting says at the load. -->
+    <set-option key="sampler/defaultView" value="zone"/>
+    <save-project path="../../build/sampler_q7_default_view.qxp"/>
+    <load-project path="../../build/sampler_q7_default_view.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" view="map"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" view="pad"/>
+    <assert-sampler-program trackPath="2" slotIndex="0" view="key"/>
+
+    <set-option key="sampler/defaultView" value="key"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="3"/>
+  </assertions>
+
+</SActionScript>
