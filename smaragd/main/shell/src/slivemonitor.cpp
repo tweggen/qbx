@@ -1382,10 +1382,11 @@ bool SLiveMonitor::active() const
 
 std::vector<STrack *> SLiveMonitor::liveOwnedTracks() const
 {
-    std::vector<STrack *> out = current_.ordered;
-    for( STrack *t : suspended_.ordered )
-        if( std::find( out.begin(), out.end(), t ) == out.end() ) out.push_back( t );
-    return out;
+    // NOT suspended_ (the author, 2026-11-04, "render bounces fresh"): a
+    // render's suspension really releases the processors, so an asset bounce
+    // during the render's settle is correct, and a render must be the same
+    // bytes in this session as in a fresh process.
+    return current_.ordered;
 }
 
 bool SLiveMonitor::isLive( const STrack *track ) const

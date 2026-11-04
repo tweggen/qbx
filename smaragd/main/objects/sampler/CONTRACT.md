@@ -475,8 +475,7 @@ changed for it.
     D4). A track the live lane owns refuses every freeze but the pump's and
     answers silence, so a bounce of content that holds one would be silence
     there. `ssampler::liveOwnerOf(body)` — a hook the shell installs over
-    `SLiveMonitor::liveOwnedTracks()` (the closure, plus what a running
-    render's suspension holds) and the PLAIN child/content walk from the body,
+    `SLiveMonitor::liveOwnedTracks()` (the closure only) and the PLAIN child/content walk from the body,
     never the sampler hops — is asked twice: BEFORE a bounce starts
     (`startBounce_`: owned → no job, no `renders` count) and AFTER it finished
     (`installFinished_`: owned now → the result is DISCARDED, because a track
@@ -487,13 +486,17 @@ changed for it.
     "track armed", `waitingFor` = the track's spec; `assert-sampler-layer
     waiting= waitingFor=`), announced once per wait. A waiting layer is not
     made due by later edits; `ssampler::liveOwnersMayHaveChanged()` (the shell
-    calls it on `SApplication::liveLanesMayHaveChanged` and after a render's
-    resume) re-asks the hook for every waiting layer of every program and
+    calls it on `SApplication::liveLanesMayHaveChanged`) re-asks the hook for every waiting layer of every program and
     bounces the freed ones at once (marked due for the debounce while a render
-    runs). An offline render does NOT wait for a waiting layer: its settle
-    re-asks (the start path does), the shell logs what the render hears
-    instead — the previous generation, or "NO generation of it (silence)" for a
-    first bounce — and the render plays that. The wait is not saved: a loaded
+    runs). **AN OFFLINE RENDER BOUNCES FRESH** (the author, 2026-11-04, on
+    #346): `startRender()` suspends the live lane before its settle, so during
+    the settle nothing is live-owned (a suspended track is NOT in
+    `liveOwnedTracks()`), the waiting layer is bounced as the asset is, the
+    render hears it — the same bytes as a render with the track disarmed or of
+    the project loaded fresh — and the wait is over; that generation stays
+    installed for live playback after the render. The resume is a fresh arm
+    that moves the content epoch again, so the next action makes the layer due
+    and it waits again, still playing the render's (correct) generation. The wait is not saved: a loaded
     project arrives with nothing live-owned (proposal 21 D9), so a reloaded link
     bounces as before. A layer that stops naming a link, or is removed, drops its
     wait (and an undo brings it back with the link).
@@ -677,15 +680,18 @@ absolute (there is nothing to be relative to).
 - `qxa.sampler_armed_bounce_waits` (QBX-274) — invariant 32's before-check:
   the bounce the arm asks for waits (generation 1 kept, `waiting="track
   armed" waitingFor="1"`, the meter page 0.549807 where main read 0), an edit
-  while armed waits too, an offline render hears generation 1 (0.558505) and
-  logs it, the disarm bounces at once (`renders` 2 before any time passes)
-  and the edit is heard (0.279253); a FIRST bounce while armed (a new link)
-  plays nothing, is reported, follows its `set-layer`'s undo/redo and its
-  zone's removal and undo, and the render logs "NO generation".
+  while armed waits too, an offline render while armed bounces FRESH and hears
+  the edit (0.279253), the render's generation stays for playback, the disarm
+  bounces at once (`renders` before any time passes); a FIRST bounce while
+  armed (a new link) plays nothing, is reported, follows its `set-layer`'s
+  undo/redo and its zone's removal and undo, and a render bounces it fresh;
+  the armed render is byte-identical to the disarmed one and to a render of
+  the saved project loaded back.
 - `qxa.sampler_armed_bounce_race` (QBX-274) — the after-check: the first
   bounce HELD by the render gate, the track armed under it, then released:
-  DISCARDED (main installed it, silent), waiting, no generation, the render
-  silent there and reporting it; the disarm alone (debounce 60 s) bounces it.
+  DISCARDED (main installed it, silent), waiting, no generation; the disarm
+  alone (debounce 60 s) bounces it; a settle without a render leaves a layer
+  waiting, the render's settle bounces it fresh.
   Sabotages that bite: proposal 56 §11 "QBX-274 as built".
 
 - Q7 (QBX-279), the editor's cases, listed with what each claims in
@@ -770,11 +776,10 @@ absolute (there is nothing to be relative to).
   within the debounce, but the silent generation plays until then. A
   live-owned processor the walk cannot reach from the body (none is known: the
   live lane owns tracks, and a bounce freezes what the body reaches) would go
-  unseen. The re-check after a render's resume cannot be gated: no action runs
-  during a scripted render (measured: its sabotage passes both cases). The
-  asset body's OWN capture (`SCut`, what a placement of the asset plays) is
-  refused and counted while the track is armed, whatever the sampler does: a
-  placement of such an asset plays silence while armed (not this slice's).
+  unseen. The asset body's OWN capture (`SCut`, what a placement of the asset
+  plays) is refused and counted while the track is armed, whatever the sampler
+  does: a placement of such an asset plays silence while armed (QBX-283, not
+  this slice's).
 - A bounce during PLAYBACK stales the sampler's track (invariant 14) but no
   case plays.
 

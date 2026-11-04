@@ -267,25 +267,10 @@ bool settleBeforeRender( SProject *project, QString *why )
         // An asset bounce the debounce still holds back (Q3) is outstanding
         // too: start it now, so this render hears the asset as it is.
         prog->flushDueBounces();
-        // ...unless it WAITS for a live-owned track (QBX-274; the author,
-        // 2026-11-04): the render does not wait for a bounce that cannot run
-        // before the disarm. It hears the previous generation, and says so --
-        // a line only a waiting layer produces.
-        for( std::uint32_t id : prog->waitingLayers() ) {
-            const SSamplerProgram::LayerState st = prog->layerState( id );
-            const QString spec = splacements::specOf( project, tr );
-            if( st.installedGeneration == 0 )
-                TW_LOGW( "app", "run barrier: NassauDigital on track %s, layer %u: its first "
-                         "bounce waits for track %s to be disarmed; the render hears NO "
-                         "generation of it (silence)",
-                         qPrintable( spec ), (unsigned)id, qPrintable( st.waitingFor ) );
-            else
-                TW_LOGW( "app", "run barrier: NassauDigital on track %s, layer %u: its bounce "
-                         "waits for track %s to be disarmed; the render hears the PREVIOUS "
-                         "generation %llu",
-                         qPrintable( spec ), (unsigned)id, qPrintable( st.waitingFor ),
-                         (unsigned long long)st.installedGeneration );
-        }
+        // A layer WAITING for an armed track (QBX-274) is bounced here too:
+        // startRender() suspended the live lane before this settle, so
+        // nothing is live-owned now and the bounce hears the asset as it is
+        // (the author, 2026-11-04, "render bounces fresh").
         if( prog->outstandingGenerations() == 0 ) continue;
         // ONE bound for the whole render, not one per track.
         const int left = std::max<qint64>(

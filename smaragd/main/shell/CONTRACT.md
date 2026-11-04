@@ -1080,23 +1080,14 @@ not of playback).
 inv. 32).** The SApplication constructor calls
 `ssamplerwiring::installLiveOwnership()` once the live monitor exists. It
 installs `ssampler::setLiveOwnerHook` — an asset body → the spec of a track in
-`SLiveMonitor::liveOwnedTracks()` (the closure, plus what a render's
-suspension holds; NOT a disarm tail's members, whose ownership was released
-when the disarm was asked for) that the body reaches by the PLAIN child and
+`SLiveMonitor::liveOwnedTracks()` (the closure; NOT a disarm tail's members,
+whose ownership was released when the disarm was asked for, and NOT what a
+render's suspension released) that the body reaches by the PLAIN child and
 content walk — and connects `liveLanesMayHaveChanged` to
-`ssampler::liveOwnersMayHaveChanged()`; `resumeLiveAfterRender()` calls it too,
-because the resume is a fresh arm that raises no `liveLanesChanged`. The
-settle above does not wait for a waiting layer: it logs, per waiting layer,
-
-    run barrier: NassauDigital on track <spec>, layer <id>: its bounce waits for track <spec> to be disarmed; the render hears the PREVIOUS generation <g>
-
-or, for a layer with no generation yet, `…: its first bounce waits for track
-<spec> to be disarmed; the render hears NO generation of it (silence)`.
-Because `startRender()` suspends the live lane BEFORE the settle, counting a
-suspended track as owned is what keeps the render on the previous generation
-(the author's answer of 2026-11-04); without it the settle would bounce the
-asset correctly (measured on main), which is proposal 56 §11 "QBX-274 as
-built"'s open question.
+`ssampler::liveOwnersMayHaveChanged()`. **A render bounces fresh** (the author,
+2026-11-04, on #346): `startRender()` suspends the live lane BEFORE the settle
+above, so a waiting layer is bounced there like any due one, the barrier's
+line counts it, and the render is the same bytes as in a fresh process.
 
 ## The media layer's two hooks (proposal 38 gate 3)
 

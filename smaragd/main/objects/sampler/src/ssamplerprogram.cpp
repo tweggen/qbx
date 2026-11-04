@@ -1078,13 +1078,6 @@ bool SSamplerProgram::deferBounce_( std::uint32_t layerId, const QString &owner,
     return true;
 }
 
-std::vector<std::uint32_t> SSamplerProgram::waitingLayers() const
-{
-    std::vector<std::uint32_t> out;
-    for( const auto &kv : liveWait_ ) out.push_back( kv.first );
-    return out;
-}
-
 void SSamplerProgram::recheckWaiting()
 {
     if( liveWait_.empty() || !installer_ ) return;

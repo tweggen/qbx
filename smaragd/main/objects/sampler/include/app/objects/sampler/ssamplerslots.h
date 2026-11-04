@@ -82,14 +82,14 @@ bool assetReachesTrack( SObject *body, const SObject *track, QString *via = null
 // disarmed; the layer keeps its previous generation and is marked waiting.
 // Which tracks the live lane owns is the shell's knowledge (SLiveMonitor), so
 // it is a hook: given an asset BODY, the spec of a live-owned track the body
-// reaches through child and content links ("" when none, or no hook) — a
-// track held for a running render's suspension counts as owned (the author:
-// a render meanwhile hears the previous generation).
+// reaches through child and content links ("" when none, or no hook). A
+// render's suspension releases ownership, so during an offline render's
+// settle nothing is owned and the bounce runs fresh (the author, 2026-11-04).
 using LiveOwner = std::function<QString( SObject *body )>;
 void    setLiveOwnerHook( LiveOwner hook );
 QString liveOwnerOf( SObject *body );
 // What the live lane owns MAY have changed (the shell calls it on
-// SApplication::liveLanesMayHaveChanged and after a render's resume): every
+// SApplication::liveLanesMayHaveChanged): every
 // program re-asks the hook for each waiting layer and bounces the ones no
 // longer blocked. A superset signal is fine: the re-check is the decision.
 void liveOwnersMayHaveChanged();

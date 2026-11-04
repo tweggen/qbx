@@ -43,8 +43,8 @@ void install();
 // QBX-274: A BOUNCE OVER A LIVE-OWNED TRACK WAITS FOR THE DISARM. Installs
 // ssampler's live-owner hook (an asset body -> the spec of a track the live
 // lane owns that the body reaches through child and content links, the
-// monitor's liveOwnedTracks(): the closure, plus what a running render's
-// suspension holds) and re-checks every waiting layer on
+// monitor's liveOwnedTracks(): the closure, never what a render's suspension
+// released) and re-checks every waiting layer on
 // SApplication::liveLanesMayHaveChanged (a superset: the re-check decides).
 // Called from the SApplication constructor once the live monitor exists.
 void installLiveOwnership( SApplication *app );

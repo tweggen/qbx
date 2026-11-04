@@ -35,7 +35,14 @@
 
   It is also the "first bounce, no previous generation" case of the author's
   answer: the discarded bounce was the layer's first, so it plays nothing until
-  the disarm, an offline render meanwhile is silent there and says so.
+  the disarm.
+
+  AN OFFLINE RENDER WHILE ARMED BOUNCES FRESH (the author, 2026-11-04, on
+  #346): startRender() suspends the live lane before its settle, so nothing
+  is live-owned then, the waiting layer is bounced as the asset is, the render
+  hears the edit and the layer stops waiting. The last section gates it here,
+  where only a settle can start a bounce: a wait-sampler-generations settle
+  (no suspension) leaves the layer waiting, the render's settle does not.
 
   MEASURED ON MAIN 8b891a9a (QBX-274): the released bounce was installed as
   generation 1 and the meter page read 0 (silence).
@@ -95,18 +102,7 @@
     <!-- A first bounce has no previous generation: the layer plays nothing. -->
     <assert-meter trackPath="0" position="53248" minRms="0" maxRms="0.00001"/>
 
-    <!-- ===== an offline render meanwhile: silent there, and reported. Its
-         settle starts the due bounce, which the before-check defers. -->
-    <render filename="sar_1.wav" format="wav" quality="10" durationSec="1.5"/>
-    <assert-log contains="layer 2: its first bounce waits for track 1 to be disarmed; the render hears NO generation of it (silence)"
-                minCount="1" maxCount="1"/>
-    <assert-audio-energy filename="sar_1.wav" startFrame="53248" frameCount="4096"
-                         channel="0" minRms="0" maxRms="0.00001"/>
-    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
-                          renders="1" waiting="track armed"/>
-
     <!-- ===== the disarm alone bounces it (the debounce is out of reach) -->
-    <wait-ms ms="600"/>
     <arm-track trackPath="1" armed="0"/>
     <assert-log contains="layer 2: track 1 is no longer live-owned; its deferred bounce runs now"
                 minCount="1" maxCount="1"/>
@@ -114,9 +110,37 @@
     <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
                           rendering="0" installs="1" renders="2" waiting=""/>
     <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== armed again, the asset edited (velocity 50): a settle WITHOUT
+         a render starts the due bounce, and it waits (nothing suspended). -->
+    <arm-track trackPath="1" armed="1"/>
+    <wait-ms ms="600"/>
+    <set-notes clip="1,0"><n tick="0" dur="960" key="60" velocity="50" channel="0"/></set-notes>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-log contains="layer 2: bounce WAITS (before the job): track 1 is armed (live-owned); the layer keeps generation 2"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" renders="2" waiting="track armed" waitingFor="1"/>
+    <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== an offline render while still armed bounces FRESH: the
+         barrier waits for that bounce, the render hears the edit, the layer
+         stops waiting. -->
+    <render filename="sar_1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="for 1 sampler generation(s) on track 0" minCount="1" maxCount="1"/>
+    <assert-log contains="bounce WAITS" minCount="0" maxCount="0"/>
+    <assert-audio-energy filename="sar_1.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.26" maxRms="0.30"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          installs="2" renders="3" waiting="" waitingFor=""/>
+    <!-- The render's generation is a correct bounce and stays installed:
+         what live playback plays after the render (meter: the edit). -->
+    <assert-meter trackPath="0" position="53248" minRms="0.26" maxRms="0.30"/>
+    <arm-track trackPath="1" armed="0"/>
+    <wait-ms ms="600"/>
     <render filename="sar_2.wav" format="wav" quality="10" durationSec="1.5"/>
     <assert-audio-energy filename="sar_2.wav" startFrame="53248" frameCount="4096"
-                         channel="0" minRms="0.53" maxRms="0.58"/>
+                         channel="0" minRms="0.26" maxRms="0.30"/>
   </actions>
 
   <assertions>

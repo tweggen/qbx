@@ -16,7 +16,6 @@
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sampler/twsamplerregistry.h"
 #include "app/shell/ssamplerwiring.h"
-#include "app/objects/sampler/ssamplerslots.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
@@ -1391,10 +1390,6 @@ bool SApplication::startRender(const audio::RenderParams &params, QString *error
 void SApplication::resumeLiveAfterRender()
 {
     if( liveMonitor_ ) liveMonitor_->resumeAfterRender();
-    // The resume is a FRESH arm (design D4) and raises no liveLanesChanged:
-    // a track disarmed while the render held it is released only here, so a
-    // NassauDigital bounce waiting for it (QBX-274) is re-asked here too.
-    ssampler::liveOwnersMayHaveChanged();
 }
 
 void SApplication::keyboardNoteOn( int key, int velocity, int channel )

@@ -336,9 +336,6 @@ public:
     void flushDueBounces();
     // The debounce between an asset's epoch moving and its bounce starting.
     static int bounceDebounceMs();
-    // QBX-274: the layers whose bounce waits for a live-owned track to be
-    // disarmed, in id order (the render's settle logs what each one plays).
-    std::vector<std::uint32_t> waitingLayers() const;
     // Re-ask ssampler::liveOwnerOf() for every waiting layer of THIS program
     // and bounce the ones no longer blocked (debounced while a render runs).
     void recheckWaiting();
