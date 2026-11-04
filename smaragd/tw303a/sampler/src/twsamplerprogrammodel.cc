@@ -6,6 +6,7 @@
 #include "twsamplerimpl.h"
 
 #include "nd_edit.h"
+#include "nd_overlay.h"
 #include "nd_program.h"
 #include "nd_program_xml.h"
 #include "nd_xml.h"
@@ -649,6 +650,132 @@ bool twSamplerProgramModel::setPadKey( int n, int key, int *priorKey, std::strin
     }
     if( priorKey ) *priorKey = r.priorKey;
     return true;
+}
+
+// ------------------------------------------------------------ libraries ------
+
+struct twSamplerLibrary::Impl {
+    nd::Program base;
+    nd::Overlay overlay;
+};
+
+twSamplerLibrary::twSamplerLibrary() : impl_( new Impl ) {}
+twSamplerLibrary::twSamplerLibrary( const twSamplerLibrary &o ) : impl_( new Impl( *o.impl_ ) ) {}
+twSamplerLibrary &twSamplerLibrary::operator=( const twSamplerLibrary &o )
+{
+    if( this != &o ) *impl_ = *o.impl_;
+    return *this;
+}
+twSamplerLibrary::~twSamplerLibrary() = default;
+
+bool twSamplerLibrary::fromXml( const std::string &baseXml, const std::string &overlayXml,
+                                twSamplerLibrary &out, std::string *error )
+{
+    nd::ProgramParseResult b = nd::parseProgram( baseXml );
+    if( !b.ok ) {
+        setError( error, "the library program: " + b.error );
+        return false;
+    }
+    nd::Overlay o;
+    if( overlayXml.find_first_not_of( " \t\r\n" ) != std::string::npos ) {
+        nd::OverlayParseResult r = nd::parseOverlay( overlayXml );
+        if( !r.ok ) {
+            setError( error, "the overlay: " + r.error );
+            return false;
+        }
+        o = std::move( r.overlay );
+    }
+    out.impl_->base    = std::move( b.program );
+    out.impl_->overlay = std::move( o );
+    return true;
+}
+
+std::string twSamplerLibrary::baseXml() const { return nd::writeProgram( impl_->base ); }
+std::string twSamplerLibrary::overlayXml() const { return nd::writeOverlay( impl_->overlay ); }
+
+bool twSamplerLibrary::setBase( const std::string &baseXml, std::string *error )
+{
+    nd::ProgramParseResult b = nd::parseProgram( baseXml );
+    if( !b.ok ) {
+        setError( error, "the library program: " + b.error );
+        return false;
+    }
+    impl_->base = std::move( b.program );
+    return true;
+}
+
+void twSamplerLibrary::setBasePath( const std::string &path ) { impl_->overlay.base = path; }
+std::string twSamplerLibrary::basePath() const { return impl_->overlay.base; }
+std::string twSamplerLibrary::libraryVersion() const { return impl_->base.libraryVersion; }
+std::string twSamplerLibrary::baseVersion() const { return impl_->overlay.baseVersion; }
+std::size_t twSamplerLibrary::editCount() const { return impl_->overlay.edits.size(); }
+
+twSamplerProgramModel twSamplerLibrary::applied() const
+{
+    twSamplerProgramModel m;
+    m.impl_->program = nd::applyOverlay( impl_->base, impl_->overlay ).program;
+    return m;
+}
+
+std::string twSamplerLibrary::report() const
+{
+    const nd::OverlayResult r = nd::applyOverlay( impl_->base, impl_->overlay );
+    std::vector<std::string> parts;
+    for( const nd::OverlayDrift &d : r.baseDrift ) parts.push_back( d.attr + " " + d.was + "->" + d.now );
+    for( const nd::OverlayEditReport &e : r.edits ) {
+        const std::string verb = e.index < impl_->overlay.edits.size() ? impl_->overlay.edits[e.index].name
+                                                                      : std::string( "?" );
+        std::string line = "#" + std::to_string( e.index ) + " " + verb + " ";
+        switch( e.state ) {
+        case nd::OverlayEditState::Applied: continue;
+        case nd::OverlayEditState::Drifted:
+            line += "drifted";
+            for( const nd::OverlayDrift &d : e.drift ) line += " " + d.attr + " " + d.was + "->" + d.now;
+            break;
+        case nd::OverlayEditState::Orphaned: line += "orphaned " + std::to_string( e.missingId ); break;
+        case nd::OverlayEditState::Refused:  line += "refused: " + e.error; break;
+        case nd::OverlayEditState::Unknown:  line += "unknown"; break;
+        }
+        parts.push_back( line );
+    }
+    std::string out;
+    for( const std::string &p : parts ) out += ( out.empty() ? "" : "; " ) + p;
+    return out;
+}
+
+int twSamplerLibrary::drifted() const
+{
+    return (int)nd::applyOverlay( impl_->base, impl_->overlay ).drifted().size();
+}
+
+int twSamplerLibrary::orphaned() const
+{
+    return (int)nd::applyOverlay( impl_->base, impl_->overlay ).orphaned().size();
+}
+
+bool twSamplerLibrary::versionMismatch() const
+{
+    return nd::applyOverlay( impl_->base, impl_->overlay ).versionMismatch();
+}
+
+bool twSamplerLibrary::recordPad( int n, int key, int *priorKey, std::string *error )
+{
+    nd::Program current = nd::applyOverlay( impl_->base, impl_->overlay ).program;
+    const int prior = current.padKey( n );
+    const nd::RecordedEdit rec = nd::recordPadEdit( impl_->overlay, current, n, key );
+    if( !rec.ok ) {
+        setError( error, rec.error );
+        return false;
+    }
+    if( priorKey ) *priorKey = prior;
+    return true;
+}
+
+int twSamplerLibrary::rebase()
+{
+    nd::Program current = nd::applyOverlay( impl_->base, impl_->overlay ).program;
+    const nd::RebasedOverlay r = nd::rebaseOverlay( impl_->overlay, current, impl_->base );
+    return (int)r.refreshed.size();
 }
 
 }  // namespace audio

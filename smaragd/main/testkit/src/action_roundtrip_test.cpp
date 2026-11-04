@@ -119,6 +119,15 @@ const Fixture kFixtures[] = {
     // QBX-277: a pad's key, in the program's <Pads> table.
     { "set-pad-key",
       "<set-pad-key trackPath='Drums:0' slotIndex='1' n='20' key='45'/>" },
+    // QBX-278: a library program on the instance.
+    { "set-sampler-library",
+      "<set-sampler-library trackPath='Drums:0' slotIndex='1' path='lib/kit.ndp'/>" },
+    { "rebase-sampler-library",
+      "<rebase-sampler-library trackPath='Drums:0' slotIndex='1'/>" },
+    { "restore-sampler-state",
+      "<restore-sampler-state trackPath='Drums:0' slotIndex='1' library='1'"
+      " base='&lt;NassauDigitalProgram version=&quot;1&quot;/&gt;'"
+      " overlay='&lt;NassauDigitalOverlay version=&quot;1&quot;/&gt;'/>" },
     // QBX-279: the editor's seams. Every attribute non-default, so an unread
     // one cannot hide behind the default it is compared against.
     { "sampler-editor",
@@ -1223,6 +1232,9 @@ const LaneRow kLaneRows[] = {
     { "set-sampler-view",         Accept, "as add-zone; instance state only" },
     { "set-sampler-record-input", Accept, "as add-zone; instance state only" },
     { "set-pad-key",              Accept, "as add-zone; edits the program's <Pads> table" },
+    { "set-sampler-library",      Accept, "as add-zone; the instance's program becomes a library's" },
+    { "rebase-sampler-library",   Accept, "as add-zone; accepts the library's base" },
+    { "restore-sampler-state",    Accept, "as add-zone (the library verbs' inverse)" },
     { "place-sampler-recording",  Accept, "lands in a NassauDigital program, which a system lane cannot hold; never on the lane" },
     { "assert-sampler-recording-level", Accept, "read-only" },
     // Proposal 56 Q7 (QBX-279): the editor's seams, aimed at a NassauDigital

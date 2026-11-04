@@ -2229,7 +2229,8 @@ nassau-digital main `eba2961` (#32 merged as `9d55932`; #33 on top is docs only)
      export writes.
    - The device-note pad selection does not mark the project modified.
    - A library overlay cannot reassign a pad: the core has no overlay verb
-     for the table. That is the follow-up QBX-278.
+     for the table. That is the follow-up QBX-278. *(Built 2026-11-04:
+     "QBX-278 as built", below.)*
    - A row on its default key, read from a file, is kept, not normalised
      away (the author's answer). Reassigning such a pad and undoing it removes the row rather than
      restoring it. The pad plays the same key either way, but the program is
@@ -2364,3 +2365,128 @@ CONTRACT, "The app-editor registry"; objects/sampler gained invariants 29–31.
      not; accepted by the author 2026-11-03, as are the empty selection for a
      key no zone covers, zone knobs setting every selected zone, and the drop
      rule.
+
+### QBX-278 as built (2026-11-04): a pad reassignment on a library program is an overlay edit
+
+The author's decision of 2026-11-04 (thinktank; nassau-digital DESIGN §8):
+a pad reassignment on a library program is an overlay edit `set-pad` (`n`,
+`key`, `key.was`) with `set-program`'s semantics. If the base's key for the
+pad is no longer `key.was`, the overlay's key still plays and the edit is
+reported drifted. Rebase updates `key.was`. A pad edit is never orphaned.
+Flatten writes the resulting `<Pads>` table. `key.was` for a pad with no
+base row is its default 36 + n. Undo removes the edit and writes the
+previous value back.
+
+1. **Core first** (nassau-digital #35, branch commit `58454e1`): the
+   overlay verb `set-pad`, `recordPadEdit()`, and `RecordedKind::SetPad`
+   (appended). A pad 92..95 with no row has no key, so its `key.was` is
+   written `none`. Undo restores the table exactly, rows and order. Doing it
+   with `setPadKey(prior)` would drop a base row that sits on its default
+   key: QBX-277's known limit, fixed for overlays here.
+   `NASSAU_DIGITAL_GIT_REF` is pinned to that BRANCH commit and must be
+   re-pinned to the merge commit once #35 merges.
+2. **qbx had no library support at all** before this ticket (§11 "Core
+   bump to 793f4ce", item 5: "no qbx verb applies a library overlay yet").
+   The ticket needs an instance whose program comes from a library, so the
+   smallest one was built (objects/sampler CONTRACT inv. 32):
+   - `set-sampler-library path=` makes the instance base + overlay. If the
+     instance is already a library, the overlay is kept and only the base is
+     replaced: a newer version of the library is reported, and an edit whose
+     base value moved is drifted.
+   - `rebase-sampler-library` runs the core's `rebaseOverlay`.
+   - `restore-sampler-state` puts the whole program state back as text. It
+     is the inverse of the two verbs above, of `set-pad-key` on a library,
+     and of itself. For an overlay edit, restoring the overlay as it was
+     before is exactly "remove the edit and write the previous value back".
+   - tw/sampler gained `twSamplerLibrary`, a forwarder over `nd::Program` +
+     `nd::Overlay`. Only tw/sampler sees the core, as invariant 1 requires.
+   - `assert-sampler-program` gained `library`, `libraryReport` (the drift
+     report, exactly), `overlayContains` / `overlayAbsent`, `overlayEdits`
+     and `baseVersion`.
+3. **`set-pad-key` on a library instance** records `set-pad` through
+   `SSamplerProgram::editLibrary()`. The base is not written: the saved base
+   keeps its `<Pad n="5" key="36"/>` while the overlay plays 40.
+4. **Every other program verb is refused on a library instance**: `edit()`
+   refuses, announcing `only a pad reassignment (set-pad-key) is an overlay
+   edit so far`. A write into `model()` would be recomputed away by the next
+   overlay edit and could never be what the user meant. Routing
+   set-zone / set-layer / set-sampler-program / add / remove / recording /
+   asset links into the core's overlay verbs is not this ticket.
+5. **Persistence.** `<library><base>CDATA</base><overlay>CDATA</overlay>
+   </library>` is written after `<program>`, and `<program>` keeps the
+   applied program for a reader that does not know `<library>`. The element
+   is written only for a library instance, so every other file is
+   byte-unchanged. On load the truth is base + overlay. A `<library>` the
+   core refuses makes the program unreadable (invariant 10) and is written
+   back verbatim (not gated). The library FILE is read once, when the verb
+   runs, and remembered for the redo. It is never written and never re-read
+   on load.
+6. **Gate**: `qxa.sampler_library_pads`, which checks:
+   - an unreadable library is refused and creates no program object;
+   - the instance becomes a library (pads `5:36`, report `""`);
+   - `set-pad-key n=5 key=40` writes `<set-pad n="5" key="40" key.was="36"/>`,
+     the overlay names its base path, and `baseVersion` 3 is stamped with the
+     first edit;
+   - a second edit of the same pad gets `key.was="40"`, the overlay's value
+     and not the base's;
+   - `n=1` gets `key.was="37"`, the default;
+   - undo and redo of each are exact (the program equals its capture, the
+     verb leaves and returns, `baseVersion` leaves with the first edit);
+   - refusals (n 96, key 128) change nothing;
+   - `set-zone` is refused on the library instance;
+   - save and reload: the file carries `<library>`, the base row 36 and the
+     overlay verb, and the reloaded program equals its capture and is
+     installed;
+   - `set-sampler-library` onto version 4 (pad 5 moved to 42) reports
+     `libraryVersion 3->4; #0 set-pad drifted key 36->42` while pad 5 still
+     plays 40, with undo and redo;
+   - `rebase-sampler-library` clears the report, writes `key.was="42"` and
+     `baseVersion` 4, and changes nothing that plays, with undo and redo;
+   - a second save and reload keeps the rebased state;
+   - rebase on an instance that is not a library is refused.
+
+   `action_roundtrip_test` covers the three new verbs.
+7. **Sabotages**: 14, run through a harness that restores every file from its
+   saved bytes and touches it. The cases run each time are
+   `sampler_library_pads`, `sampler_pads_reassign`, `sampler_pads_program` and
+   `action_roundtrip_test`. Thirteen bite, each only `sampler_library_pads`:
+   - `set-pad-key` skipping the overlay branch, with `edit()` letting it
+     through (writes the base), and again with `edit()` refusing;
+   - `recordPad` reading the bare base instead of base + overlay;
+   - the inverse being `set-pad-key` with the prior key, a second overlay edit
+     instead of a removal;
+   - `edit()` not refusing on a library;
+   - save writing no `<library>`;
+   - load ignoring `<library>`;
+   - a new base dropping the overlay;
+   - the report leaving out drift;
+   - rebase not rebasing;
+   - `restore-sampler-state` ignoring the overlay;
+   - `editLibrary` keeping the old applied program;
+   - the overlay naming no base path.
+
+   The one that cannot bite: `set-sampler-library` re-reading the file on a
+   redo instead of the text its first apply read. The file does not change
+   during a case, and no `.qxa` verb writes one.
+
+   The core's own 12 sabotages are in nassau-digital GATES C8.
+8. **Not gated / not built**:
+   - No flatten verb in qbx, and no greyed orphan display in the editor. The
+     editor's Pad view shows the applied table; nothing marks a drifted pad.
+   - An orphaned or refused overlay edit cannot be made from qbx: only
+     set-pad, which is never orphaned.
+   - The library is never re-read on load. A newer file on disk is seen only
+     when `set-sampler-library` runs again (question 2 below).
+   - An unreadable `<library>` kept verbatim is built but not gated.
+9. **Questions for the author** (the simplest reversible reading was built):
+   1. `key.was="none"` for a pad 92..95 with no base row. Would `-1`, or no
+      `key.was`, be preferred?
+   2. Should loading a project re-read the library file from its path, so a
+      newer library on disk shows as drift without running
+      `set-sampler-library` again? As built, the project carries a copy of the
+      base and plays exactly what was saved.
+   3. No `hide-pad`: an overlay can only send a base row back to the default
+      key, and that is impossible for pads 92..95. Is a hide needed?
+   4. On a library instance every other edit is refused. Should the zone,
+      layer and program verbs, and recording, become overlay edits next (the
+      core has the verbs), as a follow-up ticket?

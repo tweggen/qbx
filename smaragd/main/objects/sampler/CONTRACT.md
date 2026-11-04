@@ -464,6 +464,30 @@ changed for it.
     model state of this object and is NOT saved (invariant 11, now the author's
     answer, not an assumption). `select-zones` stays undoable.
 
+### QBX-278: a library program, and the pad reassignment as an overlay edit
+
+32. **A LIBRARY INSTANCE IS BASE + OVERLAY, AND ONLY THE OVERLAY IS EDITED**
+    (nassau-digital DESIGN §8; the author's decision of 2026-11-04).
+    `set-sampler-library` gives the instance a read-only BASE (the library
+    program's text, read once and kept) and an OVERLAY
+    (`audio::twSamplerLibrary`, tw/sampler's forwarder to the core's
+    nd_overlay); `model()` is always `library()->applied()`, the base with the
+    overlay applied, and is replaced only through `editLibrary()` or
+    `restoreProgramState()`, which publish like `edit()`. `edit()` REFUSES on
+    a library instance, so no program verb can write into what the next
+    overlay edit would recompute away; `set-pad-key` there records the core's
+    `set-pad` (`n`, `key`, `key.was`). A newer base under the overlay
+    (`set-sampler-library` again) keeps the overlay; an edit whose base value
+    moved still applies and is reported drifted (`twSamplerLibrary::report()`);
+    `rebase-sampler-library` accepts the base. Every inverse of these is
+    `restore-sampler-state` with the instance's whole state before, which for
+    an overlay edit is exactly "remove the edit and write the previous value
+    back". Saved as `<library><base>CDATA</base><overlay>CDATA</overlay>
+    </library>` after `<program>` (which holds the applied program, for a
+    reader that does not know `<library>`), only for a library instance, so
+    every other file is byte-unchanged; a `<library>` the core refuses on load
+    makes the program unreadable (invariant 10) and is written back verbatim.
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -646,6 +670,11 @@ absolute (there is nothing to be relative to).
   verbs' own `gesture=` merge, and what never merges), `…_select_views`,
   `…_drop`.
 
+- QBX-278: `qxa.sampler_library_pads` (invariant 32): a library instance,
+  set-pad-key writing the overlay (`key.was` the row's key or the default),
+  undo/redo, the other verbs refused, save/reload, a newer base drifting the
+  edit while the overlay's key plays, rebase clearing it, undo/redo of each.
+
 ## Not gated / known limits
 
 - Q6: the CYCLE and PUNCH regions do not apply to a take into the instrument:
@@ -661,6 +690,14 @@ absolute (there is nothing to be relative to).
   an export would write. The device-note pad selection changes saved state
   without marking the project modified. A library overlay cannot reassign a
   pad (the core has no overlay verb for the table); that is QBX-278.
+  *(Built by QBX-278: invariant 32.)*
+- QBX-278: on a library instance only the pad reassignment is an overlay
+  edit; set-zone / set-layer / set-sampler-program, add / remove, recording
+  and asset links are REFUSED there, not routed into the overlay (the core
+  has the verbs; qbx does not make them yet). There is no flatten verb and no
+  greyed orphan display in the editor. The library is read when
+  `set-sampler-library` runs, never re-read on load: a newer library file on
+  disk is seen only when the verb is run again.
 
 - `qxa.sampler_q5_live_play` (QBX-271) — Q5.1, transport stopped: the
   sampler (panned left) and the test sine (panned right) armed on one MIDI
