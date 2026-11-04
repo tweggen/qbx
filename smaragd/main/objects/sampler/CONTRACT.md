@@ -30,6 +30,10 @@ INPUT (`set-sampler-record-input`), and the LAST KEY PLAYED, which the shell's
 key tap writes (proposal 56 §4.10, §11 "Q6 as built"; the invariants headed
 "Q6" below).
 
+Since QBX-274 a bounce over content that holds a LIVE-OWNED (armed) track
+WAITS for the disarm instead of installing the guard's silence (invariant
+32).
+
 Since Q5 (QBX-271) an armed sampler track is PLAYED LIVE through the live
 lane (proposal 56 §4.9, DESIGN §9.4). No line of this slice, of tw/sampler or
 of the live lane changed for it: the sampler is a generator in slot 0 and
@@ -464,6 +468,36 @@ changed for it.
     model state of this object and is NOT saved (invariant 11, now the author's
     answer, not an assumption). `select-zones` stays undoable.
 
+### QBX-274: a bounce over an armed track waits
+
+32. **A BOUNCE OVER A LIVE-OWNED TRACK IS DEFERRED UNTIL THE DISARM, AND
+    NEVER INSTALLED SILENT** (the author's answer of 2026-11-04; proposal 21
+    D4). A track the live lane owns refuses every freeze but the pump's and
+    answers silence, so a bounce of content that holds one would be silence
+    there. `ssampler::liveOwnerOf(body)` — a hook the shell installs over
+    `SLiveMonitor::liveOwnedTracks()` (the closure, plus what a running
+    render's suspension holds) and the PLAIN child/content walk from the body,
+    never the sampler hops — is asked twice: BEFORE a bounce starts
+    (`startBounce_`: owned → no job, no `renders` count) and AFTER it finished
+    (`installFinished_`: owned now → the result is DISCARDED, because a track
+    armed while the job ran may have given it silence, frozen by the worker or
+    read from a page another thread froze while the track was owned). Either
+    way the layer keeps playing what it played — its previous generation, or
+    nothing when it had none — and is marked WAITING (`LayerState::waiting` =
+    "track armed", `waitingFor` = the track's spec; `assert-sampler-layer
+    waiting= waitingFor=`), announced once per wait. A waiting layer is not
+    made due by later edits; `ssampler::liveOwnersMayHaveChanged()` (the shell
+    calls it on `SApplication::liveLanesMayHaveChanged` and after a render's
+    resume) re-asks the hook for every waiting layer of every program and
+    bounces the freed ones at once (marked due for the debounce while a render
+    runs). An offline render does NOT wait for a waiting layer: its settle
+    re-asks (the start path does), the shell logs what the render hears
+    instead — the previous generation, or "NO generation of it (silence)" for a
+    first bounce — and the render plays that. The wait is not saved: a loaded
+    project arrives with nothing live-owned (proposal 21 D9), so a reloaded link
+    bounces as before. A layer that stops naming a link, or is removed, drops its
+    wait (and an undo brings it back with the link).
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -640,6 +674,20 @@ absolute (there is nothing to be relative to).
   and through an edit, a save and a reload), `…_select_key` (a device note
   selects the pad, shared-key rule, bank switch, keys no pad plays).
 
+- `qxa.sampler_armed_bounce_waits` (QBX-274) — invariant 32's before-check:
+  the bounce the arm asks for waits (generation 1 kept, `waiting="track
+  armed" waitingFor="1"`, the meter page 0.549807 where main read 0), an edit
+  while armed waits too, an offline render hears generation 1 (0.558505) and
+  logs it, the disarm bounces at once (`renders` 2 before any time passes)
+  and the edit is heard (0.279253); a FIRST bounce while armed (a new link)
+  plays nothing, is reported, follows its `set-layer`'s undo/redo and its
+  zone's removal and undo, and the render logs "NO generation".
+- `qxa.sampler_armed_bounce_race` (QBX-274) — the after-check: the first
+  bounce HELD by the render gate, the track armed under it, then released:
+  DISCARDED (main installed it, silent), waiting, no generation, the render
+  silent there and reporting it; the disarm alone (debounce 60 s) bounces it.
+  Sabotages that bite: proposal 56 §11 "QBX-274 as built".
+
 - Q7 (QBX-279), the editor's cases, listed with what each claims in
   `samplerui/CONTRACT.md`: `qxa.sampler_q7_views`, `…_default_view` (invariant
   29), `…_hand_select` (31), `…_xml_pane`, `…_knobs` (30: the knob drag and the
@@ -715,10 +763,18 @@ absolute (there is nothing to be relative to).
 - The bounce reads the asset's window as start + length in the content: a
   stretched, warped or looped asset window is bounced unstretched and
   unlooped (no qbx verb makes one today).
-- A bounce of an asset whose content holds an ARMED instrument track freezes
-  that track's live-owned processor directly: the freeze is refused and
-  counted, and the bounce is silent for that span. Untested, filed as
-  QBX-274 (found by QBX-271).
+- *(Fixed by QBX-274, invariant 32: a bounce over an armed track waits for
+  the disarm.)* What invariant 32 does NOT cover: an arm AND its disarm both
+  landing inside one bounce (1–11 ms) leave the after-check nothing to see;
+  the disarm moves the content epoch, so the next arrangementChanged re-bounces
+  within the debounce, but the silent generation plays until then. A
+  live-owned processor the walk cannot reach from the body (none is known: the
+  live lane owns tracks, and a bounce freezes what the body reaches) would go
+  unseen. The re-check after a render's resume cannot be gated: no action runs
+  during a scripted render (measured: its sabotage passes both cases). The
+  asset body's OWN capture (`SCut`, what a placement of the asset plays) is
+  refused and counted while the track is armed, whatever the sampler does: a
+  placement of such an asset plays silence while armed (not this slice's).
 - A bounce during PLAYBACK stales the sampler's track (invariant 14) but no
   case plays.
 

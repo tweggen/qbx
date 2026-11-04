@@ -16,6 +16,7 @@
 #include "tw/plugins/twpluginsearchpaths.h"
 #include "tw/sampler/twsamplerregistry.h"
 #include "app/shell/ssamplerwiring.h"
+#include "app/objects/sampler/ssamplerslots.h"
 #include "tw/sidecar/twsidecarstore.h"
 #include "tw/devices/audio_backend.h"
 #include "tw/devices/audio_input.h"
@@ -1007,6 +1008,9 @@ SApplication::SApplication( int &argc, char **argv )
     // whose recorder SINKS it acquires, and destroyed before it.
     midiRecorder_.reset( new SMidiRecorder( this ) );
     samplerKeyTaps_.reset( new SSamplerKeyTaps( this ) );
+    // QBX-274: a NassauDigital asset bounce over a live-owned (armed) track
+    // waits for the disarm; the hook asks the monitor built above.
+    ssamplerwiring::installLiveOwnership( this );
     // The MASTER's entry, and the active one until a tab says otherwise.
     activeSelectionRoot_ = QString();
     selectionList_ = &selections_[ activeSelectionRoot_ ].list;
@@ -1387,6 +1391,10 @@ bool SApplication::startRender(const audio::RenderParams &params, QString *error
 void SApplication::resumeLiveAfterRender()
 {
     if( liveMonitor_ ) liveMonitor_->resumeAfterRender();
+    // The resume is a FRESH arm (design D4) and raises no liveLanesChanged:
+    // a track disarmed while the render held it is released only here, so a
+    // NassauDigital bounce waiting for it (QBX-274) is re-asked here too.
+    ssampler::liveOwnersMayHaveChanged();
 }
 
 void SApplication::keyboardNoteOn( int key, int velocity, int channel )

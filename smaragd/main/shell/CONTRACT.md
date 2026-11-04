@@ -1076,6 +1076,28 @@ playback run plays whatever generation is installed, and a later install
 stales the track as any edit does (DESIGN §6.1 asks byte identity of renders,
 not of playback).
 
+**A bounce over an ARMED track waits for the disarm (QBX-274; objects/sampler
+inv. 32).** The SApplication constructor calls
+`ssamplerwiring::installLiveOwnership()` once the live monitor exists. It
+installs `ssampler::setLiveOwnerHook` — an asset body → the spec of a track in
+`SLiveMonitor::liveOwnedTracks()` (the closure, plus what a render's
+suspension holds; NOT a disarm tail's members, whose ownership was released
+when the disarm was asked for) that the body reaches by the PLAIN child and
+content walk — and connects `liveLanesMayHaveChanged` to
+`ssampler::liveOwnersMayHaveChanged()`; `resumeLiveAfterRender()` calls it too,
+because the resume is a fresh arm that raises no `liveLanesChanged`. The
+settle above does not wait for a waiting layer: it logs, per waiting layer,
+
+    run barrier: NassauDigital on track <spec>, layer <id>: its bounce waits for track <spec> to be disarmed; the render hears the PREVIOUS generation <g>
+
+or, for a layer with no generation yet, `…: its first bounce waits for track
+<spec> to be disarmed; the render hears NO generation of it (silence)`.
+Because `startRender()` suspends the live lane BEFORE the settle, counting a
+suspended track as owned is what keeps the render on the previous generation
+(the author's answer of 2026-11-04); without it the settle would bounce the
+asset correctly (measured on main), which is proposal 56 §11 "QBX-274 as
+built"'s open question.
+
 ## The media layer's two hooks (proposal 38 gate 3)
 
 Three injections, split across two classes because the status bar belongs to

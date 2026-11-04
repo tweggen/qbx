@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-274: A SAMPLER ASSET BOUNCE OVER CONTENT THAT HOLDS AN ARMED INSTRUMENT
+  TRACK WAITS FOR THE DISARM (the author's answer of 2026-11-04).
+
+  THE DEFECT (found by QBX-271, Q5). A Q3 bounce freezes the asset's content
+  on a worker. When the content holds a track the live lane OWNS (armed,
+  proposal 21 D4), that track's processor refuses the freeze and answers
+  silence, and the silent bounce was INSTALLED as a generation: the sampler
+  played nothing over that span until something re-bounced it.
+
+  THE RULE. While a track inside the asset's content is live-owned the bounce
+  does not run: the layer keeps playing its PREVIOUS generation and is marked
+  waiting (assert-sampler-layer waiting="track armed", waitingFor = the
+  track). The disarm re-asks at once (SApplication::liveLanesMayHaveChanged)
+  and the bounce runs then. An offline render meanwhile does not wait for it:
+  it hears the previous generation and logs that it did. A FIRST bounce with
+  no previous generation stays silent until the disarm, and is reported.
+
+  ======================================================= the fixture
+
+  Master track 0: NassauDigital, zone 1 over every key (root 60, one-shot),
+  layer 2. A MIDI clip plays key 60 at tick 1920 = frame 48000, velocity 127
+  (the layer at unity), so the sample sounds over [48000, 72000).
+
+  Master track 1: the test CLAP sine, one sequenced note (key 60, tick 0,
+  960 ticks = 24000 frames, velocity 100: rms 0.5568), MIDI input capture.
+  The asset "Inst asset" windows TRACK 1 over [0, 24000), so a bounce is that
+  note: the sampler plays it back at 0.5565 (velocity 100), or at 0.2782 once
+  the note's velocity is 50. Track 1 is silent after 24000, so the render
+  window [53248, 57344) and the meter page there carry the sampler alone.
+
+  Arming track 1 (transport stopped, monitor Auto) makes it live-owned, and
+  the arm itself moves its content epoch (the exclusion stales it): on main
+  that alone started a bounce, which the guard refused.
+
+  MEASURED ON MAIN 8b891a9a (QBX-274): after the arm generation 2 was
+  installed and the meter page read rms 0 (silence), liveOwnedRefusals 2;
+  after the velocity edit generation 3, rms 0, refusals 4. An offline render
+  on main heard the EDIT (0.279253 in sab_2), because startRender suspends
+  the live lane before its settle and the settle re-bounced; the author's rule
+  makes that render hear the previous generation (0.558505) instead - see
+  proposal 56 section 11, "QBX-274 as built", for that question. With the
+  fix: 0.558505 in sab_1 and sab_2, 0.279253 in sab_3, sab_4 and sab_5.
+
+  NOT asserted: liveOwnedRefusals. The asset body's own capture (SCut, what a
+  PLACEMENT of the asset plays) freezes the armed track too, and is refused
+  and counted whatever the sampler does (2 at the arm, measured with the fix).
+  That is not this case's claim and not this ticket's defect.
+
+  Levels are TWO-SIDED bands. RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1, with the
+  live-instrument cases (smaragd/CMakeLists.txt).
+-->
+<SActionScript version="1" name="sampler_armed_bounce_waits">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Hit"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="60" velocity="127" channel="0"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="Seq"/>
+    <add-note clip="1,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+    <create-asset container="1" startOffset="0" duration="24000" assetName="Inst asset"/>
+
+    <!-- ================================ 1. the link, nothing armed: gen 1 -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Inst asset"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          installs="1" renders="1" waiting="" waitingFor=""/>
+    <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+    <render filename="sab_1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sab_1.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ============ 2. ARM track 1: the bounce the arm asks for WAITS -->
+    <arm-track trackPath="1" armed="1"/>
+    <!-- The arm moves track 1's content epoch; the debounce (150 ms) asks for
+         the bounce inside this wait, and the bounce WAITS. -->
+    <wait-ms ms="600"/>
+    <assert-log contains="layer 2: bounce WAITS (before the job): track 1 is armed (live-owned); the layer keeps generation 1"
+                minCount="1" maxCount="1"/>
+    <assert-input-meter trackPath="1" contains="live=on"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" renders="1"
+                          waiting="track armed" waitingFor="1"/>
+    <!-- The previous generation is what the sampler plays, not silence. -->
+    <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== 3. edit the asset while armed: still waiting, still gen 1 -->
+    <set-notes clip="1,0"><n tick="0" dur="960" key="60" velocity="50" channel="0"/></set-notes>
+    <wait-ms ms="600"/>
+    <!-- Said once per wait, not once per edit. -->
+    <assert-log contains="bounce WAITS" minCount="0" maxCount="0"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" installs="1" renders="1"
+                          waiting="track armed" waitingFor="1"/>
+    <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+
+    <!-- An offline render does not wait for the deferred bounce: it hears
+         generation 1 and SAYS so (a line only a waiting layer produces). -->
+    <render filename="sab_2.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="its bounce waits for track 1 to be disarmed; the render hears the PREVIOUS generation 1"
+                minCount="1" maxCount="1"/>
+    <assert-log contains="sampler generation(s) on track" minCount="0" maxCount="0"/>
+    <!-- The settle re-asked the waiting layer (its asset moved) and said
+         nothing new: the wait is announced once. -->
+    <assert-log contains="bounce WAITS" minCount="0" maxCount="0"/>
+    <assert-audio-energy filename="sab_2.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.53" maxRms="0.58"/>
+    <wait-ms ms="600"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          installs="1" renders="1" waiting="track armed"/>
+
+    <!-- ===== 4. DISARM: the bounce runs at once (no debounce: renders is 2
+         before any time passes), and the edit is heard. -->
+    <arm-track trackPath="1" armed="0"/>
+    <assert-log contains="layer 2: track 1 is no longer live-owned; its deferred bounce runs now"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" renders="2"
+                          waiting="" waitingFor=""/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="2" renders="2" waiting=""/>
+    <assert-meter trackPath="0" position="53248" minRms="0.26" maxRms="0.30"/>
+    <render filename="sab_3.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sab_3.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.26" maxRms="0.30"/>
+
+    <!-- ===== 5. a FIRST bounce while armed: a new link on a layer that never
+         had a generation stays silent, is reported, and comes and goes with
+         its undo and redo. Zone 2 (key 72 only) is not what the clip plays. -->
+    <arm-track trackPath="1" armed="1"/>
+    <wait-ms ms="600"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="72" keyHi="72" rootKey="72" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <set-layer trackPath="0" slotIndex="0" layer="4" src="asset:Inst asset"/>
+    <assert-log contains="layer 4: bounce WAITS (before the job): track 1 is armed (live-owned); the layer has no generation and plays nothing"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          rendering="0" renders="0"
+                          waiting="track armed" waitingFor="1"/>
+    <undo/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          renders="0" waiting="" waitingFor=""/>
+    <redo/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          renders="0" waiting="track armed" waitingFor="1"/>
+    <!-- A layer that goes takes its wait with it, and its undo brings both
+         back. Zone 3 holds layer 4. -->
+    <remove-zone trackPath="0" slotIndex="0" zone="3"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          waiting="" waitingFor=""/>
+    <undo/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          renders="0" waiting="track armed" waitingFor="1"/>
+    <render filename="sab_4.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="layer 4: its first bounce waits for track 1 to be disarmed; the render hears NO generation of it"
+                minCount="1" maxCount="1"/>
+    <!-- Layer 2 (zone 1) is not touched by any of it. -->
+    <assert-audio-energy filename="sab_4.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.26" maxRms="0.30"/>
+    <wait-ms ms="600"/>
+    <arm-track trackPath="1" armed="0"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="1"
+                          installs="1" renders="1" waiting=""/>
+    <!-- Layer 2 waited too (the second arm moved the asset's epoch again) and
+         was bounced by the same disarm. -->
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          renders="3" waiting=""/>
+    <render filename="sab_5.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sab_5.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.26" maxRms="0.30"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

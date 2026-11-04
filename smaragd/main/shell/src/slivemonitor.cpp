@@ -1380,6 +1380,14 @@ bool SLiveMonitor::active() const
     return !current_.empty() && pump_ && pump_->running();
 }
 
+std::vector<STrack *> SLiveMonitor::liveOwnedTracks() const
+{
+    std::vector<STrack *> out = current_.ordered;
+    for( STrack *t : suspended_.ordered )
+        if( std::find( out.begin(), out.end(), t ) == out.end() ) out.push_back( t );
+    return out;
+}
+
 bool SLiveMonitor::isLive( const STrack *track ) const
 {
     return track && current_.contains( track ) && pump_ && pump_->running();

@@ -875,13 +875,24 @@ foreach(_liveinst live_instrument_play live_instrument_merge
                   live_instrument_disarm_playback live_instrument_ownership
                   live_instrument_thru live_instrument_keyboard
                   sampler_q5_live_play sampler_q5_live_playing
-                  sampler_q5_live_generation)
+                  sampler_q5_live_generation sampler_armed_bounce_waits)
     if(TEST qxa.${_liveinst})
         set_tests_properties(qxa.${_liveinst} PROPERTIES
             RUN_SERIAL TRUE
             ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
     endif()
 endforeach()
+
+# QBX-274: the race half arms a track under a HELD asset bounce. The arm makes
+# the layer due, and the default 150 ms debounce would supersede the held job
+# before it is released, so the worker's own refusal check would never be
+# reached; the debounce is put out of reach for this one case (the case says
+# why). It arms a live instrument, so it is RUN_SERIAL like the six above.
+if(TEST qxa.sampler_armed_bounce_race)
+    set_tests_properties(qxa.sampler_armed_bounce_race PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS=60000")
+endif()
 
 # --- MIDI recording (proposal 21 L4 = 37 P8b) --------------------------------
 #
