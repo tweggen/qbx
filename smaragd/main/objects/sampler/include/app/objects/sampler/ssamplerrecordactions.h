@@ -21,6 +21,10 @@
 //                             program verbs. The inverse is set-pad-key with
 //                             the previous key (`key` = -1 only for a pad
 //                             past the defaults, 92..95, that had no key).
+//                             On a LIBRARY instance (QBX-278) it records the
+//                             core's overlay verb set-pad instead and the
+//                             inverse is restore-sampler-state
+//                             (ssamplerlibraryactions.h).
 //   set-sampler-record-input  `input` = audio:<device>:<mask> | "" (none).
 //                             The instance's own record input (Q-1). Absolute;
 //                             the inverse is itself with the previous value.

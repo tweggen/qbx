@@ -255,10 +255,12 @@ set(APP_OBJECTS_FILES
     objects/sampler/include/app/objects/sampler/ssamplerslots.h
     objects/sampler/include/app/objects/sampler/ssampleractions.h
     objects/sampler/include/app/objects/sampler/ssamplerrecordactions.h
+    objects/sampler/include/app/objects/sampler/ssamplerlibraryactions.h
     objects/sampler/src/ssamplerprogram.cpp
     objects/sampler/src/ssamplerslots.cpp
     objects/sampler/src/ssampleractions.cpp
     objects/sampler/src/ssamplerrecordactions.cpp
+    objects/sampler/src/ssamplerlibraryactions.cpp
     # --- app/objects/track
     objects/track/include/app/objects/track/sinsertpluginaction.h
     objects/track/include/app/objects/track/sinstrumenttracks.h

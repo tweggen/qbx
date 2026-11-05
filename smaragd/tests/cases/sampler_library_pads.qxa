@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-278 (nassau-digital DESIGN 8, the author's decision of 2026-11-04):
+  A PAD REASSIGNMENT ON A LIBRARY PROGRAM IS AN OVERLAY EDIT. The instance
+  plays a read-only library program (the base) with the user's overlay on
+  top; set-pad-key there records the core's set-pad (n, key, key.was) instead
+  of editing the base, with set-program's semantics: a base whose key for
+  the pad is no longer key.was still plays the overlay's key and reports the
+  edit drifted; rebase refreshes key.was and the report clears; undo removes
+  the edit and writes the previous value back.
+
+  The library (../sampler_library_kit_v3.xml, libraryVersion 3) has pad 5 on
+  key 36 (a row) and pad 1 on its default 37; version 4 moved pad 5 to 42.
+
+  Gated here: set-sampler-library makes the instance a library; set-pad-key
+  writes the overlay (key.was the row's key, or the default 36 + n) and the
+  base keeps its row; undo and redo of each, exact (the program equals its
+  capture, the overlay loses or regains its verb, baseVersion comes and goes
+  with the first edit); every other program verb refused on a library
+  instance, announced; save and reload carry base and overlay; a newer base
+  (version 4) under the overlay: drifted, version reported, the overlay's
+  key still plays; undo and redo of that; rebase-sampler-library clears the
+  report, refreshes key.was to 42 and changes nothing that plays; its undo
+  and redo; the rebased state survives a second save and reload; rebase on
+  an instance that is not a library is refused.
+-->
+<SActionScript version="1" name="sampler_library_pads">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <set-sampler-library trackPath="0" slotIndex="0" path="../no_such_library.xml" expectReject="true"/>
+    <assert-log contains="set-sampler-library: track 0 slot 0: REFUSED: the library &quot;../no_such_library.xml&quot; cannot be read" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+
+    <!-- ......................................... the instance plays a library -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_kit_v3.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;3" pads="5:36"
+                            overlayEdits="0" libraryReport="" baseVersion="" capture="lib3"/>
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <undo/>
+
+    <!-- .................................... set-pad-key writes the overlay -->
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="40"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: pad 5 (bank 0, pad 5) plays key 40 (was 36), an overlay edit on the library" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" pads="5:40" overlayEdits="1"
+                            overlayContains="&lt;set-pad n=&quot;5&quot; key=&quot;40&quot; key.was=&quot;36&quot;/&gt;"
+                            baseVersion="3" libraryReport="" differsFromCaptured="lib3" capture="p5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains="base=&quot;../sampler_library_kit_v3.xml&quot;"/>
+    <!-- A second edit of the same pad: its key.was is the overlay's 40, not the base's 36. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="44"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:44" overlayEdits="2"
+                            overlayContains="&lt;set-pad n=&quot;5&quot; key=&quot;44&quot; key.was=&quot;40&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" overlayEdits="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="1" key="50"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="1:50;5:40" overlayEdits="2"
+                            overlayContains="&lt;set-pad n=&quot;1&quot; key=&quot;50&quot; key.was=&quot;37&quot;/&gt;"
+                            capture="p51"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" overlayEdits="1"
+                            overlayAbsent="set-pad n=&quot;1&quot;"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p51" overlayEdits="2"/>
+    <undo/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib3" overlayEdits="0" baseVersion=""/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" overlayEdits="1" baseVersion="3"/>
+
+    <!-- A refused reassignment changes nothing. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="96" key="40" expectReject="true"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: pad 96 is not a pad (0..95)" minCount="1"/>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="128" expectReject="true"/>
+    <assert-log contains="set-pad-key: track 0 slot 0: REFUSED: key 128 is not a MIDI key (0..127)" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" overlayEdits="1"/>
+
+    <!-- Every other program verb is refused on a library instance: the base is read-only. -->
+    <set-zone trackPath="0" slotIndex="0" zone="3" tune="+2" expectReject="true"/>
+    <assert-log contains="only a pad reassignment (set-pad-key) or hide-pad is an overlay edit so far" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" overlayEdits="1"/>
+
+    <!-- ............................................... save, reload -->
+    <save-project path="../../build/sampler_library_pads.qxp"/>
+    <assert-file-contains path="../../build/sampler_library_pads.qxp"
+                          text="&lt;library&gt;&lt;base&gt;&lt;![CDATA[&lt;NassauDigitalProgram "/>
+    <!-- The base keeps its row; the reassignment lives in the overlay. -->
+    <assert-file-contains path="../../build/sampler_library_pads.qxp"
+                          text="&lt;Pad n=&quot;5&quot; key=&quot;36&quot;/&gt;"/>
+    <assert-file-contains path="../../build/sampler_library_pads.qxp"
+                          text="&lt;set-pad n=&quot;5&quot; key=&quot;40&quot; key.was=&quot;36&quot;/&gt;"/>
+    <load-project path="../../build/sampler_library_pads.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="p5" installed="1"
+                            overlayEdits="1" baseVersion="3" libraryReport="" pads="5:40"/>
+
+    <!-- ..................... a newer library moved the pad: drift, the overlay plays -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_kit_v4.xml"/>
+    <assert-log contains="with 1 overlay edit(s): libraryVersion 3-&gt;4; #0 set-pad drifted key 36-&gt;42" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" pads="5:40" overlayEdits="1"
+                            libraryReport="libraryVersion 3-&gt;4; #0 set-pad drifted key 36-&gt;42"
+                            capture="drift"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="p5" libraryReport=""/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="drift"
+                            libraryReport="libraryVersion 3-&gt;4; #0 set-pad drifted key 36-&gt;42"/>
+
+    <!-- ......................................................... rebase -->
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="drift" libraryReport="" baseVersion="4"
+                            overlayContains="&lt;set-pad n=&quot;5&quot; key=&quot;40&quot; key.was=&quot;42&quot;/&gt;"
+                            pads="5:40"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" baseVersion="3"
+                            libraryReport="libraryVersion 3-&gt;4; #0 set-pad drifted key 36-&gt;42"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryReport="" baseVersion="4" capture="rebased"/>
+
+    <save-project path="../../build/sampler_library_pads_2.qxp"/>
+    <load-project path="../../build/sampler_library_pads_2.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="rebased" libraryReport=""
+                            baseVersion="4" pads="5:40" installed="1"/>
+
+    <!-- ........................... rebase on an instance that is not a library -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="1" slotIndex="0" keyLo="40" keyHi="64" rootKey="52" mode="oneshot">
+      <layer src="test:wide"/>
+    </add-zone>
+    <rebase-sampler-library trackPath="1" slotIndex="0" expectReject="true"/>
+    <assert-log contains="rebase-sampler-library: track 1 slot 0: REFUSED: this instance does not play a library program" minCount="1"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" library="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
