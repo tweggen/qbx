@@ -4,6 +4,7 @@
 #include "app/actions/scompositeaction.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/objects/sampler/ssamplerlibraryactions.h"
 #include "app/objects/sampler/ssamplerprogram.h"
 
 #include "tw/sampler/twsamplerprogrammodel.h"
@@ -137,6 +138,28 @@ SApplyResult SSetPadKeyAction::apply( SProject *project )
 {
     QString why;
     if( !hasN_ || !hasKey_ ) return refuse( QStringLiteral( "set-pad-key needs n= and key=" ) );
+    // A LIBRARY program (DESIGN §8; the author's decision of 2026-11-04,
+    // QBX-278): the reassignment is an OVERLAY edit, the core's set-pad with
+    // key.was, never a change to the read-only base. The inverse puts the
+    // instance's program state back as it was, which removes the edit and
+    // writes the previous value back.
+    if( SSamplerProgram *lib = program( project, false, nullptr ); lib && lib->isLibrary() ) {
+        const SSamplerProgram::ProgramState before = lib->programState();
+        int prior = -1;
+        std::string err;
+        if( !lib->editLibrary( [&]( audio::twSamplerLibrary &l ) { return l.recordPad( n_, key_, &prior, &err ); },
+                               &why ) )
+            return refuse( err.empty() ? why : QString::fromStdString( err ) );
+        qInfo().noquote() << QStringLiteral( "set-pad-key: track %1 slot %2: pad %3 (bank %4, pad %5) "
+                                             "plays key %6 (was %7), an overlay edit on the library "
+                                             "\"%8\"" )
+                                 .arg( trackPath_ ).arg( slotIndex_ ).arg( n_ )
+                                 .arg( n_ / SSamplerProgram::kPadsPerBank )
+                                 .arg( n_ % SSamplerProgram::kPadsPerBank ).arg( key_ ).arg( prior )
+                                 .arg( QString::fromStdString( lib->library()->basePath() ) );
+        return { true, new SRestoreSamplerStateAction( trackPath_, slotIndex_, before.library, before.program,
+                                                       before.base, before.overlay ) };
+    }
     // The core validates n (0..95) and key (0..127; -1 only for a pad past the
     // defaults): refused on a scratch copy first, so a refused edit never
     // creates the program object (invariant 4).

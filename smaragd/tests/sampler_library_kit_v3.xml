@@ -1,0 +1,11 @@
+<NassauDigitalProgram version="1" name="Library Kit" polyphony="32" nextId="5" libraryVersion="3">
+  <zone id="1" keyLo="36" keyHi="36" rootKey="36" mode="oneshot">
+    <layer id="2" src="test:kick"/>
+  </zone>
+  <zone id="3" keyLo="38" keyHi="52" rootKey="45" mode="oneshot">
+    <layer id="4" src="test:tom"/>
+  </zone>
+  <Pads>
+    <Pad n="5" key="36"/>
+  </Pads>
+</NassauDigitalProgram>
