@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_routing_cycle_send">
+
+  <!-- QBX-269: add-send REFUSES A TAP THAT WOULD CLOSE A CYCLE THROUGH A
+       SAMPLER LINK OR A PLACEMENT.
+
+       A send lane sums every lane that sends to it, and a slot keyed from the
+       send lane reads that sum. "Gate" is keyed from the send lane "Bus"; an
+       asset covers Gate and Drums' sampler links it. A tap from Drums into
+       Bus would make the sampler bounce its own output. The tap graph the
+       verb already asks sees no sampler link and no placement, so before
+       QBX-269 both shapes below were accepted.
+
+         1  the sampler cycle: refused, its line names the hops, Drums has no
+            tap, and Drums' layer is not re-bounced;
+         2  the plain cycle: "Holder" holds a placement of the asset over
+            Gate, and asks to send to Bus: refused as a reference cycle;
+         3  the positive control: a tap from "Other", which no asset holds
+            and which holds nothing, is accepted, with undo and redo;
+         4  the release: once Drums lets go of the asset, Drums may send.
+
+       Ids: zone 1 / layer 2.
+       Tracks: 0 Drums, 1 Gate, 2 Holder, 3 Other. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Drums"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="60" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <add-send-lane sendName="Bus"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Gate"/>
+    <add-sample trackPath="1" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="1" slot="0" source="$send:Bus"/>
+    <create-asset container="1" startOffset="0" duration="48000" assetName="GateA"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:GateA"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          renders="1" asset="GateA"/>
+
+    <!-- ===================================== 1: the sampler cycle, refused -->
+    <add-send track="0" dest="Bus" level="0" expectReject="true"/>
+    <assert-log contains="add-send : refused, sending Drums to Bus would close a sampler asset-link cycle (the sampler on &quot;Drums&quot; links &quot;GateA&quot;, &quot;Gate&quot; is keyed from &quot;Bus&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-sends track="0" count="0"/>
+    <wait-ms ms="1000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" renders="1"/>
+    <!-- A DISABLED tap is an edge too: the pass may enable it later. -->
+    <add-send track="0" dest="Bus" level="0" enabled="false" expectReject="true"/>
+    <assert-log contains="add-send : refused, sending Drums to Bus would close a sampler asset-link cycle"
+                minCount="1" maxCount="1"/>
+    <assert-sends track="0" count="0"/>
+
+    <!-- ======================================= 2: the plain cycle, refused -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Holder"/>
+    <place-asset assetName="GateA" trackPath="2" timePos="0"/>
+    <add-send track="2" dest="Bus" level="0" expectReject="true"/>
+    <assert-log contains="add-send : refused, sending Holder to Bus would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-sends track="2" count="0"/>
+
+    <!-- ================================ 3: the positive control, undoable -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Other"/>
+    <add-sample trackPath="3" filePath="../test_stereo.wav" timePos="0"/>
+    <add-send track="3" dest="Bus" level="0"/>
+    <assert-sends track="3" count="1" dest="Bus"/>
+    <undo/>
+    <assert-sends track="3" count="0"/>
+    <redo/>
+    <assert-sends track="3" count="1" dest="Bus"/>
+
+    <!-- ===================== 4: the release: Drums lets go, Drums may send -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
+    <add-send track="0" dest="Bus" level="0"/>
+    <assert-sends track="0" count="1" dest="Bus"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+  </actions>
+
+</SActionScript>

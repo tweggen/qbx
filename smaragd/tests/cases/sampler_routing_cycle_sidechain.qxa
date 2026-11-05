@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_routing_cycle_sidechain">
+
+  <!-- QBX-269: set-plugin-sidechain REFUSES A KEY EDGE THAT WOULD CLOSE A
+       CYCLE THROUGH A SAMPLER LINK OR A PLACEMENT.
+
+       A keyed slot reads its key lane, so the key lane's output is part of
+       what the keyed track renders. Keying "Bass", which an asset covers and
+       Drums' sampler links, from Drums would make the sampler bounce its own
+       output. The routing graph the verb already asks sees no sampler link and
+       no placement, so before QBX-269 both shapes below were accepted.
+
+         1  the sampler cycle: refused, its line names the sampler hop, the
+            slot stays unkeyed, and Drums' layer is not re-bounced;
+         2  the plain cycle: "Holder" holds a placement of an asset over
+            "Bass2", and Bass2 asks to be keyed from Holder: refused as a
+            reference cycle;
+         3  the positive control: keying "Bass3", which no asset holds, from
+            Drums is accepted, with undo and redo;
+         4  the release: once Drums lets go of the asset, Bass may be keyed
+            from Drums.
+
+       Ids: zone 1 / layer 2.
+       Tracks: 0 Drums, 1 Bass, 2 Holder, 3 Bass2, 4 Bass3. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Drums"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="60" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Bass"/>
+    <add-sample trackPath="1" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <create-asset container="1" startOffset="0" duration="48000" assetName="BassA"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:BassA"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          renders="1" asset="BassA"/>
+
+    <!-- ===================================== 1: the sampler cycle, refused -->
+    <set-plugin-sidechain trackPath="1" slot="0" source="0" expectReject="true"/>
+    <assert-log contains="set-plugin-sidechain : refused, keying Bass from Drums would close a sampler asset-link cycle (the sampler on &quot;Drums&quot; links &quot;BassA&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-plugin-sidechain trackPath="1" slot="0" keyed="0"/>
+    <wait-ms ms="1000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" renders="1"/>
+
+    <!-- ======================================= 2: the plain cycle, refused -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Holder"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Bass2"/>
+    <add-sample trackPath="3" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="3" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <create-asset container="3" startOffset="0" duration="48000" assetName="Bass2A"/>
+    <place-asset assetName="Bass2A" trackPath="2" timePos="0"/>
+    <set-plugin-sidechain trackPath="3" slot="0" source="2" expectReject="true"/>
+    <assert-log contains="set-plugin-sidechain : refused, keying Bass2 from Holder would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-plugin-sidechain trackPath="3" slot="0" keyed="0"/>
+
+    <!-- ================================ 3: the positive control, undoable -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Bass3"/>
+    <add-sample trackPath="4" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="4" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="4" slot="0" source="0"/>
+    <assert-plugin-sidechain trackPath="4" slot="0" keyed="1" source="0" wired="1"/>
+    <undo/>
+    <assert-plugin-sidechain trackPath="4" slot="0" keyed="0"/>
+    <redo/>
+    <assert-plugin-sidechain trackPath="4" slot="0" keyed="1" source="0" wired="1"/>
+
+    <!-- ============== 4: the release: Drums lets go, Bass may be keyed -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
+    <set-plugin-sidechain trackPath="1" slot="0" source="0"/>
+    <assert-plugin-sidechain trackPath="1" slot="0" keyed="1" source="0" wired="1"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+  </actions>
+
+</SActionScript>
