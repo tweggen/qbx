@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-284 gap 5: the undo of dissolve-arrangement puts the project property
+  arrangement/restorePlan/<name> back to exactly what it was.
+
+  The dissolve clears the property (the plan dies with the root). The rebuild
+  inverse QBX-270 shipped re-extracted, and an extraction always records a
+  plan, so after the undo a CREATED arrangement, which never had one, had
+  one. The undo now restores the value the dissolve found: unset for Drums
+  (made by create-arrangement), the extraction's own plan for Bass (made by
+  extract-arrangement), which is the positive control that the undo restores
+  rather than merely clears.
+
+  drain-pending-deletes runs between each dissolve and its undo, for the
+  reason given in dissolve_undo_keeps_other_assets.qxa.
+-->
+<SActionScript version="1" name="dissolve_undo_restore_plan_property">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Keep"/>
+    <set-track-name trackPath="1" name="Low"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <!-- Section A: a created arrangement never had a plan. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <assert-property key="arrangement/restorePlan/Drums" equals=""/>
+    <dissolve-arrangement name="Drums"/>
+    <assert-property key="arrangement/restorePlan/Drums" equals=""/>
+    <drain-pending-deletes/>
+    <undo/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-property key="arrangement/restorePlan/Drums" equals=""/>
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-property key="arrangement/restorePlan/Drums" equals=""/>
+    <assert-track-count arrangement="" count="3"/>
+
+    <!-- Section B: an extracted arrangement had one, and gets it back. -->
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="96000"
+                         name="Bass" window="range" placeAt="0"/>
+    <assert-property key="arrangement/restorePlan/Bass" equals="@1"/>
+    <dissolve-arrangement name="Bass"/>
+    <assert-property key="arrangement/restorePlan/Bass" equals=""/>
+    <drain-pending-deletes/>
+    <undo/>
+    <assert-arrangements names="Bass" trackCounts="1"/>
+    <assert-property key="arrangement/restorePlan/Bass" equals="@1"/>
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-property key="arrangement/restorePlan/Bass" equals=""/>
+  </actions>
+
+</SActionScript>

@@ -56,4 +56,28 @@ private:
     int     count_ = -1;
 };
 
+// <assert-ref-count arrangement="Drums" refs="2"/>  or  asset="Loop" refs="1"
+// The REFERENCE COUNT of a registered arrangement root or asset body
+// (SObject::refCount()), exactly. Exists for QBX-284: an undo that pins an
+// object must drop the pin once the registry holds it again, and a pin left
+// behind changes nothing else a case can see -- the object is simply never
+// destroyed. A case reads the count before the edit and asserts the same
+// number after its undo. Exactly one of `arrangement` / `asset` is given; a
+// name that resolves to nothing is a failure.
+class SAssertRefCountAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-ref-count" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override
+    { return { QStringLiteral("arrangement"), QStringLiteral("asset"),
+               QStringLiteral("refs") }; }
+
+private:
+    QString arrangement_;
+    QString asset_;
+    int     refs_ = -1;
+};
+
 #endif  // SARRANGEMENTTESTACTIONS_H

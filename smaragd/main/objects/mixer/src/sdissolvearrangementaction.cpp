@@ -1,6 +1,4 @@
 #include "app/objects/mixer/sdissolvearrangementaction.h"
-#include "app/objects/mixer/sextractarrangementaction.h"
-#include "app/objects/mixer/screatearrangementaction.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackpath.h"
@@ -185,23 +183,24 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
         }
     }
 
-    // Capture what the inverse needs BEFORE anything is torn down.
-    //
-    // THE WINDOW, and whether there is one at all (QBX-270). The inverse
-    // re-extracts, and an extraction decides from its window whether it makes
-    // an asset, a master lane and a placement -- so the window is a field the
-    // inverse must CARRY, not one it may default. An arrangement made by
-    // create-arrangement has no asset named after it: the window it needs is
-    // "none", and an inverse that defaulted to "range" over [0,0) was refused
-    // as an empty range, so the undo failed and the arrangement was lost.
-    offset_t winBegin = 0, winEnd = 0, placedAt = 0;
-    SCut *primary = dynamic_cast<SCut *>( project->asset( arrName_ ) );
-    if( primary ) {
-        winBegin = (offset_t) primary->getStartOffset().frames();
-        winEnd   = winBegin + (offset_t) primary->getDurationBlocking();
+    // --- PIN what the inverse restores, BEFORE anything is torn down --------
+    // QBX-284: the undo re-registers THESE objects (see the header). Each pin
+    // is taken before the reference it protects is dropped, so no refcount
+    // passes through zero (a 1->0 transition is a deleteLater that cannot be
+    // rescinded).
+    dropPins();
+    if( pinsForUndo_ ) {
+        held_.root = arrRoot;
+        arrRoot->addRef();
+        for( const QString &an : ownedAssets ) {
+            SObject *body = project->asset( an );
+            body->addRef();
+            held_.assets.append( qMakePair( an, body ) );
+        }
+        for( STrack *tk : moving ) held_.tracks.append( QPointer<STrack>( tk ) );
+        held_.plan = project->prop( planKey );   // restored as it was, unset included
+        holds_ = true;
     }
-    if( !placements.isEmpty() && placements.first()->hasStartTime() )
-        placedAt = placements.first()->getStartTime();
 
     // --- drop the placements, then the assets ------------------------------
     for( SLink *lk : placements ) {
@@ -209,12 +208,33 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
         // nothing else; it goes with the placement. A lane the user has since
         // put other clips on is kept.
         SObject *lane = dynamic_cast<SObject *>( lk->parent() );
+        // The placement is rebuilt by the undo from EVERY field an SLink
+        // carries (remove-asset-placement's recipe, widened to the ticks, the
+        // timebase and the channel override), at its own index on its lane.
+        if( holds_ ) {
+            held_.placed = true;
+            held_.placedBody = &lk->getSObject();
+            held_.placementLane = lane;
+            held_.placementIndex = lane ? lane->indexOfChild( lk ) : -1;
+            held_.startTime = lk->getStartTime();
+            held_.startTicks = lk->getStartTicks();
+            held_.timebase = lk->getTimebase();
+            held_.eventChannelOverride = lk->getEventChannelOverride();
+        }
         delete lk;
         if( STrack *laneTrack = dynamic_cast<STrack *>( lane ) ) {
             if( laneTrack->childCount() == 0 ) {
                 for( int i = 0; i < masterMixer->getNTracks(); ++i ) {
                     if( &masterMixer->getTrackAt( i )->getSObject()
                         == static_cast<SObject *>( laneTrack ) ) {
+                        // Pinned, so the undo puts back THIS lane, with
+                        // whatever is on it (inserts, fader, automation).
+                        if( holds_ ) {
+                            laneTrack->addRef();
+                            held_.lane = laneTrack;
+                            held_.laneRemoved = true;
+                            held_.laneIndex = i;
+                        }
                         masterMixer->removeTrack( i );
                         break;
                     }
@@ -264,18 +284,11 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
     project->setProp( planKey, QVariant() );   // the plan died with the root
 
     // The ASSET LANE was removed from the master above once it had emptied,
-    // and it may have been the selected one. Its QPointer would clear itself
-    // eventually (nothing re-refs it, so it is deleteLater'd) but not before
-    // the next read, so prune over the settled tree for the same reason the
-    // extraction does. The arrangement root's own selection entry needs no
-    // prune: it dies with the root. QBX-232.
-
-    // The ASSET LANE was removed from the master above once it had emptied,
-    // and it may have been the selected one. Its QPointer would clear itself
-    // eventually (nothing re-refs it, so it is deleteLater'd) but not before
-    // the next read, so prune over the settled tree for the same reason the
-    // extraction does. The arrangement root's own selection entry needs no
-    // prune: it dies with the root. QBX-232.
+    // and it may have been the selected one. Its QPointer would not clear
+    // (the lane is pinned for the undo now, and even unpinned it would only
+    // be deleteLater'd), so prune over the settled tree for the same reason
+    // the extraction does. The arrangement root's own selection entry needs
+    // no prune: the root is in no tree any more. QBX-232.
     masterMixer->pruneSelectionToTree();
 
     // Same reason as the extraction's: the master's summed pages predate the
@@ -289,24 +302,33 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
                     "removed", arrName_.toUtf8().constData(),
              (int) moving.size(), (int) ownedAssets.size() );
 
-    // The inverse re-extracts from where the tracks now are. Built from the
-    // POST-move tree so it is immune to the index shifts this move caused.
-    QStringList backPaths;
-    for( STrack *tk : moving )
-        backPaths << pathToString( pathOf( master, tk ) );
+    // As extract-arrangement's own inverse this dissolve keeps nothing: that
+    // command's redo re-extracts, so a pin here would only keep the dead
+    // root alive until the command is discarded. See setPinsForUndo().
+    if( !holds_ ) return { true, nullptr };
+    return { true, new SRestoreDissolvedArrangementAction( this, arrName_, restorePlan_ ) };
+}
 
-    // With no window AND no tracks there is nothing to extract (an extraction
-    // naming no tracks is refused): the arrangement was an empty created root,
-    // and re-creating it by name is the whole of the inverse.
-    SAction *inverse = nullptr;
-    if( !primary && backPaths.isEmpty() )
-        inverse = new SCreateArrangementAction( arrName_ );
-    else
-        inverse = new SExtractArrangementAction(
-            backPaths.join( ';' ), winBegin, winEnd, arrName_,
-            primary ? QStringLiteral( "range" ) : QStringLiteral( "none" ),
-            placedAt );
-    return { true, inverse };
+SDissolveArrangementAction::~SDissolveArrangementAction()
+{
+    dropPins();
+}
+
+void SDissolveArrangementAction::dropPins()
+{
+    if( holds_ ) {
+        // Assets first: each windows the root, so the root outlives them.
+        for( const auto &a : held_.assets ) if( a.second ) a.second->removeRef();
+        if( held_.root ) held_.root->removeRef();
+        if( held_.laneRemoved && held_.lane ) held_.lane->removeRef();
+    }
+    held_ = Held();
+    holds_ = false;
+}
+
+void SDissolveArrangementAction::releaseHeld()
+{
+    dropPins();
 }
 
 void SDissolveArrangementAction::writeXml( QDomElement &elem ) const
@@ -319,6 +341,147 @@ bool SDissolveArrangementAction::readXml( const QDomElement &elem, int /*version
 {
     arrName_     = elem.attribute( "name" );
     restorePlan_ = elem.attribute( "restorePlan" );
+    return true;
+}
+
+// --- restore-dissolved-arrangement ------------------------------------------
+
+SRestoreDissolvedArrangementAction::SRestoreDissolvedArrangementAction(
+        SDissolveArrangementAction *owner, const QString &name,
+        const QString &restorePlan )
+    : owner_( owner ), name_( name ), restorePlan_( restorePlan )
+{
+}
+
+SApplyResult SRestoreDissolvedArrangementAction::apply( SProject *project )
+{
+    if( !project || !owner_ || !owner_->holdsPins() ) return { false, nullptr };
+    const SDissolveArrangementAction::Held &h = owner_->held();
+    // check_root_resolution: master -- the dissolve moved the tracks into the master; the undo takes them back out of it
+    SStdMixer *masterMixer = dynamic_cast<SStdMixer *>( project->masterRoot() );
+    SStdMixer *arrRoot = dynamic_cast<SStdMixer *>( h.root );
+    if( !masterMixer || !arrRoot ) return { false, nullptr };
+
+    // REFUSE BEFORE ANYTHING MOVES. A name that came back while we were
+    // undone is not ours to overwrite, and a track that has gone cannot be
+    // put back.
+    if( project->hasArrangement( name_ ) ) {
+        TW_LOGW( "cut", "restore-dissolved-arrangement: refused, name '%s' is in use",
+                 name_.toUtf8().constData() );
+        return { false, nullptr };
+    }
+    for( const auto &a : h.assets ) {
+        if( project->hasAsset( a.first ) ) {
+            TW_LOGW( "cut", "restore-dissolved-arrangement: refused, asset name "
+                            "'%s' is in use", a.first.toUtf8().constData() );
+            return { false, nullptr };
+        }
+    }
+    QList<QPair<STrack *, QPair<SObject *, SLink *> > > found;
+    for( const QPointer<STrack> &tp : h.tracks ) {
+        STrack *tk = tp.data();
+        SObject *parent = nullptr;
+        SLink *ownLink = nullptr;
+        std::function<bool(SObject *)> findLink = [&]( SObject *container ) -> bool {
+            for( SLink *lk : container->childLinks() ) {
+                if( !lk ) continue;
+                if( &lk->getSObject() == static_cast<SObject *>( tk ) ) {
+                    parent = container; ownLink = lk; return true;
+                }
+                SObject &child = lk->getSObject();
+                if( child.isLane() && findLink( &child ) ) return true;
+            }
+            return false;
+        };
+        if( !tk || !findLink( masterMixer ) ) {
+            TW_LOGW( "cut", "restore-dissolved-arrangement: refused, a track of '%s' "
+                            "is no longer in the master", name_.toUtf8().constData() );
+            return { false, nullptr };
+        }
+        found.append( qMakePair( tk, qMakePair( parent, ownLink ) ) );
+    }
+    SObject *placementLane = h.laneRemoved ? h.lane : h.placementLane.data();
+    if( h.placed && !placementLane ) {
+        TW_LOGW( "cut", "restore-dissolved-arrangement: refused, the lane that held "
+                        "'%s''s placement is gone", name_.toUtf8().constData() );
+        return { false, nullptr };
+    }
+
+    // --- the root and its assets, the ORIGINAL objects ----------------------
+    project->registerArrangement( name_, arrRoot );
+    for( const auto &a : h.assets ) project->registerAsset( a.first, a.second );
+
+    // --- the tracks, out of the master and back into the root, in order -----
+    for( const auto &f : found ) {
+        STrack *tk = f.first;
+        SObject *parent = f.second.first;
+        SLink *ownLink = f.second.second;
+        tk->addRef();                          // pin across the move
+        if( SStdMixer *srcMixer = dynamic_cast<SStdMixer *>( parent ) ) {
+            srcMixer->removeTrack( *ownLink );
+            QObject::disconnect( tk, nullptr, srcMixer, nullptr );
+        } else {
+            delete ownLink;
+            QObject::disconnect( tk, nullptr, parent, nullptr );
+        }
+        arrRoot->insertTrack( *tk );
+        tk->removeRef();
+    }
+
+    // --- the asset lane, at its index, and the placement on it -------------
+    // After the tracks left, the master is the pre-dissolve master less this
+    // lane, so its recorded index means what it meant then.
+    if( h.laneRemoved ) {
+        masterMixer->insertTrack( *h.lane );
+        const int landing = masterMixer->getNTracks() - 1;
+        if( h.laneIndex >= 0 && h.laneIndex < landing )
+            masterMixer->reorderTrack( landing, h.laneIndex );
+    }
+    if( h.placed ) {
+        SLink *nl = new SLink( *h.placedBody, nullptr );
+        nl->setTimebase( h.timebase );
+        nl->setStartTime( h.startTime );
+        if( h.timebase == SLink::Timebase::Beats ) nl->setStartTicks( h.startTicks );
+        nl->setEventChannelOverride( h.eventChannelOverride );
+        nl->setParent( placementLane );
+        const int landing = placementLane->childCount() - 1;
+        if( h.placementIndex >= 0 && h.placementIndex < landing )
+            placementLane->moveChildToIndex( landing, h.placementIndex );
+    }
+
+    const QString planKey = QStringLiteral( "arrangement/restorePlan/" ) + name_;
+    project->setProp( planKey, h.plan );
+
+    // The registries and the master hold their own references now, so ours
+    // go: holding both would make the arrangement undestroyable for the rest
+    // of the session. A redo re-pins through the dissolve's apply().
+    owner_->releaseHeld();
+
+    masterMixer->pruneSelectionToTree();
+    arrRoot->applyAudibility();
+    arrRoot->notifyTreeChanged();
+    arrRoot->bumpRenderChainEpoch();
+    masterMixer->applyAudibility();
+    masterMixer->notifyTreeChanged();
+    masterMixer->bumpRenderChainEpoch();
+    SAppContext::get().rewireSpeaker();
+
+    TW_LOGI( "cut", "restore-dissolved-arrangement '%s': %d track(s) moved back",
+             name_.toUtf8().constData(), (int) found.size() );
+
+    return { true, new SDissolveArrangementAction( name_, restorePlan_ ) };
+}
+
+void SRestoreDissolvedArrangementAction::writeXml( QDomElement &elem ) const
+{
+    // Undo-stack only: it restores by pointer, so there is nothing portable
+    // to write and nothing a script could re-create from a file.
+    elem.setAttribute( "name", name_ );
+}
+
+bool SRestoreDissolvedArrangementAction::readXml( const QDomElement &elem, int )
+{
+    name_ = elem.attribute( "name" );
     return true;
 }
 

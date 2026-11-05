@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-284 gap 3: the undo of dissolve-arrangement brings back the ORIGINAL
+  arrangement object, so its own master lane keeps its inserts, its fader
+  and its automation (mixer CONTRACT inv. 15, which remove-arrangement
+  already honours).
+
+  The rebuild inverse QBX-270 shipped re-extracted into a FRESH root, whose
+  master lane is blank: plugins=0, volume=0. The arrangement here is made by
+  extract-arrangement, so the case also gates the placed path: the asset
+  lane the dissolve removed comes back at its index, named, with the
+  placement at its own start time (placeAt=48000, not the window start).
+
+  assert-ref-count, before the dissolve and after every undo, gates that the
+  undo drops the pins the dissolve took; drain-pending-deletes runs between
+  the dissolve and its undo, both for the reasons given in
+  dissolve_undo_keeps_other_assets.qxa: the dissolve drops
+  the registry's reference to the root, and without the drain a build that
+  kept nothing alive would still find the old root.
+-->
+<SActionScript version="1" name="dissolve_undo_keeps_master_lane">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Kick"/>
+    <set-track-name trackPath="1" name="Snare"/>
+    <set-track-name trackPath="2" name="Bass"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <extract-arrangement trackPaths="0;1" rangeStart="0" rangeEnd="96000"
+                         name="Drums" window="range" placeAt="48000"/>
+    <assert-track-count arrangement="" count="2"/>
+    <assert-track-name trackPath="0" name="Drums"/>
+    <assert-track-name trackPath="1" name="Bass"/>
+
+    <insert-plugin trackPath="Drums:$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"/>
+    <set-track-volume trackPath="Drums:$master" volume="-6.0"/>
+    <add-automation-point owner="Drums:$master" target="self:Volume"
+                          time="96000" value="-3.0"/>
+    <assert-system-lane trackPath="Drums:$master" plugins="1" volume="-6.0"/>
+
+    <assert-ref-count arrangement="Drums" refs="3"/>
+    <assert-ref-count asset="Drums" refs="2"/>
+
+    <dissolve-arrangement name="Drums"/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="3"/>
+
+    <drain-pending-deletes/>
+
+    <undo/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-ref-count arrangement="Drums" refs="3"/>
+    <assert-ref-count asset="Drums" refs="2"/>
+    <assert-track-name trackPath="Drums:0" name="Kick"/>
+    <assert-track-name trackPath="Drums:1" name="Snare"/>
+    <assert-system-lane trackPath="Drums:$master" plugins="1" volume="-6.0"/>
+    <assert-automation-value owner="Drums:$master" target="self:Volume"
+                             time="96000" value="-3.0" tolerance="1e-9"/>
+    <!-- The asset lane is back where it was, with the placement on it. -->
+    <assert-track-count arrangement="" count="2"/>
+    <assert-track-name trackPath="0" name="Drums"/>
+    <assert-track-name trackPath="1" name="Bass"/>
+    <assert-clip-window clip="0,0" startTime="48000" duration="96000"/>
+
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="3"/>
+    <assert-track-name trackPath="0" name="Kick"/>
+    <assert-track-name trackPath="1" name="Snare"/>
+    <assert-track-name trackPath="2" name="Bass"/>
+  </actions>
+
+</SActionScript>

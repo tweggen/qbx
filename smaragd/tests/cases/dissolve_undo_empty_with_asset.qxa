@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-284 gap 4: dissolving an EMPTY arrangement that has an asset named
+  after it is undoable.
+
+  The rebuild inverse QBX-270 shipped was an extract-arrangement, and an
+  extraction naming no tracks is refused, so this undo failed and the
+  arrangement and its asset were gone. The undo now re-registers the
+  original root and asset; there are no tracks to move.
+
+  assert-ref-count, before the dissolve and after every undo, gates that the
+  undo drops the pins the dissolve took; drain-pending-deletes runs between
+  the dissolve and its undo, both for the reasons given in
+  dissolve_undo_keeps_other_assets.qxa.
+-->
+<SActionScript version="1" name="dissolve_undo_empty_with_asset">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Keep"/>
+    <create-arrangement name="Drums"/>
+    <create-asset container="Drums:" startOffset="0" duration="48000" assetName="Drums"/>
+    <assert-arrangements names="Drums" trackCounts="0"/>
+
+    <assert-ref-count arrangement="Drums" refs="2"/>
+    <assert-ref-count asset="Drums" refs="1"/>
+
+    <dissolve-arrangement name="Drums"/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <drain-pending-deletes/>
+
+    <undo/>
+    <assert-arrangements names="Drums" trackCounts="0"/>
+    <assert-ref-count arrangement="Drums" refs="2"/>
+    <assert-ref-count asset="Drums" refs="1"/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="1"/>
+    <place-asset assetName="Drums" trackPath="0" timePos="0" expectReject="true"/>
+
+    <!-- A second undo, then the asset itself: it is back, with its window.
+         Last, so the placement it makes needs no undo of its own. The
+         redo re-pinned, so drain again before this undo too. -->
+    <drain-pending-deletes/>
+    <undo/>
+    <assert-arrangements names="Drums"/>
+    <assert-ref-count arrangement="Drums" refs="2"/>
+    <assert-ref-count asset="Drums" refs="1"/>
+    <place-asset assetName="Drums" trackPath="0" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"/>
+  </actions>
+
+</SActionScript>
