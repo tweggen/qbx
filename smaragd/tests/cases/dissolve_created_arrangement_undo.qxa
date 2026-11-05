@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-270: dissolve-arrangement on an arrangement made by create-arrangement
+  is UNDOABLE, and the undo puts back exactly what was there: the root, its
+  tracks in their order, and NOTHING the arrangement never had.
+
+  Before QBX-270 the inverse was always an extract-arrangement over the
+  window of the asset NAMED after the arrangement. A created arrangement has
+  no such asset, so the window came out [0,0) and the undo was refused
+  ("extract-arrangement: refused, empty range"), leaving the tracks in the
+  master and the arrangement gone. The inverse now carries the window the
+  dissolve actually found, and "no asset" is one of the answers: window="none"
+  re-creates the root and moves the tracks back into it, with no asset, no
+  master lane and no placement.
+
+  Section A has tracks and a clip; section B is an EMPTY created arrangement,
+  whose inverse has no tracks to move at all (an extract-arrangement with no
+  trackPaths is refused), so it is a create-arrangement.
+
+  WHAT EACH ASSERTION PINS:
+  - assert-arrangements after the undo: the root came back, with its tracks.
+  - the names Drums:0 / Drums:1: the ORDER came back.
+  - the master's track count after the undo: no asset lane was invented (a
+    window="extent" or window="range" inverse would add one).
+  - remove-asset expectReject: no asset named after the arrangement was
+    invented either.
+  - redo: the forward dissolve runs again on the rebuilt root.
+
+  drain-pending-deletes runs between each dissolve and its undo: the dissolve
+  unregisters the root, and a test-case run never delivers DeferredDelete on
+  its own, so without it the old root would still be alive for the undo and
+  a build that re-used it by accident would pass.
+-->
+<SActionScript version="1" name="dissolve_created_arrangement_undo">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Keep"/>
+
+    <!-- Section A: a created arrangement with two tracks and a clip. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="Kick"/>
+    <set-track-name trackPath="Drums:1" name="Snare"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-track-count arrangement="" count="1"/>
+
+    <dissolve-arrangement name="Drums"/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="3"/>
+    <assert-track-name trackPath="0" name="Keep"/>
+    <assert-track-name trackPath="1" name="Kick"/>
+    <assert-track-name trackPath="2" name="Snare"/>
+
+    <drain-pending-deletes/>
+
+    <undo/>
+    <assert-arrangements names="Drums" trackCounts="2"/>
+    <assert-track-name trackPath="Drums:0" name="Kick"/>
+    <assert-track-name trackPath="Drums:1" name="Snare"/>
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-name trackPath="0" name="Keep"/>
+    <remove-asset assetName="Drums" expectReject="true"/>
+
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="3"/>
+    <assert-track-name trackPath="1" name="Kick"/>
+    <assert-track-name trackPath="2" name="Snare"/>
+
+    <!-- Section B: an EMPTY created arrangement. -->
+    <create-arrangement name="Empty"/>
+    <assert-arrangements names="Empty" trackCounts="0"/>
+    <dissolve-arrangement name="Empty"/>
+    <assert-arrangements names=""/>
+
+    <drain-pending-deletes/>
+
+    <undo/>
+    <assert-arrangements names="Empty" trackCounts="0"/>
+    <assert-track-count arrangement="" count="3"/>
+    <remove-asset assetName="Empty" expectReject="true"/>
+
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="3"/>
+  </actions>
+
+</SActionScript>

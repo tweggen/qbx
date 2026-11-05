@@ -1,5 +1,6 @@
 #include "app/objects/mixer/sdissolvearrangementaction.h"
 #include "app/objects/mixer/sextractarrangementaction.h"
+#include "app/objects/mixer/screatearrangementaction.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/track/strack.h"
 #include "app/objects/track/strackpath.h"
@@ -185,8 +186,17 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
     }
 
     // Capture what the inverse needs BEFORE anything is torn down.
+    //
+    // THE WINDOW, and whether there is one at all (QBX-270). The inverse
+    // re-extracts, and an extraction decides from its window whether it makes
+    // an asset, a master lane and a placement -- so the window is a field the
+    // inverse must CARRY, not one it may default. An arrangement made by
+    // create-arrangement has no asset named after it: the window it needs is
+    // "none", and an inverse that defaulted to "range" over [0,0) was refused
+    // as an empty range, so the undo failed and the arrangement was lost.
     offset_t winBegin = 0, winEnd = 0, placedAt = 0;
-    if( SCut *primary = dynamic_cast<SCut *>( project->asset( arrName_ ) ) ) {
+    SCut *primary = dynamic_cast<SCut *>( project->asset( arrName_ ) );
+    if( primary ) {
         winBegin = (offset_t) primary->getStartOffset().frames();
         winEnd   = winBegin + (offset_t) primary->getDurationBlocking();
     }
@@ -285,9 +295,17 @@ SApplyResult SDissolveArrangementAction::apply( SProject *project )
     for( STrack *tk : moving )
         backPaths << pathToString( pathOf( master, tk ) );
 
-    SAction *inverse = new SExtractArrangementAction(
-        backPaths.join( ';' ), winBegin, winEnd, arrName_,
-        QStringLiteral( "range" ), placedAt );
+    // With no window AND no tracks there is nothing to extract (an extraction
+    // naming no tracks is refused): the arrangement was an empty created root,
+    // and re-creating it by name is the whole of the inverse.
+    SAction *inverse = nullptr;
+    if( !primary && backPaths.isEmpty() )
+        inverse = new SCreateArrangementAction( arrName_ );
+    else
+        inverse = new SExtractArrangementAction(
+            backPaths.join( ';' ), winBegin, winEnd, arrName_,
+            primary ? QStringLiteral( "range" ) : QStringLiteral( "none" ),
+            placedAt );
     return { true, inverse };
 }
 
