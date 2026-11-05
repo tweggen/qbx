@@ -14,6 +14,8 @@
 
   The setting is written explicitly at every stage and put back to `key` at
   the end, because it is a real per-user key (set-option's discipline).
+  RUN_SERIAL (smaragd/CMakeLists.txt, QBX-281): the other sampler_q7_* cases
+  read the key and expect `key`, so this case may not run beside them.
 -->
 <SActionScript version="1" name="sampler_q7_default_view">
 
