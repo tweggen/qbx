@@ -240,6 +240,16 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
     the inverse releases it once the registry has taken its own reference, or
     the arrangement could never be destroyed again.
 
+    `dissolve-arrangement` does NOT pin: its inverse is a RECIPE, an
+    `extract-arrangement` that builds a fresh root, so the root's identity and
+    its master-lane state do not survive that undo (open). What the recipe
+    does carry is the WINDOW (QBX-270): `range` over the asset named after the
+    arrangement, `none` when there is no such asset (a `create-arrangement`
+    root: no asset, lane or placement is invented), and a plain
+    `create-arrangement` when there are no tracks either. Before, it always
+    said `range`, and over [0,0) the undo was refused. Gated by
+    `dissolve_created_arrangement_undo.qxa`.
+
 16. **THE CONDUCTOR LANE IS AN ORDINARY CHILD LINK OF THE MASTER LANE, NOT A
     SECOND SENTINEL** (proposal 45 M6 / D7). Its address is `{-1, 0}`
     (`$master,0`): one system step to the master, then a plain index. That is
