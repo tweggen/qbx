@@ -2727,10 +2727,14 @@ routing verbs that would close one refuse it.
    `reparent-track` (a keyed track moved into the folder a sampler on its key
    lane links) and `place-asset` (a plain cycle through a key: the asset over
    a track keyed from the lane it is placed on — the routing graph has no
-   placement edges and did not see it). By the same walk a move would now
-   also refuse the intra-root shapes proposal 55 D7 already calls cycles (a
-   return moved into its own source folder), which the pass used to break —
-   argued, not gated (item 10).
+   placement edges and did not see it). By the same walk a move now also
+   refuses the same-arrangement shapes proposal 55 D7 already calls cycles —
+   a return moved into its own source folder, a keyed track moved into its
+   own key source — which the routing verbs refuse to build but a move used
+   to build, leaving the pass to drop the edge and the route silent. That
+   behaviour change was **accepted by the author 2026-11-05** (keep the
+   refusal; the rejected design is "accept and let the mixer pass unwire
+   it") and is gated by `qxa.sampler_routing_cycle_d7_move`.
 8. **Gates** (each refusal: the verb refused, its line, the state unchanged; a
    positive control on a lane no asset holds, with undo and redo; the
    refused edit accepted once the sampler lets go):
@@ -2740,7 +2744,12 @@ routing verbs that would close one refuse it.
    the return's asset and bounces exactly once),
    `qxa.sampler_routing_cycle_return`, `…_sidechain`, `…_send` (each with
    the sampler cycle, the plain one through a placement, the control and the
-   release), `qxa.sampler_routing_cycle_late` (reparent-track, place-asset).
+   release), `qxa.sampler_routing_cycle_late` (reparent-track, place-asset),
+   `qxa.sampler_routing_cycle_d7_move` (item 7's D7 shapes refused at a
+   reparent-track with their "reference cycle" line, the route still wired
+   and no `[ROUTE] cycle` drop; a move into a folder that is not the source,
+   with undo and redo; the release once unrouted). place-asset cannot build a
+   D7 shape without a placement, and its routing cycle is `…_late`'s.
 9. **Sabotages that bite** (each watched failing; the harness writes every
    file from its own saved bytes, touches every file it writes, rebuilds,
    runs the five cases plus eight bystanders — `sampler_q3_link_cycle`,
@@ -2764,10 +2773,13 @@ routing verbs that would close one refuse it.
    `…_sidechain` take no routing hop, so their `via` is empty either way);
    (S10) the rejected alternative "a send FROM a lane is an edge" —
    `…_link` (section D refused) and the bystander `send_tap_model`. The other
-   bystanders passed under every sabotage.
+   bystanders passed under every sabotage. Added for the D7 case: (S0) on
+   main `…_d7_move` fails (both moves accepted); (S11) the rejected design,
+   reparent-track refusing a routing-only cycle no longer (accept, and let
+   the pass unwire it) — only `…_d7_move`.
 10. **Not gated / not covered.** A project FILE that already holds such a
-    cycle loads as it is (as QBX-267's). A move that closes one of proposal
-    55 D7's intra-root shapes (item 7) is not gated. Found and NOT fixed: the QBX-274
+    cycle loads as it is (as QBX-267's). Found and NOT fixed (filed as
+    QBX-285): the QBX-274
     live-owner check (`ssampler::liveOwnerOf`) walks child and content links
     only, so a bounce of an asset holding a return (or a keyed track) whose
     SOURCE is armed is not deferred — it freezes a live-owned source and

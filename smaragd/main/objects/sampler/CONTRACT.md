@@ -549,8 +549,15 @@ changed for it.
     `"S" sends to "L"`); `samplerHop` says whether the path took a sampler
     hop, and the shell's reach walk keeps model's `via` empty when it did not.
     `add-return-track`, `add-send-lane` and `set-send` cannot close one
-    (proposal 56 §11 "QBX-269" item 6). Gates: `sampler_routing_cycle_link`,
-    `…_return`, `…_sidechain`, `…_send`, `…_late`.
+    (proposal 56 §11 "QBX-269" item 6). Through the same walk a MOVE that
+    would build one of proposal 55 D7's same-arrangement shapes (a return
+    into its own source folder, a keyed track into its own key source) is
+    refused as a reference cycle rather than built and left for the mixer
+    pass to unwire (the author, 2026-11-05). Not covered: the live-owner
+    check `liveOwnerOf` (invariant 33) still walks child and content links
+    only, so a bounce over a return of an ARMED source is not deferred
+    (QBX-285). Gates: `sampler_routing_cycle_link`, `…_return`,
+    `…_sidechain`, `…_send`, `…_late`, `…_d7_move`.
 
 ## Value syntax (the front end's, DESIGN §2.1)
 
@@ -679,8 +686,9 @@ absolute (there is nothing to be relative to).
   and bounces exactly once. `set-return-source`, `set-plugin-sidechain` and
   `add-send` each refused for the sampler cycle and for a plain one through a
   placement, with a control (undo, redo) and the release; `reparent-track`
-  and `place-asset` refused through a key edge. Sabotages: proposal 56 §11
-  "QBX-269".
+  and `place-asset` refused through a key edge; `…_d7_move` refuses a
+  reparent-track that would build a D7 same-arrangement shape. Sabotages:
+  proposal 56 §11 "QBX-269".
 
 - `qxa.sampler_q4_stretch` (QBX-268) — Q4.1: tests/sampler_q4_loop.wav (2
   beats at 120 BPM, a 1 kHz carrier under four hits, the first accented), zone

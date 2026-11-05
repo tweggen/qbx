@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_routing_cycle_d7_move">
+
+  <!-- QBX-269 (the author, 2026-11-05: keep the refusal): A MOVE THAT CLOSES
+       ONE OF PROPOSAL 55 D7'S SAME-ARRANGEMENT ROUTING SHAPES IS REFUSED AT
+       THE MOVE.
+
+       D7 calls two containment shapes cycles: a return inside its own source
+       folder, and a track keyed from a folder that holds it. The routing
+       verbs refuse to BUILD either shape; before QBX-269 a reparent-track
+       could still build it, because its walk saw no routing edge, and the
+       mixer pass then dropped the edge and left the route silent. Now the
+       walk follows routing edges, so the move asks the same question and
+       refuses with a plain "reference cycle" line (no sampler on the path).
+       The rejected design, accept and let the pass unwire it, is the
+       sabotage this case was watched failing under.
+
+         1  a return moved into its own source: refused, line, the return
+            still at the top level and still routed;
+         2  a keyed track moved into its own key source: refused, line, the
+            track still at the top level and still keyed;
+         3  the positive control: the same return moved into a folder that is
+            not its source, with undo and redo;
+         4  the release: unrouted, the return moves into its former source.
+
+       place-asset cannot build either shape inside one arrangement without a
+       placement (an asset is not a lane of the tree); its routing cycle is
+       sampler_routing_cycle_late's section 3.
+
+       Tracks: 0 Src, 1 Src Aux 1 (the return), 2 Key, 3 Bass (keyed from
+       Key), 4 Other. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Src"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-return-track trackPath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Key"/>
+    <add-sample trackPath="2" filePath="../test_stereo.wav" timePos="0"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Bass"/>
+    <add-sample trackPath="3" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="3" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="3" slot="0" source="2"/>
+    <assert-plugin-sidechain trackPath="3" slot="0" keyed="1" source="2" wired="1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Other"/>
+
+    <!-- ============================ 1: a return into its own source folder -->
+    <reparent-track source="1" destParent="0" expectReject="true"/>
+    <assert-log contains="reparent-track: refused, moving &quot;Src Aux 1&quot; into &quot;Src&quot; would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-track-count count="5"/>
+    <assert-track-name trackPath="1" name="Src Aux 1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" routed="1"/>
+    <assert-log contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
+
+    <!-- ====================== 2: a keyed track into its own key source -->
+    <reparent-track source="3" destParent="2" expectReject="true"/>
+    <assert-log contains="reparent-track: refused, moving &quot;Bass&quot; into &quot;Key&quot; would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-track-count count="5"/>
+    <assert-track-name trackPath="3" name="Bass"/>
+    <assert-plugin-sidechain trackPath="3" slot="0" keyed="1" source="2" wired="1"/>
+    <assert-log contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
+
+    <!-- ================================ 3: the positive control, undoable -->
+    <reparent-track source="1" destParent="4"/>
+    <assert-track-count count="4"/>
+    <assert-track-name trackPath="3,0" name="Src Aux 1"/>
+    <assert-return-track trackPath="3,0" isReturn="1" source="0" routed="1"/>
+    <undo/>
+    <assert-track-count count="5"/>
+    <assert-track-name trackPath="1" name="Src Aux 1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" routed="1"/>
+    <redo/>
+    <assert-track-count count="4"/>
+    <assert-return-track trackPath="3,0" isReturn="1" source="0" routed="1"/>
+    <undo/>
+
+    <!-- ==================== 4: the release: unrouted, it may move in -->
+    <clear-return-source trackPath="1"/>
+    <reparent-track source="1" destParent="0"/>
+    <assert-track-name trackPath="0,0" name="Src Aux 1"/>
+    <assert-return-track trackPath="0,0" isReturn="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+  </actions>
+
+</SActionScript>
