@@ -6,6 +6,7 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/slink.h"
 #include "app/model/sobjectpath.h"
+#include "app/model/sarrangements.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/model/sappcontext.h"
@@ -289,6 +290,22 @@ SApplyResult SSetReturnSourceAction::apply( SProject *project )
     if( !mayBecomeReturn( name(), ret ) ) return { false, nullptr };
     if( !auxEdgeIsLegal( name(), mixer, source, slot_, bus_, ret, nullptr ) )
         return { false, nullptr };
+    // QBX-269: the return will render its source, so the edge closes a cycle
+    // exactly when the source already hears the return -- through a sampler
+    // that links an asset holding it, or a placement of one. The routing
+    // graph above sees neither; the whole-graph walk (the shell's, which
+    // follows sampler links and routing edges) does.
+    {
+        QString via;
+        if( sarrangements::reaches( source, ret, &via ) ) {
+            qWarning().noquote()
+                << name() << ": refused, routing" << source->getSName() << "into the return"
+                << ret->getSName() << "would close"
+                << ( via.isEmpty() ? QStringLiteral( "a reference cycle" )
+                                   : QStringLiteral( "a sampler asset-link cycle (%1)" ).arg( via ) );
+            return { false, nullptr };
+        }
+    }
 
     SAction *inverse = new SRestoreReturnSourceAction(
         splacements::specOf( project, ret ), ret->auxSourceTrack(),

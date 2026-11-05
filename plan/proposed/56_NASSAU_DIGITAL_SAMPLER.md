@@ -1631,6 +1631,8 @@ changes containment or placement refuses such an edit.
    cycle (hand-edited, or saved before QBX-267) loads as it is; the walk
    follows containment, content and sampler links but not ROUTING (a return
    or a sidechain tapping a lane), which is the link-time check's limit too.
+   *Corrected by QBX-269 (below): it follows routing edges now, and the
+   routing verbs that would close such a cycle refuse it.*
    Found on the way and not fixed: `dissolve-arrangement` of an arrangement
    made by `create-arrangement` (no asset named after it) hands back an
    extraction over an empty window, which is refused, so its undo fails.
@@ -2650,3 +2652,123 @@ invariant 33 states it.
    fixed: the asset body's own capture (`SCut`) of an armed track is refused
    and counted, so a PLACEMENT of such an asset plays silence while the track
    is armed — filed as QBX-283.
+
+### QBX-269 as built: the cycle walk follows routing edges (2026-11-05)
+
+The question (QBX-267 item 7, filed 2026-11-02): can a routing edge — a
+return's aux source, a sidechain key, a send — make a sampler's linked asset
+depend on the sampler's own track output? **Yes**, and it is a live loop, so
+the walk now follows those edges, at link time and in the late check, and the
+routing verbs that would close one refuse it.
+
+1. **Why it can.** A bounce freezes the asset CONTENT's root component (§11
+   Q3 item 2). For an asset over an arrangement root every routing edge stays
+   inside the root (`add-send` resolves its send lane in the source's mixer;
+   `set-return-source` and `set-plugin-sidechain` refuse "another
+   arrangement"; the mixer's pass leaves a source outside its tree unwired), so
+   the containment walk already reaches every lane the root's sum can hear.
+   But an asset may be over a TRACK or a FOLDER (`create-asset container="1"`),
+   and a return or a keyed slot inside it may tap a lane OUTSIDE it — in
+   particular the sampler's own track: a return of its aux output (Q8), or a
+   duck keyed from it. A send lane is in no folder, so it enters an asset only
+   as the source of such a return or key, and then its senders are heard too.
+2. **Measured, before the fix** (scratch case, now section A of
+   `sampler_routing_cycle_link`): a probe sampler linking an asset over a
+   return of Drums' aux 1 plays Drums' kick in its bounce (RMS 0.5471 in the
+   kick window, `test_clipsaw.wav` is 0.5485; 0 before it) — the bounce hears
+   the routing edge. Drums' OWN layer linking that asset was ACCEPTED, and the
+   layer then re-bounced itself for ever: generations 1, 2, 3 … one per 2 s
+   of idle and one more per render, `rendering` never 0 (the install stales
+   Drums, the D7 walk carries that over the aux edge into the return, the
+   return's epoch moves the key, and the next bounce is due). So this is not
+   a render-time recursion (`FreezeContext` would break that) but a
+   generation feedback with no fixed point, and the audio a render hears
+   depends on how many generations ran: refused, as every other sampler cycle
+   is (the author's ruling of 2026-11-01).
+3. **What counts as an edge** (`ssampler::setLaneRoutingSourcesHook`, the
+   shell's, beside the lane-programs hook — which lanes feed a lane is
+   objects/track's and objects/mixer's knowledge): for a lane, its aux source
+   if it is a return; the key lane of each keyed slot; and for a SEND lane,
+   every lane of its arrangement holding a tap that names it. The model's
+   edges, not today's wiring: a DISABLED tap counts (`set-send enabled="true"`
+   enables it without a cycle walk), and so does a source the pass leaves
+   unwired for being outside the arrangement (a move can bring it home). A
+   send FROM a lane is NOT an edge into it: the send feeds the send lane, and
+   the bounce hears only the lane's own output (gated, section D). This
+   answers the ticket's "does a send from inside an asset count" from the
+   code, not as a product choice.
+4. **The wording.** The hops go into the reason in path order: `the return
+   "R" taps "S"`, `"K" is keyed from "S"`, `"S" sends to "L"`, beside QBX-266's
+   `the sampler on "T" links "A"`. model's `via` keeps its meaning — empty
+   when the path took no SAMPLER hop — so a cycle through routing edges and
+   placements alone is worded as a plain reference cycle (the shell's reach
+   walk clears it; `assetReachesTrack` gained a `samplerHop` out-parameter).
+5. **The routing verbs that ask** (after their own routing-graph check, which
+   keeps its wording for the cycles it sees; the new check is the one for the
+   cycles it cannot: through a sampler link or a placement). Adding the edge
+   X ← S closes a cycle exactly when S already reaches X, asked as
+   `sarrangements::reaches(S, X)` before anything mutates:
+   - `set-return-source` (X the return, S its source) — "set-return-source :
+     refused, routing S into the return R would close a sampler asset-link
+     cycle (<hops>)" / "…a reference cycle";
+   - `set-plugin-sidechain` (X the keyed track, S the key lane) — "…keying K
+     from S would close …";
+   - `add-send` (X the send lane, S the sending lane), disabled taps
+     included — "…sending S to L would close …".
+6. **The routing verbs that cannot close one, and why.** `add-return-track`
+   puts the return into its source's own parent (a send lane's: the root), so
+   whatever reaches the new return already reached the source by containment;
+   `add-send-lane` makes a lane with no edge; `set-send` never changes a tap's
+   destination, and the tap it edits was asked when it was added;
+   `clear-return-source`, `clear-plugin-sidechain`, `remove-send` and every
+   inverse-only `restore-*` remove edges or write a past state.
+7. **The containment and placement verbs see routing edges with no change of
+   their own**: they ask the same walk (QBX-267 item 1). Gated for
+   `reparent-track` (a keyed track moved into the folder a sampler on its key
+   lane links) and `place-asset` (a plain cycle through a key: the asset over
+   a track keyed from the lane it is placed on — the routing graph has no
+   placement edges and did not see it). By the same walk a move would now
+   also refuse the intra-root shapes proposal 55 D7 already calls cycles (a
+   return moved into its own source folder), which the pass used to break —
+   argued, not gated (item 10).
+8. **Gates** (each refusal: the verb refused, its line, the state unchanged; a
+   positive control on a lane no asset holds, with undo and redo; the
+   refused edit accepted once the sampler lets go):
+   `qxa.sampler_routing_cycle_link` (set-layer: A aux, B key, C key from a
+   send lane, E through a disabled tap; D a send from inside the asset,
+   accepted; the probe's audio as the premise; after the unroute Drums links
+   the return's asset and bounces exactly once),
+   `qxa.sampler_routing_cycle_return`, `…_sidechain`, `…_send` (each with
+   the sampler cycle, the plain one through a placement, the control and the
+   release), `qxa.sampler_routing_cycle_late` (reparent-track, place-asset).
+9. **Sabotages that bite** (each watched failing; the harness writes every
+   file from its own saved bytes, touches every file it writes, rebuilds,
+   runs the five cases plus eight bystanders — `sampler_q3_link_cycle`,
+   `sampler_q3_asset_link`, `sampler_late_cycle_place_asset`,
+   `…_reparent_track`, `…_dissolve`, `return_track_refusals`,
+   `sidechain_refusals`, `send_tap_model` — restores and touches again; the
+   clean rebuild after the last passes all thirteen):
+   (S0) the six source files as on main — all five fail, `…_return` and
+   `…_sidechain` by hanging until the 300 s timeout (the accepted cycle): the
+   "watched failing on main" for every case; (S1) the shell not installing
+   the routing hook — `…_link`, `…_send` (its cycle runs through a key edge)
+   and `…_late`, while `…_return` and `…_sidechain` pass, their cycles needing
+   no routing hop beyond the edge being added; (S2) set-return-source's check
+   off — only `…_return` (timeout); (S3) set-plugin-sidechain's — only
+   `…_sidechain` (timeout); (S4) add-send's — only `…_send`; (S5) the aux
+   edge not followed — only `…_link`; (S6) key edges not followed — `…_link`,
+   `…_send`, `…_late`; (S7) a send lane's senders not followed — only
+   `…_link`; (S8) the rejected alternative "today's wiring": enabled taps only
+   — only `…_link` (section E); (S9) a routing-only path worded as a sampler
+   cycle — `…_send` and `…_late` (the plain sections of `…_return` and
+   `…_sidechain` take no routing hop, so their `via` is empty either way);
+   (S10) the rejected alternative "a send FROM a lane is an edge" —
+   `…_link` (section D refused) and the bystander `send_tap_model`. The other
+   bystanders passed under every sabotage.
+10. **Not gated / not covered.** A project FILE that already holds such a
+    cycle loads as it is (as QBX-267's). A move that closes one of proposal
+    55 D7's intra-root shapes (item 7) is not gated. Found and NOT fixed: the QBX-274
+    live-owner check (`ssampler::liveOwnerOf`) walks child and content links
+    only, so a bounce of an asset holding a return (or a keyed track) whose
+    SOURCE is armed is not deferred — it freezes a live-owned source and
+    hears silence there.

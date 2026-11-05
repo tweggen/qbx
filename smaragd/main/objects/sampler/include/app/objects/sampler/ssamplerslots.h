@@ -60,9 +60,31 @@ SSamplerProgram *programAt( SProject *project, const QString &pathRoot, const QS
 using LanePrograms = std::function<QList<SSamplerProgram *>( SObject *lane )>;
 void setLaneProgramsHook( LanePrograms hook );
 
+// ROUTING EDGES ARE EDGES TOO (QBX-269). A lane's output can depend on a lane
+// it does not contain: a return track renders its source's aux bus, a keyed
+// slot reads its key lane, and a send lane sums every lane that sends to it.
+// An asset over a folder holding such a return or keyed track therefore
+// bounces audio from OUTSIDE its container (measured: the bounce of a return
+// of a sampler's aux 1 carries that sampler's kick), and a sampler that links
+// it re-bounces itself forever. For every LANE it passes the walk also follows
+// the lanes that lane's output is routed FROM. Which lanes those are is
+// objects/track's and objects/mixer's knowledge, so it is a shell hook as well
+// (ssamplerwiring installs it); each source comes with the hop's wording for a
+// refusal ("the return \"R\" taps \"S\"").
+struct RoutingSource {
+    SObject *source = nullptr;
+    QString  hop;
+};
+using LaneRoutingSources = std::function<QList<RoutingSource>( SObject *lane )>;
+void setLaneRoutingSourcesHook( LaneRoutingSources hook );
+
 // True when `track` is reachable from `body` through child links, content
-// links and sampler asset links. `via`, when given, names the sampler hops the
-// path took ("" when it took none), for the refusal's message. Main thread.
+// links, sampler asset links and (QBX-269) routing edges. `via`, when given,
+// names the sampler and routing hops the path took, in path order, for the
+// refusal's message ("" when it took neither). `samplerHop`, when given, says
+// whether the path took a SAMPLER hop: a path through routing edges alone is a
+// plain reference cycle, which the containment verbs word differently.
+// Main thread.
 //
 // It is ALSO the walk every containment and placement verb asks (QBX-267):
 // the shell installs it as sarrangements' reach walk, so a cycle a later edit
@@ -71,7 +93,8 @@ void setLaneProgramsHook( LanePrograms hook );
 // are any two objects ("is `track` reachable from `body`"), and `pending`
 // lists edges the edit is about to add (dissolve-arrangement's several moves).
 bool assetReachesTrack( SObject *body, const SObject *track, QString *via = nullptr,
-                        const sarrangements::PendingEdges *pending = nullptr );
+                        const sarrangements::PendingEdges *pending = nullptr,
+                        bool *samplerHop = nullptr );
 
 // --- a bounce over a LIVE-OWNED track waits (QBX-274) -------------------------------
 //

@@ -527,6 +527,31 @@ changed for it.
     bounces as before. A layer that stops naming a link, or is removed, drops its
     wait (and an undo brings it back with the link).
 
+### QBX-269: routing edges are edges
+
+34. **THE CYCLE WALK FOLLOWS ROUTING EDGES** (QBX-269; proposal 56 §11
+    "QBX-269 as built"). An asset over a track or a folder may hold a return
+    or a keyed slot that taps a lane OUTSIDE it, and its bounce hears that lane
+    (measured): a sampler linking such an asset over a return of its own aux
+    output re-bounced itself for ever. So `ssampler::assetReachesTrack` also
+    follows, for every lane it passes, the lanes that lane's output is ROUTED
+    from — a return's aux source, each keyed slot's key lane, a send lane's
+    senders — which the shell supplies (`ssampler::setLaneRoutingSourcesHook`,
+    beside the lane-programs hook). The MODEL's edges, not today's wiring: a
+    disabled tap and a source the pass leaves unwired count. A send FROM a
+    lane is not an edge into it. Link time (invariant 21) and the late check
+    (invariant 22) see it through the same function, and the routing verbs ask
+    it too: `set-return-source`, `set-plugin-sidechain` and `add-send` refuse
+    an edge X ← S when S already reaches X (`sarrangements::reaches(S, X)`),
+    worded "…would close a sampler asset-link cycle (<hops>)" or, with no
+    sampler hop on the path, "…would close a reference cycle". The hops name
+    routing edges too (`the return "R" taps "S"`, `"K" is keyed from "S"`,
+    `"S" sends to "L"`); `samplerHop` says whether the path took a sampler
+    hop, and the shell's reach walk keeps model's `via` empty when it did not.
+    `add-return-track`, `add-send-lane` and `set-send` cannot close one
+    (proposal 56 §11 "QBX-269" item 6). Gates: `sampler_routing_cycle_link`,
+    `…_return`, `…_sidechain`, `…_send`, `…_late`.
+
 ## Value syntax (the front end's, DESIGN §2.1)
 
 On a numeric parameter a leading `+`/`-` is a RELATIVE edit; on an enum or a
@@ -645,6 +670,17 @@ absolute (there is nothing to be relative to).
   cycle only together, and for a plan that names the right folder only once
   the teardown and the earlier moves have run. Sabotages: proposal 56 §11
   "QBX-267".
+- `qxa.sampler_routing_cycle_link`, `…_return`, `…_sidechain`, `…_send`,
+  `…_late` (QBX-269, invariant 34) — set-layer refused through an aux edge, a
+  key edge, a key from a send lane and a DISABLED tap into it (the hops
+  named), and accepted for an asset over a track that only SENDS; the premise
+  measured (a probe linking an asset over a return of the sampler's aux 1
+  plays the kick, RMS 0.547); after the unroute the sampler links that asset
+  and bounces exactly once. `set-return-source`, `set-plugin-sidechain` and
+  `add-send` each refused for the sampler cycle and for a plain one through a
+  placement, with a control (undo, redo) and the release; `reparent-track`
+  and `place-asset` refused through a key edge. Sabotages: proposal 56 §11
+  "QBX-269".
 
 - `qxa.sampler_q4_stretch` (QBX-268) — Q4.1: tests/sampler_q4_loop.wav (2
   beats at 120 BPM, a 1 kHz carrier under four hits, the first accented), zone

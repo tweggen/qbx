@@ -4,6 +4,7 @@
 #include <QDomElement>
 
 #include "app/actions/sactionregistry.h"
+#include "app/model/sarrangements.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
@@ -114,6 +115,21 @@ SApplyResult SSetPluginSidechainAction::apply( SProject *project )
             << keyed->getSName() << "already reaches" << source->getSName()
             << "(proposal 55 D7)";
         return { false, nullptr };
+    }
+    // QBX-269: the keyed slot will read its key lane, so the edge closes a
+    // cycle exactly when the key lane already hears the keyed track -- through
+    // a sampler that links an asset holding it, or a placement of one, which
+    // the routing graph above does not see.
+    {
+        QString via;
+        if( sarrangements::reaches( source, keyed, &via ) ) {
+            qWarning().noquote()
+                << name() << ": refused, keying" << keyed->getSName() << "from"
+                << source->getSName() << "would close"
+                << ( via.isEmpty() ? QStringLiteral( "a reference cycle" )
+                                   : QStringLiteral( "a sampler asset-link cycle (%1)" ).arg( via ) );
+            return { false, nullptr };
+        }
     }
 
     SAction *inverse = new SRestorePluginSidechainAction(
