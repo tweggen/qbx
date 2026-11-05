@@ -5,6 +5,7 @@
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/objects/sampler/ssamplerprogram.h"
+#include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/sampler/ssamplerslots.h"
 #include "app/objects/track/spluginchain.h"
 #include "app/objects/track/sinstrumenttracks.h"
@@ -115,6 +116,52 @@ void install()
         }
         return out;
     } );
+    // ...and the lanes a lane's output is ROUTED from (QBX-269): a return's
+    // aux source, each keyed slot's key lane, and for a send lane every lane
+    // of its arrangement holding a tap that names it (enabled or not, at any
+    // depth: the model's edges, which a later edit may wire, not today's
+    // wiring). A send FROM a lane is not here: it feeds the send lane, which
+    // no folder contains, so it adds nothing to what the lane's output hears.
+    ssampler::setLaneRoutingSourcesHook( []( SObject *lane ) {
+        QList<ssampler::RoutingSource> out;
+        STrack *track = dynamic_cast<STrack *>( lane );
+        if( !track ) return out;
+        if( track->isReturnTrack() && track->auxSourceTrack() ) {
+            STrack *src = track->auxSourceTrack();
+            out.append( { src, QStringLiteral( "the return \"%1\" taps \"%2\"" )
+                                   .arg( track->getSName(), src->getSName() ) } );
+        }
+        for( int i = 0; i < track->pluginSlotCount(); ++i ) {
+            if( !track->pluginSlotHasSidechain( i ) ) continue;
+            SObject *src = track->pluginSlotSidechainSource( i );
+            if( !src ) continue;
+            out.append( { src, QStringLiteral( "\"%1\" is keyed from \"%2\"" )
+                                   .arg( track->getSName(), src->getSName() ) } );
+        }
+        if( track->systemRole() == SSystemRole::Send ) {
+            SStdMixer *mixer = dynamic_cast<SStdMixer *>( track->renderPathOwner() );
+            if( mixer ) {
+                const QString name = track->getSName();
+                QList<SObject *> todo;
+                for( SLink *lk : mixer->childLinks() )
+                    if( lk ) todo.append( &lk->getSObject() );
+                for( STrack *l : mixer->sendLanes() )
+                    if( l && l != track ) todo.append( l );
+                QSet<SObject *> done;
+                while( !todo.isEmpty() ) {
+                    SObject *o = todo.takeFirst();
+                    if( !o || done.contains( o ) || !o->isLane() ) continue;
+                    done.insert( o );
+                    if( o != lane && o->sendTap( name ) )
+                        out.append( { o, QStringLiteral( "\"%1\" sends to \"%2\"" )
+                                             .arg( o->getSName(), name ) } );
+                    for( SLink *lk : o->childLinks() )
+                        if( lk ) todo.append( &lk->getSObject() );
+                }
+            }
+        }
+        return out;
+    } );
     // ...and that same walk is the one every containment and placement verb
     // asks (QBX-267; proposal 56 §11 Q3): model's whole-graph guard
     // (sarrangements::reaches) cannot name objects/sampler, so it is handed
@@ -123,7 +170,12 @@ void install()
     // set-layer refuses a cycle-closing link with.
     sarrangements::setReachWalk( []( SObject *from, const SObject *to,
                                      const sarrangements::PendingEdges *pending, QString *via ) {
-        return ssampler::assetReachesTrack( from, to, via, pending );
+        // `via` keeps model's meaning: "" for a path with no SAMPLER hop (a
+        // plain reference cycle, routing edges or not), else every hop.
+        bool samplerHop = false;
+        const bool r = ssampler::assetReachesTrack( from, to, via, pending, &samplerHop );
+        if( via && !samplerHop ) via->clear();
+        return r;
     } );
     SPluginSlot::setChildAdoptedHook( []( SPluginSlot &slot, SObject &child ) {
         SSamplerProgram *prog = qobject_cast<SSamplerProgram *>( &child );

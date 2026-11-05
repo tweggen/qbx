@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_routing_cycle_return">
+
+  <!-- QBX-269: set-return-source REFUSES AN AUX EDGE THAT WOULD CLOSE A CYCLE
+       THROUGH A SAMPLER LINK OR A PLACEMENT.
+
+       A return renders its source's aux bus. Routing Drums' aux 1 into "Box",
+       an empty track that an asset covers and that Drums' sampler links,
+       would make the sampler bounce its own output for ever (proposal 56
+       section 11, "QBX-269"). The routing graph the verb already asks sees no
+       sampler link and no placement, so before QBX-269 both shapes below were
+       accepted.
+
+         1  the sampler cycle: refused, its line names the sampler hop, Box is
+            no return, and Drums' layer is not re-bounced;
+         2  the plain cycle: "Holder" holds a placement of an asset over
+            "Box2", and Box2 asks to return Holder's aux 1 (Holder renders
+            Box2, Box2 would render Holder): refused as a reference cycle;
+         3  the positive control: the same verb on "Free", which no asset
+            holds, is accepted, with undo and redo;
+         4  the release: once Drums lets go of the asset, Box may return
+            Drums' aux 1.
+
+       Ids: zone 1 / layer 2, zone 3 / layer 4.
+       Tracks: 0 Drums, 1 Box, 2 Holder, 3 Box2, 4 Free. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Drums"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="36" keyHi="36" rootKey="36"
+              mode="oneshot" output="aux1">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="60" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Box"/>
+    <create-asset container="1" startOffset="0" duration="48000" assetName="BoxA"/>
+    <set-layer trackPath="0" slotIndex="0" layer="4" src="asset:BoxA"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="1"
+                          renders="1" asset="BoxA"/>
+
+    <!-- ===================================== 1: the sampler cycle, refused -->
+    <set-return-source trackPath="1" sourcePath="0" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="set-return-source : refused, routing Drums into the return Box would close a sampler asset-link cycle (the sampler on &quot;Drums&quot; links &quot;BoxA&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-return-track trackPath="1" isReturn="0"/>
+    <wait-ms ms="1000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="1"
+                          rendering="0" renders="1"/>
+
+    <!-- ======================================= 2: the plain cycle, refused -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Holder"/>
+    <insert-plugin trackPath="2" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Box2"/>
+    <create-asset container="3" startOffset="0" duration="48000" assetName="Box2A"/>
+    <place-asset assetName="Box2A" trackPath="2" timePos="0"/>
+    <set-return-source trackPath="3" sourcePath="2" slot="0" bus="1" expectReject="true"/>
+    <assert-log contains="set-return-source : refused, routing Holder into the return Box2 would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-return-track trackPath="3" isReturn="0"/>
+
+    <!-- ================================ 3: the positive control, undoable -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Free"/>
+    <set-return-source trackPath="4" sourcePath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="4" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
+    <undo/>
+    <assert-return-track trackPath="4" isReturn="0"/>
+    <redo/>
+    <assert-return-track trackPath="4" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
+    <clear-return-source trackPath="4"/>
+
+    <!-- ============== 4: the release: Drums lets go, Box may return it -->
+    <set-layer trackPath="0" slotIndex="0" layer="4" src="test:none"/>
+    <set-return-source trackPath="1" sourcePath="0" slot="0" bus="1"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+  </actions>
+
+</SActionScript>

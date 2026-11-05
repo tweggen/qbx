@@ -4,6 +4,7 @@
 #include <QDomElement>
 
 #include "app/actions/sactionregistry.h"
+#include "app/model/sarrangements.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/objects/mixer/sstdmixer.h"
@@ -96,6 +97,22 @@ bool routingIsLegal( const QString &verb, const Resolved &r )
             << ". A cycle does not fail cleanly: the page scheduler would leave"
             << "two nodes each waiting on the other and the render would hang.";
         return false;
+    }
+    // QBX-269: the send lane will sum its source, so the tap closes a cycle
+    // exactly when the source already hears the send lane -- a return of it,
+    // or a slot keyed from it, inside an asset a sampler on the source links
+    // (or a placement of one). The tap graph above sees no sampler link and
+    // no placement; the whole-graph walk does.
+    {
+        QString via;
+        if( sarrangements::reaches( r.source, r.dest, &via ) ) {
+            qWarning().noquote()
+                << verb << ": refused, sending" << r.source->getSName() << "to"
+                << r.dest->getSName() << "would close"
+                << ( via.isEmpty() ? QStringLiteral( "a reference cycle" )
+                                   : QStringLiteral( "a sampler asset-link cycle (%1)" ).arg( via ) );
+            return false;
+        }
     }
     return true;
 }

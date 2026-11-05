@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_routing_cycle_late">
+
+  <!-- QBX-269: THE CONTAINMENT AND PLACEMENT VERBS SEE ROUTING EDGES TOO.
+
+       The whole-graph walk every containment and placement verb asks
+       (QBX-267: the shell installs ssampler::assetReachesTrack as
+       sarrangements' reach walk) now also follows, for each lane it passes,
+       the lanes that lane's output is routed from. So a MOVE that would bring
+       a routed lane inside an asset whose bounce would then hear the sampler
+       linking it is refused, and so is a placement that closes a plain cycle
+       through a routing edge.
+
+         1  reparent-track: "Bass" is keyed from Drums, and Drums' sampler
+            links an asset over "Folder". Moving Bass into Folder would make
+            the asset hear Drums: refused, its line names both hops;
+         2  the positive control: "Plain", keyed from nothing, moves into
+            Folder, with undo and redo;
+         3  place-asset: "Bass2" is keyed from "Holder"; placing the asset over
+            Bass2 on Holder would make Holder render itself through the key:
+            refused as a reference cycle, which the key's own routing graph
+            does not see (it has no placement edges);
+         4  the release: unkeyed, Bass moves into Folder.
+
+       Ids: zone 1 / layer 2.
+       Tracks: 0 Drums, 1 Folder, 2 Bass, 3 Plain, then 4 Holder, 5 Bass2. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Drums"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="60" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Folder"/>
+    <create-asset container="1" startOffset="0" duration="48000" assetName="FolderA"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:FolderA"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1" asset="FolderA"/>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="2" name="Bass"/>
+    <add-sample trackPath="2" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="2" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="2" slot="0" source="0"/>
+    <assert-plugin-sidechain trackPath="2" slot="0" keyed="1" source="0"/>
+
+    <!-- ============================= 1: reparent-track, the sampler cycle -->
+    <reparent-track source="2" destParent="1" expectReject="true"/>
+    <assert-log contains="reparent-track: refused, moving &quot;Bass&quot; into &quot;Folder&quot; would close a sampler asset-link cycle (&quot;Bass&quot; is keyed from &quot;Drums&quot;, the sampler on &quot;Drums&quot; links &quot;FolderA&quot;)"
+                minCount="1" maxCount="1"/>
+    <assert-track-name trackPath="2" name="Bass"/>
+    <assert-track-count count="3"/>
+
+    <!-- ================================ 2: the positive control, undoable -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Plain"/>
+    <reparent-track source="3" destParent="1"/>
+    <assert-track-count count="3"/>
+    <assert-track-name trackPath="1,0" name="Plain"/>
+    <undo/>
+    <assert-track-count count="4"/>
+    <assert-track-name trackPath="3" name="Plain"/>
+    <redo/>
+    <assert-track-count count="3"/>
+    <assert-track-name trackPath="1,0" name="Plain"/>
+
+    <!-- ======================== 3: place-asset, a plain cycle through a key -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Holder"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Bass2"/>
+    <add-sample trackPath="4" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="4" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="4" slot="0" source="3"/>
+    <create-asset container="4" startOffset="0" duration="48000" assetName="Bass2A"/>
+    <place-asset assetName="Bass2A" trackPath="3" timePos="0" expectReject="true"/>
+    <assert-log contains="place-asset: refused, placing 'Bass2A' here would close a reference cycle"
+                minCount="1" maxCount="1"/>
+    <assert-clip-window clip="3,0" expectReject="true"/>
+
+    <!-- ===================== 4: the release: unkeyed, Bass may move in -->
+    <clear-plugin-sidechain trackPath="2" slot="0"/>
+    <reparent-track source="2" destParent="1"/>
+    <assert-track-name trackPath="1,1" name="Bass"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
+  </actions>
+
+</SActionScript>
