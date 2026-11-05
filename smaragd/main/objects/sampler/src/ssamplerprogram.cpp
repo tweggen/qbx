@@ -503,11 +503,91 @@ bool SSamplerProgram::edit( const std::function<bool( audio::twSamplerProgramMod
                                    "verbatim and is not editable" ).arg( loadError_ );
         return false;
     }
+    if( library_ ) {
+        // DESIGN §8: the base is read-only, and only the pad reassignment is
+        // an overlay edit in qbx so far (QBX-278). Writing into model() would
+        // be lost at the next overlay edit and is never what the user meant.
+        if( why )
+            *why = QStringLiteral( "this instance plays a library program (%1); only a pad "
+                                   "reassignment (set-pad-key) or hide-pad is an overlay edit so far" )
+                       .arg( QString::fromStdString( library_->basePath() ) );
+        return false;
+    }
     // A COPY, so a refusal anywhere inside `fn` leaves the program exactly as
     // it was even if `fn` made more than one core call before refusing.
     audio::twSamplerProgramModel work = model_;
     if( !fn( work ) ) return false;
     model_ = std::move( work );
+    publish_();
+    reconcileSamples_();
+    emit programChanged();
+    return true;
+}
+
+// --- a library program (QBX-278) ---------------------------------------------------
+
+bool SSamplerProgram::editLibrary( const std::function<bool( audio::twSamplerLibrary & )> &fn,
+                                   QString *why )
+{
+    if( !isReadable() ) {
+        if( why )
+            *why = QStringLiteral( "the stored program could not be read (%1); it is kept "
+                                   "verbatim and is not editable" ).arg( loadError_ );
+        return false;
+    }
+    if( !library_ ) {
+        if( why ) *why = QStringLiteral( "this instance does not play a library program" );
+        return false;
+    }
+    audio::twSamplerLibrary work = *library_;
+    if( !fn( work ) ) return false;
+    *library_ = std::move( work );
+    model_    = library_->applied();
+    publish_();
+    reconcileSamples_();
+    emit programChanged();
+    return true;
+}
+
+SSamplerProgram::ProgramState SSamplerProgram::programState() const
+{
+    ProgramState s;
+    if( library_ ) {
+        s.library = true;
+        s.base    = library_->baseXml();
+        s.overlay = library_->overlayXml();
+    } else {
+        s.program = model_.toXml();
+    }
+    return s;
+}
+
+bool SSamplerProgram::restoreProgramState( const ProgramState &state, QString *why )
+{
+    if( !isReadable() ) {
+        if( why )
+            *why = QStringLiteral( "the stored program could not be read (%1); it is kept "
+                                   "verbatim and is not editable" ).arg( loadError_ );
+        return false;
+    }
+    std::string err;
+    if( state.library ) {
+        auto lib = std::make_unique<audio::twSamplerLibrary>();
+        if( !audio::twSamplerLibrary::fromXml( state.base, state.overlay, *lib, &err ) ) {
+            if( why ) *why = QString::fromStdString( err );
+            return false;
+        }
+        model_   = lib->applied();
+        library_ = std::move( lib );
+    } else {
+        audio::twSamplerProgramModel m;
+        if( !audio::twSamplerProgramModel::fromXml( state.program, m, &err ) ) {
+            if( why ) *why = QString::fromStdString( err );
+            return false;
+        }
+        model_ = std::move( m );
+        library_.reset();
+    }
     publish_();
     reconcileSamples_();
     emit programChanged();
@@ -1645,6 +1725,17 @@ int SSamplerProgram::serialize( QTextStream &o )
     o << ">\n";
     const QString text = isReadable() ? QString::fromStdString( model_.toXml() ) : rawText_;
     o << "<program>" << cdata( text ) << "</program>\n";
+    // A LIBRARY program (QBX-278): the base and the overlay, each as the core
+    // writes it; <program> above is what they play, for a reader that does
+    // not know <library>. Written only for a library instance, so every
+    // other file is byte-unchanged.
+    if( !rawLibrary_.isEmpty() ) {
+        o << rawLibrary_ << "\n";
+    } else if( library_ ) {
+        o << "<library><base>" << cdata( QString::fromStdString( library_->baseXml() ) )
+          << "</base><overlay>" << cdata( QString::fromStdString( library_->overlayXml() ) )
+          << "</overlay></library>\n";
+    }
     for( const auto &l : live ) l.second->serialize( o );
     o << "</" << cls << ">\n";
     return 0;
@@ -1664,6 +1755,29 @@ SLink *SSamplerProgram::instantiateFromDomElement( SProjectLoader &loader, QDomE
         prog->loadError_ = QStringLiteral( "the element holds no program" );
     } else if( !audio::twSamplerProgramModel::fromXml( text.toStdString(), prog->model_, &err ) ) {
         prog->loadError_ = QString::fromStdString( err );
+    }
+    // A LIBRARY program (QBX-278): the truth is base + overlay; the applied
+    // <program> beside them is for readers that do not know <library>.
+    const QDomElement le = element.firstChildElement( QStringLiteral( "library" ) );
+    if( prog->isReadable() && !le.isNull() ) {
+        auto lib = std::make_unique<audio::twSamplerLibrary>();
+        const QString base    = le.firstChildElement( QStringLiteral( "base" ) ).text();
+        const QString overlay = le.firstChildElement( QStringLiteral( "overlay" ) ).text();
+        if( audio::twSamplerLibrary::fromXml( base.toStdString(), overlay.toStdString(), *lib, &err ) ) {
+            prog->model_   = lib->applied();
+            prog->library_ = std::move( lib );
+            const QString report = QString::fromStdString( prog->library_->report() );
+            if( !report.isEmpty() )
+                qInfo().noquote() << QStringLiteral( "NassauDigital: library program %1: %2" )
+                                         .arg( QString::fromStdString( prog->library_->basePath() ),
+                                               report );
+        } else {
+            prog->loadError_ = QStringLiteral( "the library program: " ) + QString::fromStdString( err );
+            QString raw;
+            QTextStream ts( &raw );
+            le.save( ts, -1 );
+            prog->rawLibrary_ = raw.trimmed();
+        }
     }
     if( !prog->isReadable() ) {
         prog->rawText_ = text;

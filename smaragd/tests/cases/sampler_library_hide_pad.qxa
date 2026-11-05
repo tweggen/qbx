@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-278 (nassau-digital DESIGN 8, the author's decision of 2026-11-04):
+  HIDING A LIBRARY'S PAD ROW. hide-pad n= is an overlay edit with hide-zone's
+  mechanics: one base Pads row is left out of what plays, so the pad goes
+  back to its default key (36 + n), or a pad 92..95, which has no default,
+  ceases to exist. The base keeps the row; undo puts it back where it was; a
+  base without the row orphans the hide.
+
+  The library (../sampler_library_hide_v1.xml, libraryVersion 1) has pad 5
+  on 36 and pad 93 on 70; version 2 dropped pad 93's row.
+
+  Gated here: hide-pad on a library writes the overlay and the base keeps
+  its rows; pad 5 back on 41, pad 93 gone (its bank-5 slot cannot be
+  selected); undo and redo of each, exact; set-pad-key after the hide
+  records key.was 41; the refusals (a pad with no base row, a row already
+  hidden, n 96, no n, an instance that is not a library, no program),
+  each changing nothing; save and reload; version 2 orphans the hide of
+  93 (reported, pad 5 still hidden); rebase keeps the orphan.
+-->
+<SActionScript version="1" name="sampler_library_hide_pad">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <hide-pad trackPath="0" slotIndex="0" n="5" expectReject="true"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" exists="0"/>
+
+    <!-- On a program of its own: refused, it has no library row. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="40" keyHi="64" rootKey="52" mode="oneshot">
+      <layer src="test:wide"/>
+    </add-zone>
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="60"/>
+    <hide-pad trackPath="0" slotIndex="0" n="5" expectReject="true"/>
+    <assert-log contains="hide-pad: track 0 slot 0: REFUSED: this instance does not play a library program; hide-pad hides a library's pad row" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="0" pads="5:60"/>
+
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_hide_v1.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" pads="5:36;93:70" overlayEdits="0"
+                            capture="lib1"/>
+
+    <!-- ............................................... hide pad 93, then 5 -->
+    <hide-pad trackPath="0" slotIndex="0" n="93"/>
+    <assert-log contains="hide-pad: track 0 slot 0: pad 93's library row (key 70) is hidden; the pad plays key -1" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:36" overlayEdits="1" baseVersion="1"
+                            overlayContains="&lt;hide-pad n=&quot;93&quot;/&gt;" libraryReport=""
+                            padsOnKey="34" onKey="70" differsFromCaptured="lib1" capture="h93"/>
+    <!-- Pad 93 (bank 5, pad 13) no longer exists. -->
+    <set-sampler-view trackPath="0" slotIndex="0" padBank="5" pad="13" expectReject="true"/>
+    <hide-pad trackPath="0" slotIndex="0" n="5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="" overlayEdits="2" padsOnKey="5" onKey="41"
+                            capture="h5"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="h93" overlayEdits="1"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" overlayEdits="0" baseVersion=""
+                            pads="5:36;93:70" padsOnKey="34;93" onKey="70"/>
+    <redo/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="h5" overlayEdits="2"/>
+
+    <!-- set-pad-key after the hide: key.was is the default the hide left. -->
+    <set-pad-key trackPath="0" slotIndex="0" n="5" key="44"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="5:44"
+                            overlayContains="&lt;set-pad n=&quot;5&quot; key=&quot;44&quot; key.was=&quot;41&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="h5"/>
+
+    <!-- ......................................................... refusals -->
+    <hide-pad trackPath="0" slotIndex="0" n="5" expectReject="true"/>
+    <assert-log contains="hide-pad: track 0 slot 0: REFUSED: pad 5's base row does not play now (already hidden" minCount="1"/>
+    <hide-pad trackPath="0" slotIndex="0" n="1" expectReject="true"/>
+    <assert-log contains="hide-pad: track 0 slot 0: REFUSED: pad 1 has no row in the base (nothing to hide)" minCount="1"/>
+    <hide-pad trackPath="0" slotIndex="0" n="96" expectReject="true"/>
+    <assert-log contains="hide-pad: track 0 slot 0: REFUSED: pad 96 is not a pad (0..95)" minCount="1"/>
+    <hide-pad trackPath="0" slotIndex="0" expectReject="true"/>
+    <assert-log contains="hide-pad: track 0 slot 0: REFUSED: hide-pad needs n=" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="h5" overlayEdits="2"/>
+
+    <!-- ............................................... save, reload -->
+    <save-project path="../../build/sampler_library_hide_pad.qxp"/>
+    <assert-file-contains path="../../build/sampler_library_hide_pad.qxp"
+                          text="&lt;hide-pad n=&quot;93&quot;/&gt;"/>
+    <assert-file-contains path="../../build/sampler_library_hide_pad.qxp"
+                          text="&lt;Pad n=&quot;93&quot; key=&quot;70&quot;/&gt;"/>
+    <load-project path="../../build/sampler_library_hide_pad.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="h5" installed="1"
+                            overlayEdits="2" pads=""/>
+
+    <!-- .................... version 2 dropped pad 93's row: that hide is orphaned -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_hide_v2.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="" overlayEdits="2"
+                            libraryReport="libraryVersion 1-&gt;2; #0 hide-pad orphaned 93"/>
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" pads="" overlayEdits="2" baseVersion="2"
+                            libraryReport="#0 hide-pad orphaned 93"
+                            overlayContains="&lt;hide-pad n=&quot;93&quot;/&gt;"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

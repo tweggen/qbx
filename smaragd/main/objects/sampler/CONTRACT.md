@@ -468,9 +468,35 @@ changed for it.
     model state of this object and is NOT saved (invariant 11, now the author's
     answer, not an assumption). `select-zones` stays undoable.
 
+### QBX-278: a library program, and the pad reassignment as an overlay edit
+
+32. **A LIBRARY INSTANCE IS BASE + OVERLAY, AND ONLY THE OVERLAY IS EDITED**
+    (nassau-digital DESIGN §8; the author's decision of 2026-11-04).
+    `set-sampler-library` gives the instance a read-only BASE (the library
+    program's text, read once and kept) and an OVERLAY
+    (`audio::twSamplerLibrary`, tw/sampler's forwarder to the core's
+    nd_overlay); `model()` is always `library()->applied()`, the base with the
+    overlay applied, and is replaced only through `editLibrary()` or
+    `restoreProgramState()`, which publish like `edit()`. `edit()` REFUSES on
+    a library instance, so no program verb can write into what the next
+    overlay edit would recompute away; `set-pad-key` there records the core's
+    `set-pad` (`n`, `key`, `key.was`), and `hide-pad n=` the core's
+    `hide-pad` (a base `<Pads>` row left out of what plays; refused off a
+    library, and for a pad with no base row or a row that does not play). A newer base under the overlay
+    (`set-sampler-library` again) keeps the overlay; an edit whose base value
+    moved still applies and is reported drifted (`twSamplerLibrary::report()`);
+    `rebase-sampler-library` accepts the base. Every inverse of these is
+    `restore-sampler-state` with the instance's whole state before, which for
+    an overlay edit is exactly "remove the edit and write the previous value
+    back". Saved as `<library><base>CDATA</base><overlay>CDATA</overlay>
+    </library>` after `<program>` (which holds the applied program, for a
+    reader that does not know `<library>`), only for a library instance, so
+    every other file is byte-unchanged; a `<library>` the core refuses on load
+    makes the program unreadable (invariant 10) and is written back verbatim.
+
 ### QBX-274: a bounce over an armed track waits
 
-32. **A BOUNCE OVER A LIVE-OWNED TRACK IS DEFERRED UNTIL THE DISARM, AND
+33. **A BOUNCE OVER A LIVE-OWNED TRACK IS DEFERRED UNTIL THE DISARM, AND
     NEVER INSTALLED SILENT** (the author's answer of 2026-11-04; proposal 21
     D4). A track the live lane owns refuses every freeze but the pump's and
     answers silence, so a bounce of content that holds one would be silence
@@ -677,7 +703,7 @@ absolute (there is nothing to be relative to).
   and through an edit, a save and a reload), `…_select_key` (a device note
   selects the pad, shared-key rule, bank switch, keys no pad plays).
 
-- `qxa.sampler_armed_bounce_waits` (QBX-274) — invariant 32's before-check:
+- `qxa.sampler_armed_bounce_waits` (QBX-274) — invariant 33's before-check:
   the bounce the arm asks for waits (generation 1 kept, `waiting="track
   armed" waitingFor="1"`, the meter page 0.549807 where main read 0), an edit
   while armed waits too, an offline render while armed bounces FRESH and hears
@@ -700,6 +726,14 @@ absolute (there is nothing to be relative to).
   verbs' own `gesture=` merge, and what never merges), `…_select_views`,
   `…_drop`.
 
+- QBX-278: `qxa.sampler_library_pads` (invariant 32): a library instance,
+  set-pad-key writing the overlay (`key.was` the row's key or the default),
+  undo/redo, the other verbs refused, save/reload, a newer base drifting the
+  edit while the overlay's key plays, rebase clearing it, undo/redo of each.
+  `qxa.sampler_library_hide_pad`: hide-pad (pad back on its default, a pad
+  92..95 gone), undo/redo, set-pad after the hide, the refusals, save/reload,
+  a base without the row orphaning the hide, rebase keeping the orphan.
+
 ## Not gated / known limits
 
 - Q6: the CYCLE and PUNCH regions do not apply to a take into the instrument:
@@ -715,6 +749,15 @@ absolute (there is nothing to be relative to).
   an export would write. The device-note pad selection changes saved state
   without marking the project modified. A library overlay cannot reassign a
   pad (the core has no overlay verb for the table); that is QBX-278.
+  *(Built by QBX-278: invariant 32.)*
+- QBX-278: on a library instance only the pad reassignment and hide-pad are
+  overlay edits (the rest is QBX-282); set-zone / set-layer / set-sampler-program, add / remove, recording
+  and asset links are REFUSED there, not routed into the overlay (the core
+  has the verbs; qbx does not make them yet). There is no flatten verb and no
+  greyed orphan display in the editor. The library is read when
+  `set-sampler-library` runs, never re-read on load: a newer library file on
+  disk is seen only when the verb is run again (the author accepted both,
+  2026-11-04).
 
 - `qxa.sampler_q5_live_play` (QBX-271) — Q5.1, transport stopped: the
   sampler (panned left) and the test sine (panned right) armed on one MIDI
@@ -769,8 +812,8 @@ absolute (there is nothing to be relative to).
 - The bounce reads the asset's window as start + length in the content: a
   stretched, warped or looped asset window is bounced unstretched and
   unlooped (no qbx verb makes one today).
-- *(Fixed by QBX-274, invariant 32: a bounce over an armed track waits for
-  the disarm.)* What invariant 32 does NOT cover: an arm AND its disarm both
+- *(Fixed by QBX-274, invariant 33: a bounce over an armed track waits for
+  the disarm.)* What invariant 33 does NOT cover: an arm AND its disarm both
   landing inside one bounce (1–11 ms) leave the after-check nothing to see;
   the disarm moves the content epoch, so the next arrangementChanged re-bounces
   within the debounce, but the silent generation plays until then. A

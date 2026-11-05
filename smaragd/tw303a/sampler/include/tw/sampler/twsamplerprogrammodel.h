@@ -70,6 +70,8 @@ struct twSamplerPrior {
 // Attribute name -> text, in the order given.
 using twSamplerAttrs = std::vector<std::pair<std::string, std::string>>;
 
+class twSamplerLibrary;
+
 class twSamplerProgramModel {
 public:
     twSamplerProgramModel();                       // the core's default (empty) program
@@ -186,6 +188,74 @@ public:
     // `key` for exactly such a pad). Refused (false, `error`): n out of 0..95,
     // key out of 0..127.
     bool setPadKey( int n, int key, int *priorKey, std::string *error );
+
+    struct Impl;
+
+private:
+    friend class twSamplerLibrary;   // applied() fills a model from the core's program
+    std::unique_ptr<Impl> impl_;
+};
+
+// twSamplerLibrary — a LIBRARY program (nassau-digital DESIGN §8): a read-only
+// BASE program with the user's OVERLAY of edits on top, a thin forwarder to the
+// core's nd_overlay (QBX-278). What plays is applied(): the base with the
+// overlay applied, edit by edit. The base is never written; the overlay's
+// `base` attribute says where it came from (qbx's library path, carried and
+// written back). Qt-free, main thread only, never on the audio thread.
+//
+// The only overlay edits qbx makes so far are the PAD REASSIGNMENT (`set-pad`,
+// the author's decision of 2026-11-04): recordPad() appends one set-pad with
+// key.was (the pad's key before: its row's, its default 36 + n, or "none");
+// and hiding a base pad row (`hide-pad`, the same day): hidePad().
+// rebase() accepts the current base (the core's rebaseOverlay): every drifted
+// edit's `.was` becomes what the base has under it, so the report clears and
+// nothing that plays changes.
+class twSamplerLibrary {
+public:
+    twSamplerLibrary();
+    twSamplerLibrary( const twSamplerLibrary &o );
+    twSamplerLibrary &operator=( const twSamplerLibrary &o );
+    ~twSamplerLibrary();
+
+    // Both texts through the core's readers; an empty overlay text is an
+    // empty overlay. False (and `error`) when either is refused.
+    static bool fromXml( const std::string &baseXml, const std::string &overlayXml,
+                         twSamplerLibrary &out, std::string *error = nullptr );
+    std::string baseXml() const;      // the core's writer
+    std::string overlayXml() const;   // byte-stable (the core keeps every verb as written)
+
+    // Replace the base (a newer version of the library), keeping the overlay.
+    bool setBase( const std::string &baseXml, std::string *error );
+    void setBasePath( const std::string &path );   // the overlay's `base` attribute
+    std::string basePath() const;
+    std::string libraryVersion() const;            // the base's, "" when it has none
+    std::string baseVersion() const;               // the overlay's
+    std::size_t editCount() const;
+
+    // The base with the overlay applied.
+    twSamplerProgramModel applied() const;
+
+    // THE REPORT (DESIGN §8): one line per edit that is not plainly applied,
+    // in order, plus the library-version mismatch first, joined by "; ":
+    //   "libraryVersion 3->4; #0 set-pad drifted key 36->42; #2 set-zone orphaned 17"
+    // "" when every edit applied as written and the versions agree.
+    std::string report() const;
+    int drifted() const;
+    int orphaned() const;
+    bool versionMismatch() const;
+
+    // Reassign pad n to `key` as an overlay edit (core recordPadEdit). False
+    // (and `error`) when the core refuses: n outside 0..95, key outside 0..127.
+    bool recordPad( int n, int key, int *priorKey, std::string *error );
+    // Hide pad n's BASE row from what plays as an overlay edit (core
+    // recordHidePad, the author's decision of 2026-11-04): the pad goes back
+    // to its default key, or a pad 92..95 ceases to exist. False (and
+    // `error`) when the core refuses: n outside 0..95, no base row, or the
+    // row does not play now.
+    bool hidePad( int n, std::string *error );
+    // Accept the base: re-stamp baseVersion, refresh the drifted `.was`.
+    // Returns how many edits were refreshed.
+    int rebase();
 
     struct Impl;
 

@@ -220,6 +220,10 @@ const QStringList &checkNames()
         // QBX-277: the program's <Pads> table, and the pads playing a key.
         QStringLiteral( "pads" ),         QStringLiteral( "padsOnKey" ),
         QStringLiteral( "onKey" ),
+        // QBX-278: a library program (base + overlay).
+        QStringLiteral( "library" ),      QStringLiteral( "libraryReport" ),
+        QStringLiteral( "overlayContains" ), QStringLiteral( "overlayAbsent" ),
+        QStringLiteral( "overlayEdits" ), QStringLiteral( "baseVersion" ),
     };
     return n;
 }
@@ -406,6 +410,33 @@ SApplyResult SAssertSamplerProgramAction::apply( SProject *project )
         if( on.join( QLatin1Char( ';' ) ) != get( "padsOnKey" ) )
             fails << QStringLiteral( "padsOnKey (key %1): want \"%2\", got \"%3\"" )
                          .arg( get( "onKey" ), get( "padsOnKey" ), on.join( QLatin1Char( ';' ) ) );
+    }
+    // QBX-278: `library` = 1 | 0; on a library, `libraryReport` = the drift
+    // report exactly ("" = every edit applied as written, the versions agree),
+    // `overlayContains` / `overlayAbsent` = a substring of the overlay's text,
+    // `overlayEdits` = how many verbs it holds, `baseVersion` = the overlay's.
+    if( has( "library" ) && ( get( "library" ) == QLatin1String( "1" ) ) != prog->isLibrary() )
+        fails << QStringLiteral( "library: want %1, got %2" ).arg( get( "library" ) ).arg( prog->isLibrary() ? 1 : 0 );
+    if( has( "libraryReport" ) || has( "overlayContains" ) || has( "overlayAbsent" ) || has( "overlayEdits" ) ||
+        has( "baseVersion" ) ) {
+        const audio::twSamplerLibrary *lib = prog->library();
+        if( !lib ) {
+            fails << QStringLiteral( "the instance does not play a library program" );
+        } else {
+            const QString report  = QString::fromStdString( lib->report() );
+            const QString overlay = QString::fromStdString( lib->overlayXml() );
+            if( has( "libraryReport" ) && report != get( "libraryReport" ) )
+                fails << QStringLiteral( "libraryReport: want \"%1\", got \"%2\"" ).arg( get( "libraryReport" ), report );
+            if( has( "overlayContains" ) && !overlay.contains( get( "overlayContains" ) ) )
+                fails << QStringLiteral( "overlayContains: \"%1\" not in \"%2\"" ).arg( get( "overlayContains" ), overlay );
+            if( has( "overlayAbsent" ) && overlay.contains( get( "overlayAbsent" ) ) )
+                fails << QStringLiteral( "overlayAbsent: \"%1\" is in \"%2\"" ).arg( get( "overlayAbsent" ), overlay );
+            if( has( "overlayEdits" ) && get( "overlayEdits" ).toULongLong() != lib->editCount() )
+                fails << QStringLiteral( "overlayEdits: want %1, got %2" ).arg( get( "overlayEdits" ) ).arg( lib->editCount() );
+            if( has( "baseVersion" ) && get( "baseVersion" ) != QString::fromStdString( lib->baseVersion() ) )
+                fails << QStringLiteral( "baseVersion: want \"%1\", got \"%2\"" )
+                             .arg( get( "baseVersion" ), QString::fromStdString( lib->baseVersion() ) );
+        }
     }
     if( has( "recordInput" ) && get( "recordInput" ) != prog->recordInput() )
         fails << QStringLiteral( "recordInput: want \"%1\", got \"%2\"" )

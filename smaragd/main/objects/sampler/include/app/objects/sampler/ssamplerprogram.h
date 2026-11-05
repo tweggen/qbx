@@ -172,6 +172,34 @@ public:
     bool edit( const std::function<bool( audio::twSamplerProgramModel & )> &fn,
                QString *why = nullptr );
 
+    // --- a LIBRARY program (nassau-digital DESIGN §8; QBX-278) ---------------------
+    // An instance whose program comes from a LIBRARY holds a read-only BASE
+    // (the library program, as read when set-sampler-library took it) and the
+    // user's OVERLAY of edits; what plays (model()) is the base with the
+    // overlay applied. The only overlay edit qbx makes so far is the pad
+    // reassignment (set-pad-key -> the core's set-pad, the author's decision
+    // of 2026-11-04); every other program edit (edit() above) is REFUSED on a
+    // library instance with a reason, never written into the base. Saved
+    // beside the applied program as <library><base/><overlay/></library>, both
+    // as the core's text, so a reload plays what was saved.
+    bool isLibrary() const { return library_ != nullptr; }
+    const audio::twSamplerLibrary *library() const { return library_.get(); }
+    // The one way to change a library instance: `fn` edits a COPY; true makes
+    // it current, model() becomes its applied program, published like edit().
+    // Refused on an instance that is not a library or not readable.
+    bool editLibrary( const std::function<bool( audio::twSamplerLibrary & )> &fn,
+                      QString *why = nullptr );
+    // The instance's whole program state as text: what the library verbs'
+    // inverses put back (restore-sampler-state).
+    struct ProgramState {
+        bool        library = false;
+        std::string program;   // !library: the program
+        std::string base;      // library: the base program
+        std::string overlay;   // library: the overlay
+    };
+    ProgramState programState() const;
+    bool restoreProgramState( const ProgramState &state, QString *why = nullptr );
+
     // --- the selection (select-zones) ----------------------------------------------
     // The ids that are selected AND exist, in selection order. A removed zone
     // drops out by itself and comes back with its undo.
@@ -395,6 +423,8 @@ private:
     audio::twSamplerProgramModel                  model_;
     QString                                       loadError_;
     QString                                       rawText_;     // verbatim, when unreadable
+    std::unique_ptr<audio::twSamplerLibrary>      library_;     // null: not a library (QBX-278)
+    QString                                       rawLibrary_;  // the <library> element verbatim, when unreadable
     QVector<std::uint32_t>                        selection_;
     View                                          view_    = View::Key;
     int                                           padBank_ = 0;
