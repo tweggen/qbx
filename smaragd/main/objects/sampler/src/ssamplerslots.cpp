@@ -93,4 +93,25 @@ bool assetReachesTrack( SObject *body, const SObject *track, QString *via,
     return r;
 }
 
+namespace {
+LiveOwner &liveOwnerSlot()
+{
+    static LiveOwner h;
+    return h;
+}
+}  // namespace
+
+void setLiveOwnerHook( LiveOwner hook ) { liveOwnerSlot() = std::move( hook ); }
+
+QString liveOwnerOf( SObject *body )
+{
+    if( !body || !liveOwnerSlot() ) return QString();
+    return liveOwnerSlot()( body );
+}
+
+void liveOwnersMayHaveChanged()
+{
+    SSamplerProgram::recheckWaitingEverywhere();
+}
+
 }  // namespace ssampler

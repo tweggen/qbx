@@ -106,7 +106,11 @@ class twSamplerSample;
  * debounced. The bounce is a generation job like a file's (Job, below): a
  * worker freezes the content component's pages over the asset's window into
  * an immutable twSamplerSample, and the install, the render pin and the settle
- * are the file layer's.
+ * are the file layer's. A bounce over content that holds a LIVE-OWNED (armed)
+ * track would be the live guard's silence there, so it WAITS (QBX-274): it is
+ * not started while ssampler::liveOwnerOf() names a track, a finished one is
+ * discarded when it does by then, the layer keeps what it plays, and the
+ * disarm (ssampler::liveOwnersMayHaveChanged) bounces it.
  *
  * TEMPO MODES BY STRETCH (proposal 56 §4.8, Q4; DESIGN §5, §13). A layer of a
  * `tempo-loop` / `tempo-oneshot` zone whose method is `stretch` and whose
@@ -306,6 +310,13 @@ public:
         int           onsets    = -1;
         bool          analyzing = false;
         int           analyses  = 0;
+        // QBX-274: why the layer's bounce is DEFERRED ("" = it is not). A
+        // bounce over content that holds a live-owned (armed) track would be
+        // the guard's silence, so it waits for the disarm and the layer keeps
+        // its previous generation meanwhile. Today the one reason is
+        // "track armed"; `waitingFor` names the track (its spec).
+        QString       waiting;
+        QString       waitingFor;
     };
     LayerState layerState( std::uint32_t layerId ) const;
     // Jobs started and not yet installed (finished ones a render kept back
@@ -353,6 +364,11 @@ public:
     void flushDueBounces();
     // The debounce between an asset's epoch moving and its bounce starting.
     static int bounceDebounceMs();
+    // Re-ask ssampler::liveOwnerOf() for every waiting layer of THIS program
+    // and bounce the ones no longer blocked (debounced while a render runs).
+    void recheckWaiting();
+    // ...of every program that exists (ssampler::liveOwnersMayHaveChanged).
+    static void recheckWaitingEverywhere();
 
     struct Job;    // Qt-free state shared with one worker (ssamplerprogram.cpp)
     struct Gate;
@@ -457,6 +473,12 @@ private:
     std::uint32_t                                   nextLinkId_ = 1; // never reused
     std::map<std::uint32_t, int>                    renders_;
     std::set<std::uint32_t>                         due_;            // bounce waiting
+    // QBX-274: a bounce DEFERRED because its content holds a live-owned track:
+    // layer -> that track's spec. Not saved: a load arrives with nothing
+    // armed (proposal 21 D9), so a reloaded link bounces at once.
+    std::map<std::uint32_t, QString>                liveWait_;
+    // Mark a layer waiting (and say so once); false when it already was.
+    bool deferBounce_( std::uint32_t layerId, const QString &owner, const char *why );
     QTimer                                         *debounce_ = nullptr;
 
     // Q4: onset lists by source content (from the sidecar or an analysis),

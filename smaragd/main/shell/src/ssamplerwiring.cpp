@@ -11,6 +11,8 @@
 #include "app/objects/track/spluginslot.h"
 #include "app/objects/track/strack.h"
 #include "app/servicesui/soptions.h"
+#include "app/shell/sapplication.h"
+#include "app/shell/slivemonitor.h"
 #include "app/shell/ssettings.h"
 
 #include "tw/core/twlog.h"
@@ -20,6 +22,7 @@
 
 #include <QDebug>
 #include <QPointer>
+#include <QSet>
 
 #include <algorithm>
 #include <chrono>
@@ -137,6 +140,30 @@ void install()
     } );
 }
 
+void installLiveOwnership( SApplication *app )
+{
+    QPointer<SApplication> ap( app );
+    ssampler::setLiveOwnerHook( [ap]( SObject *body ) -> QString {
+        SLiveMonitor *m = ap ? ap->liveMonitor() : nullptr;
+        if( !m || !body ) return QString();
+        // The PLAIN walk (child and content links): what a freeze of the
+        // body's content reaches. Never the sampler hops of the cycle walk --
+        // a second sampler inside the content plays its own installed
+        // generation, its asset is not frozen by this bounce.
+        for( STrack *t : m->liveOwnedTracks() ) {
+            QSet<const SObject *> seen;
+            if( !sarrangements::detail::reachesRec( body, t, seen, nullptr ) ) continue;
+            SProject *proj = body->getProjectSafe();
+            const QString spec = proj ? splacements::specOf( proj, t ) : QString();
+            return spec.isEmpty() ? t->getSName() : spec;
+        }
+        return QString();
+    } );
+    if( app )
+        QObject::connect( app, &SApplication::liveLanesMayHaveChanged, app,
+                          [] { ssampler::liveOwnersMayHaveChanged(); } );
+}
+
 }  // namespace ssamplerwiring
 
 namespace ssamplerwiring {
@@ -240,6 +267,10 @@ bool settleBeforeRender( SProject *project, QString *why )
         // An asset bounce the debounce still holds back (Q3) is outstanding
         // too: start it now, so this render hears the asset as it is.
         prog->flushDueBounces();
+        // A layer WAITING for an armed track (QBX-274) is bounced here too:
+        // startRender() suspended the live lane before this settle, so
+        // nothing is live-owned now and the bounce hears the asset as it is
+        // (the author, 2026-11-04, "render bounces fresh").
         if( prog->outstandingGenerations() == 0 ) continue;
         // ONE bound for the whole render, not one per track.
         const int left = std::max<qint64>(

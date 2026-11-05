@@ -611,7 +611,9 @@ const QStringList &layerCheckNames()
                                    // Q4 (QBX-268)
                                    QStringLiteral( "timeScale" ),  QStringLiteral( "stretched" ),
                                    QStringLiteral( "onsets" ),     QStringLiteral( "analyzing" ),
-                                   QStringLiteral( "analyses" ) };
+                                   QStringLiteral( "analyses" ),
+                                   // QBX-274
+                                   QStringLiteral( "waiting" ),    QStringLiteral( "waitingFor" ) };
     return n;
 }
 
@@ -657,7 +659,7 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
     }
     const QString got = QStringLiteral( "generation=%1 rendering=%2 pending=%3 installs=%4 src=%5 "
                                         "renders=%6 asset=%7 timeScale=%8 stretched=%9 onsets=%10 "
-                                        "analyzing=%11 analyses=%12" )
+                                        "analyzing=%11 analyses=%12 waiting=%13 waitingFor=%14" )
                             .arg( (qulonglong)st.installedGeneration )
                             .arg( st.rendering() ? 1 : 0 )
                             .arg( (qulonglong)st.pendingGeneration )
@@ -669,7 +671,8 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
                             .arg( st.stretched ? 1 : 0 )
                             .arg( st.onsets )
                             .arg( st.analyzing ? 1 : 0 )
-                            .arg( st.analyses );
+                            .arg( st.analyses )
+                            .arg( st.waiting, st.waitingFor );
     QStringList fails;
     auto num = [&]( const char *k, qulonglong have ) {
         if( checks_.contains( QLatin1String( k ) ) &&
@@ -697,6 +700,13 @@ SApplyResult SAssertSamplerLayerAction::apply( SProject *project )
     }
     if( checks_.contains( QStringLiteral( "asset" ) ) && checks_.value( "asset" ) != assetNow )
         fails << QStringLiteral( "asset: want \"%1\"" ).arg( checks_.value( "asset" ) );
+    // QBX-274: the deferred-bounce mark, compared EXACTLY ("" = not waiting),
+    // and the track it waits for.
+    if( checks_.contains( QStringLiteral( "waiting" ) ) && checks_.value( "waiting" ) != st.waiting )
+        fails << QStringLiteral( "waiting: want \"%1\"" ).arg( checks_.value( "waiting" ) );
+    if( checks_.contains( QStringLiteral( "waitingFor" ) ) &&
+        checks_.value( "waitingFor" ) != st.waitingFor )
+        fails << QStringLiteral( "waitingFor: want \"%1\"" ).arg( checks_.value( "waitingFor" ) );
     if( checks_.contains( QStringLiteral( "src" ) ) && checks_.value( "src" ) != st.installedSrc )
         fails << QStringLiteral( "src: want \"%1\"" ).arg( checks_.value( "src" ) );
     if( checks_.contains( QStringLiteral( "captureTrackEpoch" ) ) ||

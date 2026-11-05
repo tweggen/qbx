@@ -1076,6 +1076,19 @@ playback run plays whatever generation is installed, and a later install
 stales the track as any edit does (DESIGN §6.1 asks byte identity of renders,
 not of playback).
 
+**A bounce over an ARMED track waits for the disarm (QBX-274; objects/sampler
+inv. 32).** The SApplication constructor calls
+`ssamplerwiring::installLiveOwnership()` once the live monitor exists. It
+installs `ssampler::setLiveOwnerHook` — an asset body → the spec of a track in
+`SLiveMonitor::liveOwnedTracks()` (the closure; NOT a disarm tail's members,
+whose ownership was released when the disarm was asked for, and NOT what a
+render's suspension released) that the body reaches by the PLAIN child and
+content walk — and connects `liveLanesMayHaveChanged` to
+`ssampler::liveOwnersMayHaveChanged()`. **A render bounces fresh** (the author,
+2026-11-04, on #346): `startRender()` suspends the live lane BEFORE the settle
+above, so a waiting layer is bounced there like any due one, the barrier's
+line counts it, and the render is the same bytes as in a fresh process.
+
 ## The media layer's two hooks (proposal 38 gate 3)
 
 Three injections, split across two classes because the status bar belongs to

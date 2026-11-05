@@ -30,6 +30,7 @@
 #include <QList>
 
 class QString;
+class SApplication;
 class SProject;
 class SPluginSlot;
 class SSamplerProgram;
@@ -38,6 +39,15 @@ class STrack;
 namespace ssamplerwiring {
 
 void install();
+
+// QBX-274: A BOUNCE OVER A LIVE-OWNED TRACK WAITS FOR THE DISARM. Installs
+// ssampler's live-owner hook (an asset body -> the spec of a track the live
+// lane owns that the body reaches through child and content links, the
+// monitor's liveOwnedTracks(): the closure, never what a render's suspension
+// released) and re-checks every waiting layer on
+// SApplication::liveLanesMayHaveChanged (a superset: the re-check decides).
+// Called from the SApplication constructor once the live monitor exists.
+void installLiveOwnership( SApplication *app );
 
 // THE OFFLINE RENDER'S SETTLE (proposal 56 B8, §4.6; DESIGN §6.1 rule 3).
 // Called by SApplication::startRender() on the MAIN thread, before the run

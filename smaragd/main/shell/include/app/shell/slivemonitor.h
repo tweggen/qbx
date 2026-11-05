@@ -203,6 +203,13 @@ public:
     bool active() const;
     /// Is this track being rendered by the pump right now?
     bool isLive( const STrack *track ) const;
+    /// The tracks whose processors the live lane OWNS (the closure). QBX-274:
+    /// a NassauDigital asset bounce over any of them waits for the disarm.
+    /// NOT the ones a running render's suspension holds: their ownership is
+    /// really released for the render, so the render's settle bounces fresh
+    /// (the author, 2026-11-04). Nor a departing tail's members: their
+    /// ownership was released when the disarm was asked for.
+    std::vector<STrack *> liveOwnedTracks() const;
     /// Peak of what the input delivered, 0..1, WITHOUT clearing it - the
     /// assertion's view, which must not depend on who read it last.
     double inputPeak( const STrack *track ) const;

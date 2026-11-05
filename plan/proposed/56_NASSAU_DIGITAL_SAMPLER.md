@@ -2130,7 +2130,8 @@ item 6). Where the text above did not survive the build, or needed reading:
    QBX-274**: a sampler asset bounce (Q3) freezes the asset's content
    directly, so if that content holds an ARMED instrument track the freeze
    reaches a live-owned processor, is refused and counted, and the bounce is
-   silent for that span. No case builds it.
+   silent for that span. No case builds it. *(Built and gated by QBX-274: the bounce waits for
+   the disarm — §11 "QBX-274 as built".)*
 
 ### QBX-277 pads (2026-11-03)
 
@@ -2532,3 +2533,120 @@ previous value back.
 11. **The `-j4` flakes seen in the gate run**: `sampler_q7_hand_select`,
    `_select_views` and `_views` race on the per-user `sampler/defaultView`
    that `sampler_q7_default_view` writes (QBX-281). They pass serially.
+
+### QBX-274 as built: a bounce over an armed track waits (2026-11-04)
+
+Found by Q5 (§11 "Q5 as built", item 8): a Q3 bounce freezes the asset's
+content on a worker, and when that content holds a track the live lane OWNS
+(armed, proposal 21 D4) the processor refuses the freeze and answers silence;
+that silent bounce was installed as a generation. The author's answer
+(2026-11-04): DEFER the bounce until the track is disarmed; the layer keeps
+its previous generation and is marked waiting; the bounce runs by itself on
+the disarm; a first bounce with no previous generation stays silent until the
+disarm, and is reported. For an offline render meanwhile the first answer
+("it hears the previous generation and logs it") was replaced by the author's
+decision on #346 (item 5): the render bounces fresh. objects/sampler
+invariant 33 states it.
+
+1. **Measured on main 8b891a9a** (`sampler_armed_bounce_waits`' fixture: an
+   asset windowing a master instrument track; the sampler on another master
+   track). Arming the track MOVES its content epoch (the live exclusion
+   stales it), so the arm alone makes the asset due: generation 2 was
+   installed and the sampler's page read rms **0**, `liveOwnedRefusals` **2**;
+   after an edit while armed, generation 3, rms 0, refusals **4**. The race
+   (`sampler_armed_bounce_race`, a held first bounce released after the arm):
+   generation 1 installed, rms 0.
+2. **Two checks, one hook.** `ssampler::liveOwnerOf(body)` (installed by the
+   shell over `SLiveMonitor::liveOwnedTracks()` and the plain child/content
+   walk — never the sampler hops: a second sampler in the content plays its
+   own installed generation) is asked BEFORE a bounce starts (no job, no
+   `renders` count) and AFTER it finished, on the main thread (owned by then:
+   the result is discarded). The second exists for an arm that lands while a
+   bounce runs.
+3. **Why not count the worker's own refusals.** The first build did: a
+   per-thread twin of `liveOwnedRefusals` read around the bounce. The race
+   case measured it blind — the asset body's own capture (`SCut`, what a
+   placement plays) froze the armed track first, on its own thread; the
+   silent page landed in the track's page cache at the current epoch, and the
+   bounce read it from there. Zero refusals on the bounce's worker, a silent
+   generation installed. The engine change was dropped; ownership is asked
+   again instead.
+4. **The disarm.** `SApplication::liveLanesMayHaveChanged` (arm-track is its
+   only writer; a superset signal) calls `ssampler::liveOwnersMayHaveChanged()`,
+   which re-asks the hook for every waiting layer of every program (a
+   main-thread registry of the program objects, kept by their constructor and
+   destructor) and bounces the freed ones AT ONCE — gated by `renders` being 2
+   before any time has passed after the disarm. A waiting layer is not made
+   due by edits meanwhile (the debounce would re-ask and flap `rendering`); a
+   START (settle, the debounce, the disarm) re-asks through the before-check.
+   The ownership is released when the disarm is ASKED for (refresh's disarm
+   half, before its tail), so the signal raised right after it already sees
+   the track free.
+5. **What a render hears: it bounces fresh** (the author's decision of
+   2026-11-04, on #346). On main the render was already correct:
+   `startRender()` suspends the live lane BEFORE the settle, so nothing is
+   live-owned during it, and the suspension moves the content epoch, so the
+   settle re-bounced the asset as it is (main: the render heard the edit,
+   0.279253). The first build followed the first answer literally — a
+   render's suspended tracks counted as owned, the render heard the previous
+   generation (0.558505) and the barrier logged "the render hears the PREVIOUS
+   generation" — which cost DESIGN §6.1's byte identity against a render in a
+   fresh process. Decided: during an offline render nothing counts as
+   live-owned (`liveOwnedTracks()` is the closure only, never `suspended_`),
+   the render's settle bounces the waiting layer like any due one (the
+   barrier's `waited … for <n> sampler generation(s)` line counts it), the
+   render hears the edit and the wait is over; renders are byte-identical
+   armed, disarmed and from the project loaded back (gated). Live playback
+   while armed still keeps the previous generation and waits. **Reading
+   taken** (simplest, listed for the author): the generation the render
+   bounced is a correct bounce and STAYS installed for live playback after
+   the render; the resume is a fresh arm that moves the epoch again, so the
+   next action makes the layer wait again, still playing that generation (the
+   disarm then re-bounces the same material). The "PREVIOUS generation" /
+   "NO generation" barrier lines and the re-check after a render's resume are
+   gone; the one wait line left is the program's own `bounce WAITS`, which
+   only a real wait writes.
+6. **Not saved.** The wait is live state; a loaded project has nothing
+   live-owned (D9), so a reloaded link bounces as before.
+7. **Gates** (each watched failing on main, item 1):
+   `qxa.sampler_armed_bounce_waits` — the before-check, the previous
+   generation kept and audible (meter page 0.549807; main 0), the edit while
+   armed waiting (a settle without a render re-asks silently), the render
+   while armed bouncing fresh (0.279253) and its generation kept for playback
+   (meter 0.274904), the disarm bouncing at once (`renders` before any time
+   passes), a first bounce while armed (no generation, reported, undo/redo of
+   its `set-layer`, its zone removed and restored, then bounced fresh by a
+   render), and the same bytes: the armed render equals the disarmed one and
+   a render of the saved project loaded back. `qxa.sampler_armed_bounce_race`
+   — the after-check (DISCARDED, waiting, no generation, the meter 0;
+   `minLiveOwnedRefusals="1"`: the guard did fire), the disarm as the ONLY
+   trigger (the case runs at `SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS=60000`,
+   because the arm makes the layer due and the default debounce would
+   supersede the held bounce before its release), and a waiting layer that a
+   settle without a render leaves waiting and the render's settle bounces
+   fresh. `liveOwnedRefusals` is not bounded at 0 in either: the asset body's
+   own `SCut` capture is refused while armed whatever the sampler does
+   (QBX-283). The testkit gained `assert-sampler-layer waiting= waitingFor=`
+   (appended to the reported line).
+8. **Sabotages** (the harness writes each file from its own saved bytes,
+   touches it, rebuilds, runs both cases, restores and touches; the clean
+   rebuild after the last passes both). **All bite**, re-run after the
+   render decision: (S1) no before-check — both (the after-check still saves
+   the sound in `…_waits`, but `renders` and the "(before the job)" line
+   fail); (S2) no after-check — `…_race` only; (S4) the disarm signal not
+   connected — both; (S6i, the inverse of the first build's S6) a render that
+   still counts suspended tracks as owned — both (the render hears the
+   previous generation, and `…_waits`' byte identity fails); (S7) a waiting
+   layer made due by edits — both (`rendering` 1); (S8) the wait announced
+   every time — `…_waits`; (S9) a wait keeping the layer due — `…_race`;
+   (S10) a layer re-pointed to a non-link keeping its wait (the undo) —
+   `…_waits`; (S11) a removed layer keeping its wait — `…_waits`; (S13) the
+   re-check freeing nothing — both; (S14) the hook's walk finding nothing —
+   both. (The first build's S5, the re-check after a render's resume, and
+   S12, the barrier's wait lines, went with the code they sabotaged.)
+9. **Not gated / not covered**: an arm and its disarm both inside one bounce
+   (1–11 ms) — the after-check sees nothing, the disarm's epoch move
+   re-bounces within the debounce; a bounce during playback. Found and NOT
+   fixed: the asset body's own capture (`SCut`) of an armed track is refused
+   and counted, so a PLACEMENT of such an asset plays silence while the track
+   is armed — filed as QBX-283.

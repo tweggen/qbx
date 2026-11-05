@@ -1007,6 +1007,9 @@ SApplication::SApplication( int &argc, char **argv )
     // whose recorder SINKS it acquires, and destroyed before it.
     midiRecorder_.reset( new SMidiRecorder( this ) );
     samplerKeyTaps_.reset( new SSamplerKeyTaps( this ) );
+    // QBX-274: a NassauDigital asset bounce over a live-owned (armed) track
+    // waits for the disarm; the hook asks the monitor built above.
+    ssamplerwiring::installLiveOwnership( this );
     // The MASTER's entry, and the active one until a tab says otherwise.
     activeSelectionRoot_ = QString();
     selectionList_ = &selections_[ activeSelectionRoot_ ].list;

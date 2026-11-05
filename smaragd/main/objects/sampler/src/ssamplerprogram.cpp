@@ -4,6 +4,7 @@
 #include "app/model/sfilepathref.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
+#include "app/objects/sampler/ssamplerslots.h"
 #include "app/persistence/sprojectloader.h"
 
 #include "tw/graph/twcomponent.h"
@@ -447,10 +448,20 @@ bool renderRunning()
     return SAppContext::hasInstance() && SAppContext::get().isRenderingActive();
 }
 
+// Every program that exists (QBX-274): what ssampler::liveOwnersMayHaveChanged
+// walks. Main thread only, like the objects themselves; an entry lives exactly
+// as long as its object (constructor / destructor).
+std::set<SSamplerProgram *> &allPrograms()
+{
+    static std::set<SSamplerProgram *> s;
+    return s;
+}
+
 }  // namespace
 
 SSamplerProgram::SSamplerProgram( SProject *project ) : SObject( project )
 {
+    allPrograms().insert( this );
     setSName( QStringLiteral( "NassauDigital program" ) );
     // THE TRIGGER of a linked layer's bounce (DESIGN §6.2): qbx signals after
     // EVERY action; checkLinks_ costs one compare per linked layer and acts
@@ -467,6 +478,7 @@ SSamplerProgram::SSamplerProgram( SProject *project ) : SObject( project )
 
 SSamplerProgram::~SSamplerProgram()
 {
+    allPrograms().erase( this );
     // Every worker is joined here, on the main thread: a held one is released
     // by cancel(), a decoding one finishes its file. No worker outlives the
     // object it reports to (it reports to nothing, but its Job is shared).
@@ -770,6 +782,11 @@ SSamplerProgram::LayerState SSamplerProgram::layerState( std::uint32_t layerId )
     auto r = renders_.find( layerId );
     if( r != renders_.end() ) st.renders = r->second;
     st.bounceDue = due_.count( layerId ) != 0;
+    auto lw = liveWait_.find( layerId );
+    if( lw != liveWait_.end() ) {
+        st.waiting    = QStringLiteral( "track armed" );
+        st.waitingFor = lw->second;
+    }
     return st;
 }
 
@@ -802,7 +819,10 @@ void SSamplerProgram::reconcileSamples_( bool atBind )
                 if( jb->second->src == want ) continue;   // already on its way
                 cancelJob_( id );                         // superseded
             }
-            if( !link ) due_.erase( id );
+            if( !link ) {
+                due_.erase( id );
+                liveWait_.erase( id );   // nothing to bounce, nothing to wait for
+            }
             auto in = installed_.find( id );
             const QString have = in != installed_.end() ? in->second.src : QString();
             // Same text: a file is done; a link may still have MOVED, which
@@ -858,6 +878,8 @@ void SSamplerProgram::reconcileSamples_( bool atBind )
     for( std::uint32_t id : gone ) cancelJob_( id );
     for( auto it = due_.begin(); it != due_.end(); )
         it = layers.count( *it ) ? std::next( it ) : due_.erase( it );
+    for( auto it = liveWait_.begin(); it != liveWait_.end(); )
+        it = layers.count( it->first ) ? std::next( it ) : liveWait_.erase( it );
 
     if( !removed.empty() ) installChanged_( removed );
     if( bindDue ) checkLinks_( false );   // arms the debounce
@@ -1012,6 +1034,19 @@ void SSamplerProgram::startBounce_( std::uint32_t layerId, const QString &src, c
 {
     cancelJob_( layerId );
     due_.erase( layerId );
+    // QBX-274, BEFORE the job: a content that holds a live-owned (armed)
+    // track would be frozen into the guard's silence there (proposal 21 D4).
+    // The bounce waits for the disarm; the layer keeps what it plays.
+    {
+        std::uint32_t n = 0;
+        SObject *body = parseLinkSrc( src.toStdString(), n ) ? linkTarget( n ) : nullptr;
+        const QString owner = ssampler::liveOwnerOf( body );
+        if( !owner.isEmpty() ) {
+            deferBounce_( layerId, owner, "before" );
+            return;
+        }
+        liveWait_.erase( layerId );
+    }
     auto job        = std::make_shared<Job>();
     job->layerId    = layerId;
     job->generation = ++lastGeneration_[layerId];
@@ -1067,6 +1102,11 @@ void SSamplerProgram::checkLinks_( bool start )
                 due_.erase( id );
                 continue;
             }
+            // A layer WAITING for a live-owned track (QBX-274) is not made due
+            // by an edit: the disarm re-asks (recheckWaiting) and bounces the
+            // asset as it is then. Only a START (a settle, the debounce)
+            // re-asks here, through startBounce_'s own check.
+            if( !start && liveWait_.count( id ) ) continue;
             if( start ) startBounce_( id, src, now );
             else        due_.insert( id );
         }
@@ -1092,6 +1132,67 @@ void SSamplerProgram::checkLinks_( bool start )
 void SSamplerProgram::flushDueBounces()
 {
     checkLinks_( true );
+}
+
+bool SSamplerProgram::deferBounce_( std::uint32_t layerId, const QString &owner, const char *why )
+{
+    const bool fresh = !liveWait_.count( layerId );
+    liveWait_[layerId] = owner;
+    due_.erase( layerId );   // waiting supersedes due: only a re-ask bounces it
+    if( !fresh ) return false;
+    // Said ONCE per wait: a settle and the debounce re-ask (startBounce_)
+    // for as long as the asset differs from what the layer plays.
+    auto in = installed_.find( layerId );
+    const std::uint64_t g = in != installed_.end() ? in->second.generation : 0;
+    qWarning().noquote()
+        << ( g == 0
+                 ? QStringLiteral( "NassauDigital: layer %1: bounce WAITS (%2 the job): track %3 is "
+                                   "armed (live-owned); the layer has no generation and plays "
+                                   "nothing until the track is disarmed" )
+                       .arg( layerId ).arg( QLatin1String( why ) ).arg( owner )
+                 : QStringLiteral( "NassauDigital: layer %1: bounce WAITS (%2 the job): track %3 is "
+                                   "armed (live-owned); the layer keeps generation %4 until the "
+                                   "track is disarmed" )
+                       .arg( layerId ).arg( QLatin1String( why ) ).arg( owner )
+                       .arg( (qulonglong)g ) );
+    return true;
+}
+
+void SSamplerProgram::recheckWaiting()
+{
+    if( liveWait_.empty() || !installer_ ) return;
+    bool freed = false;
+    for( auto it = liveWait_.begin(); it != liveWait_.end(); ) {
+        std::string s;
+        model_.value( audio::twSamplerScope::Layer, it->first, "src", &s );
+        std::uint32_t n = 0;
+        SObject *body = parseLinkSrc( s, n ) ? linkTarget( n ) : nullptr;
+        const QString owner = ssampler::liveOwnerOf( body );
+        if( !owner.isEmpty() ) {
+            it->second = owner;
+            ++it;
+            continue;
+        }
+        qInfo().noquote() << QStringLiteral( "NassauDigital: layer %1: track %2 is no longer "
+                                             "live-owned; its deferred bounce runs now" )
+                                 .arg( it->first ).arg( it->second );
+        it    = liveWait_.erase( it );
+        freed = true;
+    }
+    // The freed layers differ from what they play (that is why they waited):
+    // checkLinks_ bounces them now, or -- under a running offline render,
+    // whose pages must not meet a bounce -- marks them due for the debounce,
+    // which tries again after the render.
+    if( freed ) checkLinks_( !renderRunning() );
+}
+
+void SSamplerProgram::recheckWaitingEverywhere()
+{
+    // A copy: a bounce never creates or deletes a program, but a defensive
+    // copy costs nothing here and cannot be invalidated.
+    const std::vector<SSamplerProgram *> progs( allPrograms().begin(), allPrograms().end() );
+    for( SSamplerProgram *p : progs )
+        if( allPrograms().count( p ) ) p->recheckWaiting();
 }
 
 void SSamplerProgram::onArrangementChanged_()
@@ -1177,7 +1278,28 @@ int SSamplerProgram::installFinished_( bool force )
             used      = j.onsetsUsed;
             stretched = j.stretched;
         }
-        if( sample ) {
+        // QBX-274, AFTER a bounce: the before-check (startBounce_) passed, but
+        // a track in the content may have become live-owned while the job ran
+        // (an arm under it). Its frames may then be the guard's silence --
+        // frozen by this worker, or read from a page another thread froze
+        // while the track was owned (measured: the asset body's own capture
+        // froze it first and the bounce read that page from the cache, so no
+        // refusal happened on this worker at all). The ownership is asked
+        // again, here: owned now means the bounce is NOT installed.
+        QString lateOwner;
+        if( sample && j.key && !j.sourceIn ) {
+            std::uint32_t n = 0;
+            SObject *body = parseLinkSrc( j.src.toStdString(), n ) ? linkTarget( n ) : nullptr;
+            lateOwner = ssampler::liveOwnerOf( body );
+        }
+        if( !lateOwner.isEmpty() ) {
+            qWarning().noquote()
+                << QStringLiteral( "NassauDigital: layer %1: generation %2 DISCARDED: track %3 "
+                                   "became live-owned while its bounce ran, so the bounce may "
+                                   "hold the guard's silence" )
+                       .arg( j.layerId ).arg( (qulonglong)j.generation ).arg( lateOwner );
+            deferBounce_( j.layerId, lateOwner, "after" );
+        } else if( sample ) {
             Installed rec{ j.generation, j.src, sample, j.key };
             rec.want      = j.want;
             rec.source    = source;

@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-274, THE RACE: A TRACK ARMED WHILE ITS ASSET'S BOUNCE IS ALREADY RUNNING.
+
+  sampler_armed_bounce_waits gates the check made BEFORE a bounce starts (is a
+  track in the content live-owned?). That check cannot see an arm that lands
+  AFTER the job started: the worker then freezes a processor that has become
+  live-owned in the meantime, the guard answers with silence, and the job
+  finishes "successfully". So the main thread asks the ownership AGAIN when
+  the bounce finishes, and a bounce whose content is live-owned by then is
+  DISCARDED, never installed: the layer keeps what it plays and waits for the
+  disarm like any other.
+
+  WHY NOT COUNT THE WORKER'S OWN REFUSALS. The first build did (a per-thread
+  refusal count read around the bounce) and this case measured it blind: the
+  asset body's own capture (SCut) froze the armed track first, on its own
+  thread, and the bounce read that silent page from the track's page cache -
+  zero refusals on the bounce's worker, generation 1 installed, silent.
+
+  THE FIXTURE is sampler_armed_bounce_waits' (track 0 the sampler, layer 2;
+  track 1 the test sine; "Inst asset" windows track 1 over [0, 24000), whose
+  note is played back at 0.5565). The race is made deterministic by the
+  render gate: the layer's FIRST bounce (the new link) is held before it
+  freezes anything, track 1 is armed, and only then is the bounce released.
+
+  The case runs with SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS=60000
+  (smaragd/CMakeLists.txt). The arm moves track 1's content epoch, which
+  makes the layer DUE; with the default 150 ms debounce that due bounce would
+  supersede the held one before it was released, the before-check would
+  answer it, and this case would no longer reach the worker's check at all.
+  With the debounce out of reach the held job is the only bounce until a
+  settle. For the same reason the disarm below is heard ONLY through
+  SApplication::liveLanesMayHaveChanged: nothing else starts a bounce inside
+  its one-second wait.
+
+  It is also the "first bounce, no previous generation" case of the author's
+  answer: the discarded bounce was the layer's first, so it plays nothing until
+  the disarm.
+
+  AN OFFLINE RENDER WHILE ARMED BOUNCES FRESH (the author, 2026-11-04, on
+  #346): startRender() suspends the live lane before its settle, so nothing
+  is live-owned then, the waiting layer is bounced as the asset is, the render
+  hears the edit and the layer stops waiting. The last section gates it here,
+  where only a settle can start a bounce: a wait-sampler-generations settle
+  (no suspension) leaves the layer waiting, the render's settle does not.
+
+  MEASURED ON MAIN 8b891a9a (QBX-274): the released bounce was installed as
+  generation 1 and the meter page read 0 (silence).
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1, with the live-instrument cases.
+-->
+<SActionScript version="1" name="sampler_armed_bounce_race">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Hit"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="60" velocity="127" channel="0"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="Seq"/>
+    <add-note clip="1,0" tick="0" dur="960" key="60" velocity="100" channel="0"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+    <create-asset container="1" startOffset="0" duration="24000" assetName="Inst asset"/>
+
+    <!-- ===== the first bounce starts with nothing armed, and is HELD -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Inst asset"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
+                          rendering="1" pending="1" renders="1" waiting=""/>
+
+    <!-- ===== the track is armed under it; then the bounce runs -->
+    <arm-track trackPath="1" armed="1"/>
+    <wait-ms ms="600"/>
+    <assert-input-meter trackPath="1" contains="live=on"/>
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="true"/>
+    <wait-ms ms="1000"/>
+    <assert-log contains="layer 2: generation 1 DISCARDED: track 1 became live-owned while its bounce ran"
+                minCount="1" maxCount="1"/>
+    <assert-log contains="layer 2: bounce WAITS (after the job): track 1 is armed (live-owned); the layer has no generation and plays nothing"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
+                          rendering="0" pending="0" installs="0" renders="1"
+                          waiting="track armed" waitingFor="1"/>
+    <!-- The guard fired (the asset body's own capture, at the least): the
+         refusal is real, only its silence is not installed. -->
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="1000"
+                          minLiveOwnedRefusals="1"/>
+    <!-- A first bounce has no previous generation: the layer plays nothing. -->
+    <assert-meter trackPath="0" position="53248" minRms="0" maxRms="0.00001"/>
+
+    <!-- ===== the disarm alone bounces it (the debounce is out of reach) -->
+    <arm-track trackPath="1" armed="0"/>
+    <assert-log contains="layer 2: track 1 is no longer live-owned; its deferred bounce runs now"
+                minCount="1" maxCount="1"/>
+    <wait-ms ms="1000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="1" renders="2" waiting=""/>
+    <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== armed again, the asset edited (velocity 50): a settle WITHOUT
+         a render starts the due bounce, and it waits (nothing suspended). -->
+    <arm-track trackPath="1" armed="1"/>
+    <wait-ms ms="600"/>
+    <set-notes clip="1,0"><n tick="0" dur="960" key="60" velocity="50" channel="0"/></set-notes>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-log contains="layer 2: bounce WAITS (before the job): track 1 is armed (live-owned); the layer keeps generation 2"
+                minCount="1" maxCount="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" renders="2" waiting="track armed" waitingFor="1"/>
+    <assert-meter trackPath="0" position="53248" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== an offline render while still armed bounces FRESH: the
+         barrier waits for that bounce, the render hears the edit, the layer
+         stops waiting. -->
+    <render filename="sar_1.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-log contains="for 1 sampler generation(s) on track 0" minCount="1" maxCount="1"/>
+    <assert-log contains="bounce WAITS" minCount="0" maxCount="0"/>
+    <assert-audio-energy filename="sar_1.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.26" maxRms="0.30"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="3"
+                          installs="2" renders="3" waiting="" waitingFor=""/>
+    <!-- The render's generation is a correct bounce and stays installed:
+         what live playback plays after the render (meter: the edit). -->
+    <assert-meter trackPath="0" position="53248" minRms="0.26" maxRms="0.30"/>
+    <arm-track trackPath="1" armed="0"/>
+    <wait-ms ms="600"/>
+    <render filename="sar_2.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="sar_2.wav" startFrame="53248" frameCount="4096"
+                         channel="0" minRms="0.26" maxRms="0.30"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

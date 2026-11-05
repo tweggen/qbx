@@ -73,6 +73,27 @@ void setLaneProgramsHook( LanePrograms hook );
 bool assetReachesTrack( SObject *body, const SObject *track, QString *via = nullptr,
                         const sarrangements::PendingEdges *pending = nullptr );
 
+// --- a bounce over a LIVE-OWNED track waits (QBX-274) -------------------------------
+//
+// A bounce freezes the asset's content on a worker. When that content holds a
+// track the live lane OWNS (armed, proposal 21 D4), its processor refuses the
+// freeze and answers silence, so the bounce would be silent there. The
+// author's answer (2026-11-04): the bounce is DEFERRED until the track is
+// disarmed; the layer keeps its previous generation and is marked waiting.
+// Which tracks the live lane owns is the shell's knowledge (SLiveMonitor), so
+// it is a hook: given an asset BODY, the spec of a live-owned track the body
+// reaches through child and content links ("" when none, or no hook). A
+// render's suspension releases ownership, so during an offline render's
+// settle nothing is owned and the bounce runs fresh (the author, 2026-11-04).
+using LiveOwner = std::function<QString( SObject *body )>;
+void    setLiveOwnerHook( LiveOwner hook );
+QString liveOwnerOf( SObject *body );
+// What the live lane owns MAY have changed (the shell calls it on
+// SApplication::liveLanesMayHaveChanged): every
+// program re-asks the hook for each waiting layer and bounces the ones no
+// longer blocked. A superset signal is fine: the re-check is the decision.
+void liveOwnersMayHaveChanged();
+
 }  // namespace ssampler
 
 #endif
