@@ -8,28 +8,26 @@
   window of the asset NAMED after the arrangement. A created arrangement has
   no such asset, so the window came out [0,0) and the undo was refused
   ("extract-arrangement: refused, empty range"), leaving the tracks in the
-  master and the arrangement gone. The inverse now carries the window the
-  dissolve actually found, and "no asset" is one of the answers: window="none"
-  re-creates the root and moves the tracks back into it, with no asset, no
-  master lane and no placement.
+  master and the arrangement gone. QBX-270 made the inverse carry its
+  window; since QBX-284 the inverse re-registers the ORIGINAL root the
+  dissolve kept alive and moves the tracks back into it, inventing no asset,
+  no master lane and no placement.
 
-  Section A has tracks and a clip; section B is an EMPTY created arrangement,
-  whose inverse has no tracks to move at all (an extract-arrangement with no
-  trackPaths is refused), so it is a create-arrangement.
+  Section A has tracks and a clip; section B is an EMPTY created arrangement.
 
   WHAT EACH ASSERTION PINS:
   - assert-arrangements after the undo: the root came back, with its tracks.
   - the names Drums:0 / Drums:1: the ORDER came back.
-  - the master's track count after the undo: no asset lane was invented (a
-    window="extent" or window="range" inverse would add one).
+  - the master's track count after the undo: no asset lane was invented (an
+    extract-arrangement inverse would add one).
   - remove-asset expectReject: no asset named after the arrangement was
     invented either.
-  - redo: the forward dissolve runs again on the rebuilt root.
+  - redo: the forward dissolve runs again on the restored root.
 
   drain-pending-deletes runs between each dissolve and its undo: the dissolve
   unregisters the root, and a test-case run never delivers DeferredDelete on
-  its own, so without it the old root would still be alive for the undo and
-  a build that re-used it by accident would pass.
+  its own, so without it the root would still be alive for the undo and a
+  build that forgot to pin it would pass.
 -->
 <SActionScript version="1" name="dissolve_created_arrangement_undo">
 

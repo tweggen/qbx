@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-284 gap 2: an UNPLACED asset named after the arrangement comes back
+  from the undo UNPLACED.
+
+  The rebuild inverse QBX-270 shipped re-extracted with window="range" over
+  that asset, and an extraction always places its asset on a new master lane:
+  after the undo the master had 2 lanes where it had 1. The undo now
+  re-registers the original asset and re-creates no placement it never had.
+
+  assert-ref-count, before the dissolve and after every undo, gates that the
+  undo drops the pins the dissolve took; drain-pending-deletes runs between
+  the dissolve and its undo, both for the reasons given in
+  dissolve_undo_keeps_other_assets.qxa.
+-->
+<SActionScript version="1" name="dissolve_undo_unplaced_asset">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Keep"/>
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="Kick"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <create-asset container="Drums:" startOffset="0" duration="48000" assetName="Drums"/>
+
+    <assert-ref-count arrangement="Drums" refs="2"/>
+    <assert-ref-count asset="Drums" refs="1"/>
+
+    <dissolve-arrangement name="Drums"/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="2"/>
+
+    <drain-pending-deletes/>
+
+    <undo/>
+    <assert-arrangements names="Drums" trackCounts="1"/>
+    <assert-ref-count arrangement="Drums" refs="2"/>
+    <assert-ref-count asset="Drums" refs="1"/>
+    <assert-track-name trackPath="Drums:0" name="Kick"/>
+    <!-- No lane and no placement the arrangement never had. -->
+    <assert-track-count arrangement="" count="1"/>
+    <assert-track-name trackPath="0" name="Keep"/>
+
+    <redo/>
+    <assert-arrangements names=""/>
+    <assert-track-count arrangement="" count="2"/>
+    <place-asset assetName="Drums" trackPath="0" timePos="0" expectReject="true"/>
+
+    <!-- A second undo, then the asset itself: it is back, with its window.
+         Last, so the placement it makes needs no undo of its own. The
+         redo re-pinned, so drain again before this undo too. -->
+    <drain-pending-deletes/>
+    <undo/>
+    <assert-arrangements names="Drums"/>
+    <assert-ref-count arrangement="Drums" refs="2"/>
+    <assert-ref-count asset="Drums" refs="1"/>
+    <place-asset assetName="Drums" trackPath="0" timePos="0"/>
+    <assert-clip-window clip="0,0" startTime="0" duration="48000"/>
+  </actions>
+
+</SActionScript>

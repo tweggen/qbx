@@ -651,6 +651,8 @@ const Fixture kFixtures[] = {
       "<assert-view-playhead root='Drums' frame='24000' sounding='true' tolerance='0'/>" },
     { "assert-arrangements",
       "<assert-arrangements names='Bass,Drums' trackCounts='1,2'/>" },
+    { "assert-ref-count",
+      "<assert-ref-count arrangement='Drums' refs='2'/>" },
     // The root-qualified spellings (D21): a qualifier must survive the round
     // trip, and a BARE path must come back bare -- that second half is what
     // keeps every pre-existing case and project file byte-unchanged.

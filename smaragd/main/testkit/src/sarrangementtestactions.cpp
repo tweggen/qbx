@@ -124,7 +124,49 @@ bool SAssertArrangementTrackCountAction::readXml( const QDomElement &elem,
     return true;
 }
 
+// --- assert-ref-count -------------------------------------------------------
+
+SApplyResult SAssertRefCountAction::apply( SProject *project )
+{
+    if( !project ) return { false, nullptr };
+    if( arrangement_.isEmpty() == asset_.isEmpty() || refs_ < 0 ) {
+        qWarning() << "assert-ref-count: give exactly one of arrangement/asset, and refs";
+        return { false, nullptr };
+    }
+    SObject *o = arrangement_.isEmpty() ? project->asset( asset_ )
+                                        : project->arrangement( arrangement_ );
+    const QString what = arrangement_.isEmpty() ? asset_ : arrangement_;
+    if( !o ) {
+        qWarning() << "assert-ref-count FAILED: nothing registered as" << what;
+        return { false, nullptr };
+    }
+    if( o->refCount() != refs_ ) {
+        qWarning() << "assert-ref-count FAILED:" << what << "has" << o->refCount()
+                   << "references, expected" << refs_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertRefCountAction::writeXml( QDomElement &elem ) const
+{
+    if( !arrangement_.isEmpty() ) elem.setAttribute( "arrangement", arrangement_ );
+    if( !asset_.isEmpty() ) elem.setAttribute( "asset", asset_ );
+    elem.setAttribute( "refs", refs_ );
+}
+
+bool SAssertRefCountAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    arrangement_ = elem.attribute( "arrangement" );
+    asset_       = elem.attribute( "asset" );
+    refs_        = elem.attribute( "refs", "-1" ).toInt();
+    return true;
+}
+
 static const bool s_reg_arrangement_test = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-ref-count"),
+        []{ return new SAssertRefCountAction; } ),
     SActionRegistry::instance().registerType(
         QStringLiteral("assert-arrangements"),
         []{ return new SAssertArrangementsAction; } ),

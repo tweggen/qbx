@@ -21,12 +21,8 @@
 //
 // trackPaths is SEMICOLON-separated because a single index path is already
 // comma-separated. Paths are master-rooted. window is "range" (the asset
-// windows [rangeStart,rangeEnd)), "extent" (it windows the whole arrangement,
-// and the range is then only advisory) or "none" (QBX-270: no asset, no master
-// lane, no placement and no snippets -- the tracks move into a new UNPLACED
-// arrangement, the state create-arrangement plus add-track leaves; it is what
-// dissolve-arrangement's inverse carries when no asset was named after the
-// arrangement).
+// windows [rangeStart,rangeEnd)) or "extent" (it windows the whole arrangement,
+// and the range is then only advisory).
 //
 // WHAT HAPPENS TO MATERIAL OUTSIDE THE WINDOW (D20): it becomes SNIPPETS —
 // one further asset per contiguous span of real material outside the window,

@@ -105,13 +105,7 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
     if( !masterMixer ) return { false, nullptr };
 
     const bool wholeExtent = ( window_ == QLatin1String( "extent" ) );
-    // "none" (QBX-270): no window, so no asset, no master lane, no placement
-    // and no snippets -- the tracks move into a new UNPLACED arrangement. It is
-    // what dissolve-arrangement's inverse carries for an arrangement that had
-    // no asset named after it (one made by create-arrangement), and the range
-    // means nothing then.
-    const bool noWindow = ( window_ == QLatin1String( "none" ) );
-    if( !wholeExtent && !noWindow && rangeEnd_ <= rangeStart_ ) {
+    if( !wholeExtent && rangeEnd_ <= rangeStart_ ) {
         TW_LOGW( "cut", "extract-arrangement: refused, empty range" );
         return { false, nullptr };
     }
@@ -252,22 +246,6 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
     // is the nested case this loop handles with `delete ownLink`. QBX-232.
     if( masterMixer ) masterMixer->pruneSelectionToTree();
 
-    if( noWindow ) {
-        arrRoot->applyAudibility();
-        arrRoot->notifyTreeChanged();
-        arrRoot->bumpRenderChainEpoch();
-        masterMixer->applyAudibility();
-        masterMixer->notifyTreeChanged();
-        masterMixer->bumpRenderChainEpoch();
-        SAppContext::get().rewireSpeaker();
-        TW_LOGI( "cut", "extract-arrangement '%s': %d track(s) moved, no window "
-                        "(no asset, no placement)",
-                 arrName.toUtf8().constData(), (int) tracks.size() );
-        project->setProp( QStringLiteral( "arrangement/restorePlan/" ) + arrName,
-                          restore.join( ';' ) );
-        return { true, new SDissolveArrangementAction( arrName, restore.join( ';' ) ) };
-    }
-
     // --- the window --------------------------------------------------------
     const offset_t winBegin = wholeExtent ? 0 : rangeStart_;
     const offset_t winEnd   = wholeExtent ? (offset_t) arrRoot->getDuration()
@@ -278,6 +256,7 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
         // The tracks are already moved; dissolve to put them back rather than
         // leave the project half-extracted.
         SDissolveArrangementAction undo( arrName, restore.join( ';' ) );
+        undo.setPinsForUndo( false );        // nothing will restore it
         undo.apply( project );
         return { false, nullptr };
     }
@@ -371,7 +350,12 @@ SApplyResult SExtractArrangementAction::apply( SProject *project )
     project->setProp( QStringLiteral( "arrangement/restorePlan/" ) + arrName,
                       restore.join( ';' ) );
 
-    return { true, new SDissolveArrangementAction( arrName, restore.join( ';' ) ) };
+    // The inverse keeps NO pins (QBX-284): this command's redo re-extracts,
+    // so nothing the undo takes apart is ever restored by pointer.
+    SDissolveArrangementAction *inverse =
+        new SDissolveArrangementAction( arrName, restore.join( ';' ) );
+    inverse->setPinsForUndo( false );
+    return { true, inverse };
 }
 
 void SExtractArrangementAction::writeXml( QDomElement &elem ) const

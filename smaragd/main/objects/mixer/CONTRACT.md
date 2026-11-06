@@ -240,15 +240,34 @@ views) — the renderer/editor factory extraction is the Phase 6 fix.
     the inverse releases it once the registry has taken its own reference, or
     the arrangement could never be destroyed again.
 
-    `dissolve-arrangement` does NOT pin: its inverse is a RECIPE, an
-    `extract-arrangement` that builds a fresh root, so the root's identity and
-    its master-lane state do not survive that undo (open). What the recipe
-    does carry is the WINDOW (QBX-270): `range` over the asset named after the
-    arrangement, `none` when there is no such asset (a `create-arrangement`
-    root: no asset, lane or placement is invented), and a plain
-    `create-arrangement` when there are no tracks either. Before, it always
-    said `range`, and over [0,0) the undo was refused. Gated by
-    `dissolve_created_arrangement_undo.qxa`.
+    **`dissolve-arrangement` pins the same way** (QBX-284, the author's
+    decision of 2026-11-05). Its forward action pins the ROOT, EVERY ASSET
+    over it (not only the one named after it: snippets and user assets too)
+    and the master LANE its placement sat on when the dissolve removes that
+    lane; the inverse, `restore-dissolved-arrangement` (undo-stack only, never
+    registered), re-registers those objects under their names, moves the
+    tracks out of the master and back into THAT root in their order, puts the
+    lane back at its master index, rebuilds the placement link from every
+    field an `SLink` carries (start time, ticks, timebase, channel override)
+    at its index on its lane, and restores the `arrangement/restorePlan/<name>`
+    property to the value the dissolve found, unset included. Then it drops
+    the pins. Pins are held only while dissolved (taken by `apply()`, dropped
+    by the undo, re-taken by a redo, dropped by the destructor when the
+    command is discarded dissolved); the moved tracks and a kept lane are held
+    weakly (`QPointer`), and the undo refuses, before mutating, if one has
+    gone or a name came back. Nothing in the model reaches an action, so no
+    pin can close a refcount cycle. **As `extract-arrangement`'s own inverse
+    the dissolve pins NOTHING** (`setPinsForUndo(false)`): that command's redo
+    re-extracts, so a pin would only keep a dead root alive.
+    It used to rebuild through `extract-arrangement` (QBX-270 carried the
+    window, `none` for a created root): a fresh root with a blank master
+    lane, only the asset named after the arrangement, always placed, refused
+    with no tracks, and a plan property a created root never had. QBX-284
+    retired that, and `window="none"`, which nothing else used, with it.
+    Gated by `dissolve_undo_{keeps_other_assets,unplaced_asset,keeps_master_lane,
+    empty_with_asset,restore_plan_property}.qxa` and
+    `dissolve_created_arrangement_undo.qxa`; `assert-ref-count` reads that the
+    counts before the dissolve and after each undo agree.
 
 16. **THE CONDUCTOR LANE IS AN ORDINARY CHILD LINK OF THE MASTER LANE, NOT A
     SECOND SENTINEL** (proposal 45 M6 / D7). Its address is `{-1, 0}`
