@@ -2778,9 +2778,70 @@ routing verbs that would close one refuse it.
    reparent-track refusing a routing-only cycle no longer (accept, and let
    the pass unwire it) — only `…_d7_move`.
 10. **Not gated / not covered.** A project FILE that already holds such a
-    cycle loads as it is (as QBX-267's). Found and NOT fixed (filed as
-    QBX-285): the QBX-274
+    cycle loads as it is (as QBX-267's). Found and NOT fixed here (filed as
+    QBX-285, fixed there: see "QBX-285 as built" below): the QBX-274
     live-owner check (`ssampler::liveOwnerOf`) walks child and content links
     only, so a bounce of an asset holding a return (or a keyed track) whose
     SOURCE is armed is not deferred — it freezes a live-owned source and
     hears silence there.
+
+### QBX-285 as built: a bounce over a tapped armed source waits (2026-11-06)
+
+QBX-269's item 10 found that QBX-274's live-owner check walked child and
+content links only, while a bounce also hears what the asset's returns and
+keyed slots tap.
+
+1. **Measured on main a7251f4c** (`sampler_armed_routing_waits` there):
+   arming "Src", the source a return and two keyed slots inside three linked
+   assets tap, made the three layers due (the arm stales Src, and proposal
+   55's D7 walk carries that into the return and the keyed tracks) and each
+   bounced at once, with no wait: generation 2, and the meter page of the
+   return's layer read rms 0, the silence an armed source answers a freeze
+   with. The race (`sampler_armed_routing_race`) installed both held first
+   bounces after the arm.
+2. **The fix.** `ssampler::assetHears(body, track)` is the walk a freeze
+   hears through: child and content links plus, for every lane passed, the
+   lanes the QBX-269 hook (`setLaneRoutingSourcesHook`) names — a return's
+   aux source, each key lane, a send lane's senders. No sampler hops (a
+   second sampler plays its own installed generation) and no outgoing sends
+   (a send feeds the send lane, not the lane's output). The shell's
+   live-owner hook asks it instead of the plain walk, so both QBX-274 checks
+   — before the job (`startBounce_`) and after it (`installFinished_`) — and
+   the re-ask on `liveLanesMayHaveChanged` (`recheckWaiting`) see a tapped
+   armed source with no change of their own.
+3. **The re-ask.** A re-ask that wrongly freed a layer whose tapped source is
+   still armed would do little harm: `checkLinks_` bounces it, the
+   before-check defers it again at once. What shows it is the "no longer
+   live-owned" line, which the case asserts ABSENT after arming and
+   disarming another live instrument (assert-log reads the records of the
+   action just before it, so each `arm-track` is followed by one).
+4. **Gates.** `qxa.sampler_armed_routing_waits` (RUN_SERIAL, capture speed
+   1): an aux edge (layer 2, with the meter: the previous generation plays,
+   rms 0.4296), a key edge (layer 4) and a key from a send lane Src sends to
+   (layer 6) each wait with `waitingFor="1"`; another live instrument armed
+   and disarmed leaves them waiting; an asset over a track that only SENDS
+   to that lane bounces under the arm (layer 8); the disarm frees the three
+   and each re-bounces (generation 2). `qxa.sampler_armed_routing_race`
+   (debounce 60000, as `sampler_armed_bounce_race`): both first bounces held,
+   Src armed, released — both DISCARDED and waiting; the disarm alone bounces
+   them.
+5. **Sabotages that bite** (the harness writes every file from its own saved
+   bytes, touches every file it writes, rebuilds, runs both cases plus
+   `sampler_armed_bounce_waits`, `sampler_armed_bounce_race`,
+   `sampler_routing_cycle_link`, `…_late`, `…_send` and
+   `sampler_q3_asset_link`, restores and touches; the clean rebuild after
+   the last passes all eight): (S0) the three source files as on main — both
+   cases; (S1) the aux edge not followed by `assetHears` — both; (S2) key
+   edges not followed — both; (S3) a send lane's senders not followed —
+   `…_waits` (layer 6); (S4) the rejected design, outgoing sends followed —
+   `…_waits` (layer 8 held); (S5) the before-check off — `…_waits` and both
+   QBX-274 cases; (S6) the after-check off — `…_race` and
+   `sampler_armed_bounce_race`; (S7) the re-ask answering "not owned" —
+   `…_waits` (the "no longer live-owned" line after the other arm). The
+   QBX-269 cases passed under every sabotage: the cycle walk is untouched.
+6. **Not gated / found.** The sibling for a PLACEMENT of the asset (its
+   `SCut` capture of an armed track) is QBX-283, unchanged. Found while
+   writing the gates: `assert-log`'s window is the action just before it, so
+   the "would close" absence checks of QBX-269's `sampler_routing_cycle_*`
+   releases (each placed after an `assert-*`, not after the verb) check
+   nothing; the refusals themselves are gated as stated.

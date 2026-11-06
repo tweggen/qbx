@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-285: A SAMPLER BOUNCE OVER AN ASSET WHOSE RETURN OR KEYED SLOT TAPS AN
+  ARMED SOURCE WAITS FOR THE DISARM, as QBX-274's bounce over an armed track
+  inside the asset does (sampler CONTRACT invariant 33).
+
+  THE DEFECT (found by QBX-269). A bounce hears what the asset's returns and
+  keyed slots TAP through routing edges (QBX-269, invariant 34), but the
+  live-owner check ssampler::liveOwnerOf walked only child and content links.
+  An armed source outside the asset was therefore never seen: the bounce ran,
+  froze a live-owned source, heard silence at that tap and was installed.
+
+  THE RULE. liveOwnerOf follows the routing edges the cycle walk follows (a
+  return's aux source, each keyed slot's key lane, a send lane's senders) and
+  NOT a lane's outgoing sends, which feed the send lane and not the lane's
+  own output.
+
+  ======================================================= the fixture
+
+  Track 0 "Player": NassauDigital, the layers that link the assets.
+  Track 1 "Src": NassauDigital, a live instrument (MIDI input capture), the
+  tapped source. Arming it makes it live-owned.
+  Track 2 "Src Aux 1": the return of Src's aux 1; asset "Ret" over it.
+  Track 3 "Bass": a duck keyed from Src; asset "BassA" over it.
+  Track 4 "Gate": a duck keyed from the send lane "Bus", which Src sends to;
+  asset "GateA" over it.
+  Track 5 "Out": a plain track that SENDS to Bus; asset "OutA" over it. Its
+  bounce hears Out alone, so the arm must not hold it (the rejected design,
+  following outgoing sends, would: Out -> Bus -> Src).
+  Track 6 "Other": a second live instrument (the test sine).
+
+  Player's layers: 2 links Ret, 4 BassA, 6 GateA, 8 OutA. Its clip plays
+  key 60 (layer 2) at tick 1920 = frame 48000, so the meter page at 53248
+  carries the bounce of the return, Src's kick (../test_clipsaw.wav 5248
+  frames in): rms 0.4296, two-sided band. MEASURED ON MAIN a7251f4c: the arm
+  made layers 2, 4 and 6 due, each bounced at once (generation 2, no wait)
+  and the meter page read rms 0: the bounce heard the armed source's silence.
+
+  1. Nothing armed: every link bounces once (generation 1).
+  2. Src armed: the arm stales Src, and the routing walk (proposal 55 D7)
+     carries that into the return and the keyed tracks, so layers 2, 4 and 6
+     are due; each WAITS (before the job), keeps generation 1 and names track
+     1. Layer 8 is not due.
+  3. Out edited while Src is armed: layer 8 is due, and bounces (no wait).
+  2b. Another live instrument armed and disarmed: the re-ask
+     (liveOwnersMayHaveChanged) asks again, and the tapped layers keep
+     waiting, because the armed source is still seen through the edge.
+  4. Src disarmed: the re-ask frees layers 2, 4 and 6 at once, each says so
+     and bounces (generation 2).
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1, with the live-instrument cases.
+-->
+<SActionScript version="1" name="sampler_armed_routing_waits">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ======================================== track 0: the player -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Player"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="Hit"/>
+    <add-note clip="0,0" tick="1920" dur="960" key="60" velocity="127" channel="0"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="60" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="61" keyHi="61" rootKey="61" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="62" keyHi="62" rootKey="62" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="63" keyHi="63" rootKey="63" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <!-- ======================================== track 1: the source -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Src"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="Kick"/>
+    <add-note clip="1,0" tick="0" dur="480" key="36" velocity="127" channel="0"/>
+    <add-zone trackPath="1" slotIndex="0" keyLo="36" keyHi="36" rootKey="36"
+              mode="oneshot" output="aux1">
+      <layer src="file:../test_clipsaw.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="1" slotIndex="0" timeoutMs="15000"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+
+    <!-- ============== track 2: the return, track 3: keyed from Src -->
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <assert-return-track trackPath="2" isReturn="1" source="1" slot="0" bus="1" routed="1"/>
+    <create-asset container="2" startOffset="0" duration="48000" assetName="Ret"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Bass"/>
+    <add-sample trackPath="3" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="3" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="3" slot="0" source="1"/>
+    <create-asset container="3" startOffset="0" duration="48000" assetName="BassA"/>
+
+    <!-- ===== track 4: keyed from Bus, which Src sends to; track 5 sends -->
+    <add-send-lane sendName="Bus"/>
+    <add-send track="1" dest="Bus" level="0"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="4" name="Gate"/>
+    <add-sample trackPath="4" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="4" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="4" slot="0" source="$send:Bus"/>
+    <create-asset container="4" startOffset="0" duration="48000" assetName="GateA"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="5" name="Out"/>
+    <add-sample trackPath="5" filePath="../test_stereo.wav" timePos="0"/>
+    <add-send track="5" dest="Bus" level="0"/>
+    <create-asset container="5" startOffset="0" duration="48000" assetName="OutA"/>
+    <!-- track 6: another live instrument, for the re-ask in 2b -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="6" name="Other"/>
+    <insert-plugin trackPath="6" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <set-track-input trackPath="6" input="midi:capture:any"/>
+
+    <!-- ===================== 1. the links, nothing armed: generation 1 -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Ret"/>
+    <set-layer trackPath="0" slotIndex="0" layer="4" src="asset:BassA"/>
+    <set-layer trackPath="0" slotIndex="0" layer="6" src="asset:GateA"/>
+    <set-layer trackPath="0" slotIndex="0" layer="8" src="asset:OutA"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <wait-ms ms="600"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1" waiting=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="1" waiting=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="6" generation="1" waiting=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="8" generation="1"
+                          renders="1" waiting=""/>
+    <!-- Layer 2 at frame 48000 plays the bounce of the return: Src's kick. -->
+    <assert-meter trackPath="0" position="53248" minRms="0.41" maxRms="0.45"/>
+
+    <!-- ============ 2. ARM Src: the bounces that tap it WAIT -->
+    <arm-track trackPath="1" armed="1"/>
+    <wait-ms ms="600"/>
+    <assert-log contains="layer 2: bounce WAITS (before the job): track 1 is armed (live-owned); the layer keeps generation 1"
+                minCount="1" maxCount="1"/>
+    <assert-input-meter trackPath="1" contains="live=on"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          rendering="0" renders="1" waiting="track armed" waitingFor="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="1"
+                          rendering="0" renders="1" waiting="track armed" waitingFor="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="6" generation="1"
+                          rendering="0" renders="1" waiting="track armed" waitingFor="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="8" generation="1"
+                          renders="1" waiting=""/>
+    <!-- The previous generation is what layer 2 plays, not the silence an
+         armed source answers a freeze with. -->
+    <assert-meter trackPath="0" position="53248" minRms="0.41" maxRms="0.45"/>
+
+    <!-- ===== 2b. the RE-ASK still sees the tapped source: arming and
+         disarming another live instrument raises liveLanesMayHaveChanged,
+         every waiting layer is asked again, and the three keep waiting. -->
+    <!-- assert-log reads the records of the action just before it, and the
+         re-ask runs inside arm-track, so each arm-track is followed by one. -->
+    <arm-track trackPath="6" armed="1"/>
+    <assert-log contains="no longer live-owned" minCount="0" maxCount="0"/>
+    <assert-input-meter trackPath="6" contains="live=on"/>
+    <wait-ms ms="300"/>
+    <arm-track trackPath="6" armed="0"/>
+    <assert-log contains="no longer live-owned" minCount="0" maxCount="0"/>
+    <wait-ms ms="300"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"
+                          renders="1" waiting="track armed" waitingFor="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="1"
+                          renders="1" waiting="track armed" waitingFor="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="6" generation="1"
+                          renders="1" waiting="track armed" waitingFor="1"/>
+
+    <!-- ===== 3. an asset that only SENDS is not held by the arm -->
+    <add-sample trackPath="5" filePath="../test_stereo.wav" timePos="48000"/>
+    <wait-ms ms="600"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="8" generation="2"
+                          rendering="0" renders="2" waiting="" waitingFor=""/>
+
+    <!-- ===== 4. DISARM: the re-ask frees the tapped layers at once -->
+    <arm-track trackPath="1" armed="0"/>
+    <assert-log contains="layer 2: track 1 is no longer live-owned; its deferred bounce runs now"
+                minCount="1" maxCount="1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" renders="2" waiting="" waitingFor=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="2"
+                          rendering="0" renders="2" waiting="" waitingFor=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="6" generation="2"
+                          rendering="0" renders="2" waiting="" waitingFor=""/>
+  </actions>
+
+</SActionScript>

@@ -96,6 +96,13 @@ bool assetReachesTrack( SObject *body, const SObject *track, QString *via = null
                         const sarrangements::PendingEdges *pending = nullptr,
                         bool *samplerHop = nullptr );
 
+// True when a FREEZE of `body`'s content hears `track`: child and content links
+// plus the routing edges of every lane passed (QBX-285: a return's aux source,
+// each key lane, a send lane's senders -- the hook above), never the sampler
+// hops (a second sampler inside plays its own installed generation; its asset
+// is not frozen by this bounce). What the live-owner check below asks.
+bool assetHears( SObject *body, const SObject *track );
+
 // --- a bounce over a LIVE-OWNED track waits (QBX-274) -------------------------------
 //
 // A bounce freezes the asset's content on a worker. When that content holds a
@@ -105,7 +112,8 @@ bool assetReachesTrack( SObject *body, const SObject *track, QString *via = null
 // disarmed; the layer keeps its previous generation and is marked waiting.
 // Which tracks the live lane owns is the shell's knowledge (SLiveMonitor), so
 // it is a hook: given an asset BODY, the spec of a live-owned track the body
-// reaches through child and content links ("" when none, or no hook). A
+// reaches through child and content links and, since QBX-285, the routing
+// edges a bounce hears through (assetHears; "" when none, or no hook). A
 // render's suspension releases ownership, so during an offline render's
 // settle nothing is owned and the bounce runs fresh (the author, 2026-11-04).
 using LiveOwner = std::function<QString( SObject *body )>;

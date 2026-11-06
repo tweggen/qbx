@@ -123,6 +123,30 @@ bool assetReachesTrack( SObject *body, const SObject *track, QString *via,
 }
 
 namespace {
+bool hearsRec( SObject *from, const SObject *to, QSet<const SObject *> &seen )
+{
+    if( !from ) return false;
+    if( from == to ) return true;
+    if( seen.contains( from ) ) return false;
+    seen.insert( from );
+    for( SLink *lk : from->childLinks() )
+        if( lk && hearsRec( &lk->getSObject(), to, seen ) ) return true;
+    // QBX-285: what the lane's output is routed FROM is frozen with it.
+    if( from->isLane() && laneRoutingSlot() )
+        for( const RoutingSource &r : laneRoutingSlot()( from ) )
+            if( r.source && hearsRec( r.source, to, seen ) ) return true;
+    return false;
+}
+}  // namespace
+
+bool assetHears( SObject *body, const SObject *track )
+{
+    if( !body || !track ) return false;
+    QSet<const SObject *> seen;
+    return hearsRec( body, track, seen );
+}
+
+namespace {
 LiveOwner &liveOwnerSlot()
 {
     static LiveOwner h;
