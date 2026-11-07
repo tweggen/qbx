@@ -552,6 +552,18 @@ through one `frozenRoot()` accessor. Five properties are contractual:
    the speaker attaches inherits it — `warmFrozenLane`'s count-in priming
    included, which demands through a DIFFERENT accessor
    (`context_->rootComponent()`) and therefore needs its own line.
+   **A minted engine gets the root BEFORE `startReadahead()`** (QBX-275), never
+   after the handle is published: the readahead's first pass runs the instant
+   its thread starts, so an engine handed its root afterwards demands page 0 of
+   the REWIRE in that window, and a worker freezes it through processors the
+   pump already owns. CI caught it as `liveOwnedRefusals` 2 in
+   `master_closure_heard_root`, 2 ms after the re-root log line. Installed on an
+   engine whose readahead has not started, `setFrozenDemandRoot()` only assigns:
+   property 3's seek would target the pre-`seekTo()` position and pull the
+   playhead back to 0. Gate: `master_closure_attach_hold`, which widens the
+   window with `set-speaker-attach-hold` (old order: 0 failures in 8 runs
+   without the hold, 4 in 4 with it) and starts a second time from 192000 so
+   the stray seek fails its absolute `wait-playhead`.
 5. **It must be cleared on EVERY route out of a Closure.** The speaker's
    `closureLive` is `liveOn && liveMasterClosure()`, so a stale FLAG is harmless
    — `liveOn` is false on a closed lane. The ROOT has no such gate: an engine

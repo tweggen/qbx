@@ -654,7 +654,7 @@ endforeach()
 # every band a closed form. Hence their own entry rather than four more names above.
 foreach(_mc master_closure_linear_ring master_closure_heard_ring
             master_closure_heard_root master_closure_heard_root_raised
-            master_insert_while_monitoring)
+            master_insert_while_monitoring master_closure_attach_hold)
     if(TEST qxa.${_mc})
         set_tests_properties(qxa.${_mc} PROPERTIES
             RUN_SERIAL TRUE

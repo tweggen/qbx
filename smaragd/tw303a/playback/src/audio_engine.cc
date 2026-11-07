@@ -647,8 +647,16 @@ void AudioEngine::setFrozenDemandRoot( const std::shared_ptr<twComponent> &root 
     frozenDemandRoot_ = root;
 
     TW_LOGI( "playback", "[PLAYBACK] frozen lane re-rooted %s the master chain "
-             "(proposal 45 AC3.1 / D4b option 1)",
-             root ? "BELOW" : "back ABOVE" );
+             "(proposal 45 AC3.1 / D4b option 1)%s",
+             root ? "BELOW" : "back ABOVE",
+             readaheadThread_.joinable() ? "" : " before the readahead started" );
+
+    // AN ENGINE WHOSE READAHEAD HAS NOT STARTED holds no page and no frontier,
+    // so there is nothing to drop -- and raising the seek here would be WRONG:
+    // twSpeaker installs the root before its seekTo(locator), and a pending
+    // seek to the pre-seek currentPos_ would then pull the playhead back to 0
+    // on the first block (QBX-275).
+    if( !readaheadThread_.joinable() ) return;
 
     // THE HELD PAGE AND THE FRONTIER BELONG TO THE OLD ROOT, and neither is
     // ours to clear from here: currentFrozenPage_ is the PULL thread's and

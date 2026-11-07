@@ -109,6 +109,27 @@ private:
  * box freezes a graph, which is not what the fix changes. What the fix changes
  * is WHEN the freezing happens.
  */
+/**
+ * set-speaker-attach-hold - QBX-275 test seam: hold every frozen-lane start
+ * for `holdMs` between starting the new engine's readahead and publishing it
+ * (twSpeaker::setAttachHoldMsForTest). 0 turns it off.
+ */
+class SSetSpeakerAttachHoldAction : public SAction {
+public:
+    SSetSpeakerAttachHoldAction() = default;
+
+    QString name() const override { return QStringLiteral("set-speaker-attach-hold"); }
+    QStringList knownAttributes() const override {
+        return {QStringLiteral("holdMs")};
+    }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    int holdMs_ = 0;
+};
+
 class SAssertPrimingAction : public SAction {
 public:
     SAssertPrimingAction() = default;

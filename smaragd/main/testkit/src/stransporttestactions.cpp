@@ -88,6 +88,39 @@ static const bool s_reg_assert_locator = (
     ), true
 );
 
+// ---------------------------------------------------- set-speaker-attach-hold
+
+SApplyResult SSetSpeakerAttachHoldAction::apply(SProject *)
+{
+    std::shared_ptr<twSpeaker> spk = SApplication::app().getSpeaker();
+    if (!spk) {
+        qWarning() << "set-speaker-attach-hold: no speaker";
+        return {false, nullptr};
+    }
+    spk->setAttachHoldMsForTest(holdMs_);
+    qInfo() << "set-speaker-attach-hold:" << holdMs_ << "ms";
+    return {true, nullptr};
+}
+
+void SSetSpeakerAttachHoldAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("holdMs", QString::number(holdMs_));
+}
+
+bool SSetSpeakerAttachHoldAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    bool ok = false;
+    holdMs_ = elem.attribute("holdMs", "0").toInt(&ok);
+    return ok && holdMs_ >= 0;
+}
+
+static const bool s_reg_set_speaker_attach_hold = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("set-speaker-attach-hold"),
+        []{ return new SSetSpeakerAttachHoldAction; }
+    ), true
+);
+
 // ------------------------------------------------------------- assert-priming
 
 SApplyResult SAssertPrimingAction::apply(SProject *)

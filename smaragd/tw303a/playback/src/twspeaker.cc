@@ -159,8 +159,22 @@ bool twSpeaker::startOutput()
     // the readahead frontier/state-chain, so starting the thread first would let
     // it freeze pages from position 0 and race the reset (unsynchronized frontier
     // writes from two threads).
+    // AC3.1: A NEWLY MINTED ENGINE INHERITS THE FROZEN LANE'S RE-ROOTING, and
+    // it must have it BEFORE its readahead starts (QBX-275). A transport start
+    // from stopped mints one, and the readahead's FIRST pass runs the moment
+    // its thread starts: handed the root after startReadahead(), the new
+    // engine demanded page 0 of the REWIRE -- through the master chain -- and
+    // a worker froze it while the pump owned the master lane's processors.
+    // The re-root then came 2 ms too late to stop it, and liveOwnedRefusals
+    // read 2 on CI. retireMasterLaneNodes() cannot help: it ran at arm time,
+    // before this demand existed.
+    engine->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
+
     engine->seekTo((offset_t) context_->locatorPosition());
     engine->startReadahead();
+
+    if (const int holdMs = attachHoldMsForTest_.load(std::memory_order_relaxed))
+        std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
 
     // Publish the handle (leaf-lock write).
 
@@ -173,13 +187,6 @@ bool twSpeaker::startOutput()
         std::lock_guard<std::mutex> lock(engineMutex_);
         std::atomic_store(&audioEngine_, engine);
     }
-
-    // AC3.1: a NEWLY MINTED engine inherits the frozen lane's re-rooting. A
-    // transport start from stopped mints one, so an app that pushed the
-    // re-rooting at the previous engine would lose it here -- and the new
-    // engine would go back to freezing ROOT pages through the master chain
-    // while the pump renders the same processors, with nothing to say so.
-    if (engine) engine->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
 
     // Rate diagnostics
     {
