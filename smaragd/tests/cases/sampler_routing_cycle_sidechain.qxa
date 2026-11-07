@@ -93,8 +93,8 @@
     <!-- ============== 4: the release: Drums lets go, Bass may be keyed -->
     <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
     <set-plugin-sidechain trackPath="1" slot="0" source="0"/>
-    <assert-plugin-sidechain trackPath="1" slot="0" keyed="1" source="0" wired="1"/>
     <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-plugin-sidechain trackPath="1" slot="0" keyed="1" source="0" wired="1"/>
   </actions>
 
 </SActionScript>

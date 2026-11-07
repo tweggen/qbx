@@ -88,8 +88,8 @@
     <!-- ============== 4: the release: Drums lets go, Box may return it -->
     <set-layer trackPath="0" slotIndex="0" layer="4" src="test:none"/>
     <set-return-source trackPath="1" sourcePath="0" slot="0" bus="1"/>
-    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
     <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-return-track trackPath="1" isReturn="1" source="0" slot="0" bus="1" routed="1"/>
   </actions>
 
 </SActionScript>

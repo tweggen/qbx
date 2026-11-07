@@ -87,8 +87,8 @@
     <!-- ===================== 4: the release: Drums lets go, Drums may send -->
     <set-layer trackPath="0" slotIndex="0" layer="2" src="test:none"/>
     <add-send track="0" dest="Bus" level="0"/>
-    <assert-sends track="0" count="1" dest="Bus"/>
     <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-sends track="0" count="1" dest="Bus"/>
   </actions>
 
 </SActionScript>
