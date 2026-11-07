@@ -183,10 +183,10 @@
     <add-send track="6" dest="Bus" level="0"/>
     <create-asset container="6" startOffset="0" duration="144000" assetName="OutA"/>
     <set-layer trackPath="0" slotIndex="0" layer="6" src="asset:OutA"/>
+    <assert-log contains="contains this sampler's own track" minCount="0" maxCount="0"/>
     <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
     <assert-sampler-layer trackPath="0" slotIndex="0" layer="6" generation="1"
                           renders="1" asset="OutA"/>
-    <assert-log contains="contains this sampler's own track" minCount="0" maxCount="0"/>
 
     <!-- ===================== the release: with the return unrouted, Drums
          may link Ret, and it bounces ONCE: nothing feeds the bounce back. -->
