@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-285, THE RACE: A TAPPED SOURCE ARMED WHILE THE BOUNCE IS ALREADY RUNNING.
+
+  sampler_armed_routing_waits gates the check made BEFORE a bounce starts.
+  An arm that lands after the job started is the check made AFTER it
+  finishes (QBX-274, sampler CONTRACT invariant 33): a bounce whose asset
+  reaches a live-owned track by then is DISCARDED, never installed. Since
+  QBX-285 "reaches" includes the routing edges a bounce hears through: a
+  return's aux source and a keyed slot's key lane.
+
+  THE FIXTURE is sampler_armed_routing_waits' first half: track 0 "Player"
+  (layers 2 and 4), track 1 "Src" (a live instrument, aux 1 a kick), track 2
+  the return of Src's aux 1 under asset "Ret", track 3 "Bass" keyed from Src
+  under asset "BassA". Both FIRST bounces are held by the render gate, Src is
+  armed, and only then are they released. Each is discarded and waits; the
+  disarm alone (the re-ask over SApplication::liveLanesMayHaveChanged)
+  bounces both.
+
+  Runs with SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS=60000 as
+  sampler_armed_bounce_race does, and for its reason: the arm makes the
+  layers due, and a default debounce would supersede the held jobs before
+  they are released.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1, with the live-instrument cases.
+-->
+<SActionScript version="1" name="sampler_armed_routing_race">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Player"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="60" keyHi="60" rootKey="60" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+    <add-zone trackPath="0" slotIndex="0" keyLo="61" keyHi="61" rootKey="61" mode="oneshot">
+      <layer src="test:none"/>
+    </add-zone>
+
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Src"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <insert-midi-clip trackPath="1" timePos="0" duration="3840" name="Kick"/>
+    <add-note clip="1,0" tick="0" dur="480" key="36" velocity="127" channel="0"/>
+    <add-zone trackPath="1" slotIndex="0" keyLo="36" keyHi="36" rootKey="36"
+              mode="oneshot" output="aux1">
+      <layer src="file:../test_clipsaw.wav"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="1" slotIndex="0" timeoutMs="15000"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+
+    <add-return-track trackPath="1" slot="0" bus="1"/>
+    <create-asset container="2" startOffset="0" duration="48000" assetName="Ret"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="3" name="Bass"/>
+    <add-sample trackPath="3" filePath="../test_stereo.wav" timePos="0"/>
+    <insert-plugin trackPath="3" slotIndex="0"
+                   format="clap" uid="tw.test.clap.duck"
+                   name="Smaragd Test Duck" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-sidechain trackPath="3" slot="0" source="1"/>
+    <create-asset container="3" startOffset="0" duration="48000" assetName="BassA"/>
+
+    <!-- ===== both first bounces start with nothing armed, and are HELD -->
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="false"/>
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="4" ready="false"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Ret"/>
+    <set-layer trackPath="0" slotIndex="0" layer="4" src="asset:BassA"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
+                          rendering="1" pending="1" renders="1" waiting=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          rendering="1" pending="1" renders="1" waiting=""/>
+
+    <!-- ===== Src is armed under them; then they run -->
+    <arm-track trackPath="1" armed="1"/>
+    <wait-ms ms="600"/>
+    <assert-input-meter trackPath="1" contains="live=on"/>
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="2" ready="true"/>
+    <set-sampler-render-gate trackPath="0" slotIndex="0" layer="4" ready="true"/>
+    <wait-ms ms="1000"/>
+    <assert-log contains="generation 1 DISCARDED: track 1 became live-owned while its bounce ran"
+                minCount="2" maxCount="2"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="0"
+                          rendering="0" pending="0" installs="0" renders="1"
+                          waiting="track armed" waitingFor="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="0"
+                          rendering="0" pending="0" installs="0" renders="1"
+                          waiting="track armed" waitingFor="1"/>
+
+    <!-- ===== the disarm alone bounces both (the debounce is out of reach) -->
+    <arm-track trackPath="1" armed="0"/>
+    <assert-log contains="track 1 is no longer live-owned; its deferred bounce runs now"
+                minCount="2" maxCount="2"/>
+    <wait-ms ms="1000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="2"
+                          rendering="0" installs="1" renders="2" waiting=""/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="4" generation="2"
+                          rendering="0" installs="1" renders="2" waiting=""/>
+  </actions>
+
+</SActionScript>
