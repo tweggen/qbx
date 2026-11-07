@@ -175,6 +175,41 @@ QStringList SHidePadAction::knownAttributes() const
     return addressAttributes() << QStringLiteral( "n" );
 }
 
+// ================================================ flatten-sampler-library ===
+
+SApplyResult SFlattenSamplerLibraryAction::apply( SProject *project )
+{
+    QString why;
+    SSamplerProgram *prog = program( project, false, &why );
+    if( !prog ) return refuse( why );
+    if( !prog->isLibrary() )
+        return refuse( QStringLiteral( "this instance does not play a library program; there is nothing "
+                                       "to flatten" ) );
+    const SSamplerProgram::ProgramState before = prog->programState();
+    const QString basePath = QString::fromStdString( prog->library()->basePath() );
+    std::string dropped;
+    SSamplerProgram::ProgramState next;
+    next.library = false;
+    next.program = prog->library()->flattened( &dropped ).toXml();
+    if( !prog->restoreProgramState( next, &why ) ) return refuse( why );
+    qInfo().noquote() << QStringLiteral( "flatten-sampler-library: track %1 slot %2: the library \"%3\" is "
+                                         "now a program of its own, %4 zone(s); dropped: %5" )
+                             .arg( trackPath_ ).arg( slotIndex_ ).arg( basePath )
+                             .arg( prog->model().zoneCount() )
+                             .arg( dropped.empty() ? QStringLiteral( "none" ) : QString::fromStdString( dropped ) );
+    return { true, restoreOf( trackPath_, slotIndex_, before ) };
+}
+
+void SFlattenSamplerLibraryAction::writeXml( QDomElement &elem ) const { writeAddress( elem ); }
+
+bool SFlattenSamplerLibraryAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    readAddress( elem );
+    return true;
+}
+
+QStringList SFlattenSamplerLibraryAction::knownAttributes() const { return addressAttributes(); }
+
 // ================================================= restore-sampler-state ===
 
 SApplyResult SRestoreSamplerStateAction::apply( SProject *project )
@@ -231,6 +266,8 @@ static const bool s_reg_sampler_library_verbs = [] {
     r.registerType( QStringLiteral( "rebase-sampler-library" ),
                     [] { return new SRebaseSamplerLibraryAction; } );
     r.registerType( QStringLiteral( "hide-pad" ), [] { return new SHidePadAction; } );
+    r.registerType( QStringLiteral( "flatten-sampler-library" ),
+                    [] { return new SFlattenSamplerLibraryAction; } );
     r.registerType( QStringLiteral( "restore-sampler-state" ),
                     [] { return new SRestoreSamplerStateAction; } );
     return true;

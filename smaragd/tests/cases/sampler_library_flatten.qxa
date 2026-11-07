@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-282 (nassau-digital DESIGN 8, settled 2026-11-07): FLATTEN.
+  flatten-sampler-library turns a library instance into a program of its
+  own through the core's flatten(): it plays what the library played, keeps
+  the overlay's ids (C8: never renumbered, the round-robin hashes them),
+  carries no libraryVersion, and drops what did not apply (orphaned, refused
+  and unknown edits). An asset link a layer of the result names keeps
+  working as a plain program's link; one only an orphaned edit named is no
+  longer held. Undo gives back the library instance, base and overlay byte
+  for byte.
+
+  The library (../sampler_library_keys_v1.xml); version 2 drops zone 6.
+
+  Gated here: an overlay with a set-zone, an add-zone (1000000), a hide-zone
+  and an asset link; flatten: no library, the same program that played
+  (structurally equal but for the libraryVersion), zone 1000000 kept, the
+  link held and the layer bounced from the asset; undo exact, redo; the
+  flattened instance takes plain verbs (set-zone writes the program,
+  remove-zone of 1000000 and its undo); save and reload as a plain program;
+  flatten on a program of its own is refused; under version 2 an orphaned
+  linked set-layer is dropped by flatten, and its link is no longer held,
+  with undo bringing both back.
+-->
+<SActionScript version="1" name="sampler_library_flatten">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <create-file-asset filePath="../test_stereo.wav" srcOffset="0" length="24000" assetName="Hit"/>
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" tune="=-2"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="100" keyHi="100" rootKey="100" mode="oneshot">
+      <layer src="test:x"/>
+    </add-zone>
+    <set-layer trackPath="0" slotIndex="0" layer="1000001" src="asset:Hit"/>
+    <remove-zone trackPath="0" slotIndex="0" zone="3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;6;1000000" overlayEdits="5"
+                            heldLinks="1" xmlContains="libraryVersion=&quot;1&quot;"
+                            capture="lib" captureLibrary="lib"/>
+
+    <!-- ............................................................. flatten -->
+    <flatten-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-log contains="flatten-sampler-library: track 0 slot 0: the library &quot;../sampler_library_keys_v1.xml&quot; is now a program of its own, 3 zone(s); dropped: none" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="0" zoneIds="1;6;1000000" nextId="8"
+                            scope="zone" id="1" attr="tune" value="-2" heldLinks="1" capture="flat"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="1000001" attr="src" value="link:1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="program" attr="libraryVersion" value=""/>
+    <assert-sampler-program trackPath="0" slotIndex="0" differsFromCaptured="lib"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="1000001" src="link:1" asset="Hit" rendering="0"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="lib" libraryEqualsCaptured="lib"
+                            heldLinks="1"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="0" equalsCaptured="flat"/>
+
+    <!-- A program of its own now: plain verbs write the program. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1000000" tune="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1000000" attr="tune" value="1"/>
+    <undo/>
+    <remove-zone trackPath="0" slotIndex="0" zone="1000000"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6" heldLinks=""/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="flat" heldLinks="1"/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="110" keyHi="110"><layer src="test:y"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6;1000000;8"/>
+    <undo/>
+    <flatten-sampler-library trackPath="0" slotIndex="0" expectReject="true"/>
+    <assert-log contains="flatten-sampler-library: track 0 slot 0: REFUSED: this instance does not play a library program; there is nothing to flatten" minCount="1"/>
+
+    <!-- ........................................ save, reload as a plain program -->
+    <save-project path="../../build/sampler_library_flatten.qxp"/>
+    <assert-file-contains path="../../build/sampler_library_flatten.qxp" text="assetLinks='1="/>
+    <load-project path="../../build/sampler_library_flatten.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="0" equalsCaptured="flat" ignoreNextId="1"
+                            nextId="10" installed="1" heldLinks="1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="1000001" src="link:1" asset="Hit" rendering="0"/>
+
+    <!-- ..... an orphaned linked edit: flatten drops it, and with it its link -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <set-sampler-library trackPath="1" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <set-layer trackPath="1" slotIndex="0" layer="7" src="asset:Hit"/>
+    <set-zone trackPath="1" slotIndex="0" zone="1" level="-3"/>
+    <set-sampler-library trackPath="1" slotIndex="0" path="../sampler_library_keys_v2.xml"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" heldLinks="1" zoneIds="1;3"
+                            libraryReport="libraryVersion 1-&gt;2; #0 set-layer orphaned 7"
+                            captureLibrary="orphan" capture="orphan"/>
+    <flatten-sampler-library trackPath="1" slotIndex="0"/>
+    <assert-log contains="is now a program of its own, 2 zone(s); dropped: #0 set-layer orphaned" minCount="1"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" library="0" zoneIds="1;3" heldLinks=""
+                            scope="zone" id="1" attr="level" value="-3"/>
+    <undo/>
+    <assert-sampler-program trackPath="1" slotIndex="0" library="1" equalsCaptured="orphan"
+                            libraryEqualsCaptured="orphan" heldLinks="1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

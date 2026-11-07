@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-282 (nassau-digital DESIGN 8, settled 2026-11-07): THE EDITOR'S DROP
+  ON A LIBRARY INSTANCE. An asset dropped on an empty key is ONE composite:
+  add-zone with an explicit id, then set-layer src="asset:" naming the new
+  layer. On a library the add takes the OVERLAY's ids, so the editor
+  predicts them from the overlay (twSamplerLibrary::nextOverlayId), and
+  add-zone takes an explicit id there only when it is exactly that one.
+
+  The drop is a real QDragEnterEvent and QDropEvent (sampler_q7_drop).
+
+  Gated here: a file on an empty key is an overlay zone 1000000; an asset
+  on an empty key after its undo is zone 1000002 (ids never reused) with
+  layer 1000003 linked, in one undo step; undo and redo; an asset on a base
+  zone's key links base layer 2 in the overlay; save and reload; version 2
+  drifts that set-layer, and rebase clears it.
+-->
+<SActionScript version="1" name="sampler_library_drop">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <create-file-asset filePath="../test_stereo.wav" srcOffset="0" length="24000" assetName="Hit"/>
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <plugin-row-command trackPath="0" slotIndex="0" command="edit" gesture="menu" compact="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;3;6" capture="lib1"/>
+
+    <!-- A FILE ON AN EMPTY KEY: an overlay one-key zone. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="drop"
+                    payload="file:../test_stereo.wav" target="key:84"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000000" overlayEdits="2"
+                            scope="layer" id="1000001" attr="src" value="file:../test_stereo.wav"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" nextOverlayId="1000002"/>
+
+    <!-- AN ASSET ON AN EMPTY KEY: one composite, the overlay zone and the link. -->
+    <sampler-editor trackPath="0" slotIndex="0" action="drop" payload="asset:Hit" target="key:84"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000002" overlayEdits="3" heldLinks="1"
+                            scope="layer" id="1000003" attr="src" value="link:1"
+                            overlayContains="&lt;set-layer layer=&quot;1000003&quot; src=&quot;link:1&quot;"
+                            capture="asset" captureLibrary="asset"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="zone" id="1000002" attr="rootKey" value="84"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" overlayEdits="0" heldLinks=""/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="asset" libraryEqualsCaptured="asset"/>
+
+    <!-- AN ASSET ON A BASE ZONE'S KEY: base layer 2 linked in the overlay (a new
+         drop mints a new link, as on a program of its own). -->
+    <sampler-editor trackPath="0" slotIndex="0" action="drop" payload="asset:Hit" target="key:40"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="4" heldLinks="1;2"
+                            scope="layer" id="2" attr="src" value="link:2"
+                            overlayContains="&lt;set-layer layer=&quot;2&quot; src=&quot;link:2&quot; src.was=&quot;test:a&quot;/&gt;"
+                            libraryBaseContains="src=&quot;test:a&quot;" capture="base" captureLibrary="base"/>
+
+    <save-project path="../../build/sampler_library_drop.qxp"/>
+    <load-project path="../../build/sampler_library_drop.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="base"
+                            libraryEqualsCaptured="base" heldLinks="1;2"/>
+
+    <!-- Version 2 moved layer 2's src: the drop's set-layer drifts, the link plays. -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v2.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="src" value="link:2"
+                            libraryReport="libraryVersion 1-&gt;2; #3 set-layer drifted src test:a-&gt;test:a2"/>
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryReport="" heldLinks="1;2"
+                            overlayContains="src=&quot;link:2&quot; src.was=&quot;test:a2&quot;"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -203,10 +203,12 @@ private:
 // `base` attribute says where it came from (qbx's library path, carried and
 // written back). Qt-free, main thread only, never on the audio thread.
 //
-// The only overlay edits qbx makes so far are the PAD REASSIGNMENT (`set-pad`,
-// the author's decision of 2026-11-04): recordPad() appends one set-pad with
-// key.was (the pad's key before: its row's, its default 36 + n, or "none");
-// and hiding a base pad row (`hide-pad`, the same day): hidePad().
+// The PAD REASSIGNMENT (`set-pad`, the author's decision of 2026-11-04):
+// recordPad() appends one set-pad with key.was (the pad's key before: its
+// row's, its default 36 + n, or "none"); hiding a base pad row (`hide-pad`,
+// the same day): hidePad(). Since QBX-282 every other program edit too:
+// recordSet(), recordAddZone(), recordAddLayer(), recordHideZone(),
+// recordHideLayer(), and flattened() (below).
 // rebase() accepts the current base (the core's rebaseOverlay): every drifted
 // edit's `.was` becomes what the base has under it, so the report clears and
 // nothing that plays changes.
@@ -256,6 +258,45 @@ public:
     // Accept the base: re-stamp baseVersion, refresh the drifted `.was`.
     // Returns how many edits were refreshed.
     int rebase();
+
+    // --- EVERY PROGRAM EDIT AS AN OVERLAY EDIT (QBX-282; DESIGN §8, the
+    // author's answers of 2026-11-07). Each runs the core's record*() on what
+    // plays now (the base with the overlay applied), so a refusal is the
+    // core's, all or nothing (false, `error`, the overlay unchanged).
+    //
+    // Parameters: one set-zone per zone (a list or ALL expanded over what plays
+    // now), one set-layer per layer, or one set-program; a relative edit is
+    // stored as its absolute result, each parameter with its `.was`.
+    bool recordSet( twSamplerScope scope, bool all, const std::vector<std::uint32_t> &ids,
+                    const std::vector<twSamplerEdit> &edits, std::string *error );
+    // The id the overlay's next add hands out: the core's own choice
+    // (nd::recordAddZone on copies), never a second rule. What a host that
+    // must name an added zone or layer in the same step predicts.
+    std::uint32_t nextOverlayId() const;
+    // The overlay's stored `nextId` (0 until it has added something), and
+    // raising it: undoing an add keeps it advanced, so ids are never reused.
+    std::uint32_t overlayNextId() const;
+    void raiseOverlayNextId( std::uint32_t atLeast );
+    // A zone (and its layers) from attribute text, as twSamplerProgramModel::
+    // addZone takes it, recorded as add-zone + one add-layer per layer with
+    // ids from the overlay range. An explicit `id` is accepted only when it is
+    // nextOverlayId(). Returns the zone's id, 0 on a refusal.
+    std::uint32_t recordAddZone( const twSamplerAttrs &zone, const std::vector<twSamplerAttrs> &layers,
+                                 std::string *error );
+    // A layer into any zone that plays (the base's or the overlay's). Its id, 0 on a refusal.
+    std::uint32_t recordAddLayer( std::uint32_t zoneId, const twSamplerAttrs &layer, std::string *error );
+    // Removing a zone or a layer that plays, a base one or one the overlay
+    // added: a stored hide-zone / hide-layer.
+    bool recordHideZone( std::uint32_t id, std::string *error );
+    bool recordHideLayer( std::uint32_t id, std::string *error );
+    // Every `src` an overlay verb writes, in order, orphaned verbs included:
+    // the asset links the overlay names (a host keeps them held).
+    std::vector<std::string> overlaySrcs() const;
+    // FLATTEN (the core's flatten()): a program of its own that plays what the
+    // library plays, the overlay's ids kept, no libraryVersion. `dropped`
+    // names the edits that did not apply and so are not in it
+    // ("#2 set-zone orphaned; #5 add-zone refused"), "" when none.
+    twSamplerProgramModel flattened( std::string *dropped ) const;
 
     struct Impl;
 

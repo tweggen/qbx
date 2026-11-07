@@ -479,7 +479,9 @@ changed for it.
     overlay applied, and is replaced only through `editLibrary()` or
     `restoreProgramState()`, which publish like `edit()`. `edit()` REFUSES on
     a library instance, so no program verb can write into what the next
-    overlay edit would recompute away; `set-pad-key` there records the core's
+    overlay edit would recompute away (since QBX-282 every forward program
+    verb records its overlay edit instead: invariant 35); `set-pad-key`
+    there records the core's
     `set-pad` (`n`, `key`, `key.was`), and `hide-pad n=` the core's
     `hide-pad` (a base `<Pads>` row left out of what plays; refused off a
     library, and for a pad with no base row or a row that does not play). A newer base under the overlay
@@ -562,6 +564,60 @@ changed for it.
     Gates: `sampler_routing_cycle_link`, `…_return`, `…_sidechain`,
     `…_send`, `…_late`, `…_d7_move`; for the live-owner half
     `sampler_armed_routing_waits` and `sampler_armed_routing_race`.
+
+### QBX-282: every program verb on a library instance is an overlay edit
+
+35. **ON A LIBRARY INSTANCE EVERY PROGRAM VERB RECORDS AN OVERLAY EDIT**
+    (nassau-digital DESIGN §8, "Settled on 2026-11-07"; proposal 56 §11
+    "QBX-282 as built"). Each verb goes through `editLibrary()` with the
+    matching `twSamplerLibrary::record*()` (the core's `recordZoneEdit`,
+    `recordLayerEdit`, `recordProgramEdit`, `recordAddZone`, `recordAddLayer`,
+    `recordHideZone` and `recordHideLayer`, run on what plays now). The
+    inverse of each is `restore-sampler-state` with the whole state before,
+    so one qbx verb is one undo step however many overlay verbs it writes.
+    - **Parameters.** `set-zone` / `set-layer` / `set-sampler-program`
+      record one `set-zone` / `set-layer` / `set-program` per target. A list
+      or ALL is expanded over what plays now, and a relative value is stored
+      as its absolute result with its `.was`.
+    - **Gestures.** ONE GESTURE IS ONE VERB PER TARGET. A later step of the
+      same gesture (the same `mergeKey()`) that finds the instance exactly as
+      the previous step left it (`SSamplerProgram::libraryGesture()`, live
+      state, not saved) records from the state the gesture STARTED from. So a
+      drag leaves the final value with the `.was` from before the drag, and
+      the live overlay equals its redo and its reload. Separate edits append.
+    - **Adds.** `add-zone` / `add-layer` record `add-zone` (+ one `add-layer`
+      per layer) / `add-layer` with ids from the overlay range (1,000,000
+      on). An explicit `add-zone id=` is accepted only when it is
+      `twSamplerLibrary::nextOverlayId()` (the core's own choice, by a dry
+      run); the editor's drop predicts its ids from it.
+    - **Ids are never reused.** `restoreProgramState()` from one library
+      state to another keeps the overlay's `nextId` at least where it was, so
+      an undo of an add is exact but for `nextId`. The add's redo restores
+      the state its first apply left (`libDone_`), with the same ids.
+    - **Removal.** `remove-zone` / `remove-layer` record `hide-zone` /
+      `hide-layer`, of a base object and of one the overlay added alike (the
+      `add-*` verbs stay).
+    - **Asset links.** `set-layer src="asset:"` stores this object's
+      `link:<n>` with `src.was` the base's src. `heldLinks()` (what is pinned
+      and saved) is every link a layer of what plays names PLUS every one an
+      overlay verb's `src` names, orphaned verbs included, so a base that
+      brings the layer back plays the asset again.
+    - **Recording.** `place-sampler-recording` needs nothing of its own: its
+      program child (add-zone, add-layer, or set-layer replacing layer 1, a
+      base zone's included) is one of the above.
+    - **Refused on a library.** `reinsert-zone`, `reinsert-layer` and
+      `restore-sampler-values` are a program of its own's inverses, and
+      `edit()` refuses them there.
+    - **Flatten.** `flatten-sampler-library` (the core's `flatten()`) makes
+      the instance a program of its own that plays what the library played.
+      The overlay's ids are kept (`reinsertZone` / `reinsertLayer` accept an
+      overlay-range id above `nextId`, so a removed one can be undone after
+      the flatten). Orphaned, refused and unknown edits are dropped, as is a
+      link only such an edit named. Its inverse is the library, base and
+      overlay byte for byte.
+
+    Gates: `sampler_library_set_values`, `…_structure`, `…_link`,
+    `…_recording`, `…_drop`, `…_flatten`.
 
 ## Value syntax (the front end's, DESIGN §2.1)
 
@@ -788,6 +844,21 @@ absolute (there is nothing to be relative to).
   `qxa.sampler_library_hide_pad`: hide-pad (pad back on its default, a pad
   92..95 gone), undo/redo, set-pad after the hide, the refusals, save/reload,
   a base without the row orphaning the hide, rebase keeping the orphan.
+- QBX-282 (invariant 35), each on a library instance with undo/redo, save
+  and reload, and a newer library (drift or orphan) plus rebase:
+  `qxa.sampler_library_set_values` (set-zone one / list / ALL / relative,
+  set-layer, set-sampler-program, the refusals, ONE gesture one verb per
+  target), `…_structure` (add-zone and add-layer in the overlay range, the
+  explicit-id rule, ids never reused, the redo the same ids, remove-zone /
+  remove-layer as hides of base and overlay objects, the plain inverses
+  refused, version 2 orphans, version 3's colliding id refused and the later
+  set-zone drifted), `…_link` (`link:<n>` in the overlay, held while an
+  orphaned verb names it, across two reloads, played again when the base
+  brings the layer back), `…_recording` (place-sampler-recording: key view
+  an overlay zone, pad view an overlay set-layer replacing base layer 1),
+  `…_drop` (the editor's composite drop predicting overlay ids) and
+  `…_flatten` (a program of its own, ids and links kept, undo byte-exact, an
+  orphaned link dropped).
 
 ## Not gated / known limits
 
@@ -809,7 +880,9 @@ absolute (there is nothing to be relative to).
   overlay edits (the rest is QBX-282); set-zone / set-layer / set-sampler-program, add / remove, recording
   and asset links are REFUSED there, not routed into the overlay (the core
   has the verbs; qbx does not make them yet). There is no flatten verb and no
-  greyed orphan display in the editor. The library is read when
+  greyed orphan display in the editor. *(Built by QBX-282, flatten included:
+  invariant 35. Still not built: the greyed orphan display and an edits list
+  in the editor, out of scope by the author's answer of 2026-11-07.)* The library is read when
   `set-sampler-library` runs, never re-read on load: a newer library file on
   disk is seen only when the verb is run again (the author accepted both,
   2026-11-04).
