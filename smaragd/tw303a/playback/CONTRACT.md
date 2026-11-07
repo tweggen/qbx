@@ -562,7 +562,7 @@ through one `frozenRoot()` accessor. Five properties are contractual:
    property 3's seek would target the pre-`seekTo()` position and pull the
    playhead back to 0. Gate: `master_closure_attach_hold`, which widens the
    window with `set-speaker-attach-hold` (old order: 0 failures in 8 runs
-   without the hold, 4 in 4 with it) and starts a second time from 192000 so
+   without the hold, 5 in 5 with it) and starts a second time from 192000 so
    the stray seek fails its absolute `wait-playhead`.
 5. **It must be cleared on EVERY route out of a Closure.** The speaker's
    `closureLive` is `liveOn && liveMasterClosure()`, so a stale FLAG is harmless
