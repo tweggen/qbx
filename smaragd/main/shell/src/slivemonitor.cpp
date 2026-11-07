@@ -1,5 +1,7 @@
 #include "app/shell/slivemonitor.h"
 
+#include "app/objects/cut/scut.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -254,6 +256,13 @@ void SLiveMonitor::setMasterLaneOwned( SStdMixer *mixer, bool owned )
 
 void SLiveMonitor::setClosureOwned( const SLiveClosure &closure, bool owned )
 {
+    // QBX-283: an ARM asks every asset capture BEFORE the processors flip, so
+    // a capture that hears these tracks is held before any build could freeze
+    // them; a build already past its before-check is the after-check's.
+    if( owned && !closure.ordered.empty() ) {
+        std::vector<SObject *> arriving( closure.ordered.begin(), closure.ordered.end() );
+        SCut::recheckLiveHoldEverywhere( arriving );
+    }
     for( STrack *t : closure.ordered ) {
         SPluginChain *chain = t->getPluginChain();
         if( !chain ) continue;
@@ -267,6 +276,9 @@ void SLiveMonitor::setClosureOwned( const SLiveClosure &closure, bool owned )
             proc->setLiveOwned( owned );
         }
     }
+    // ...and a RELEASE (a disarm, a render's suspension, monitor Auto on
+    // Play) asks them AFTER the flip: the freed recapture what is there now.
+    if( !owned && !closure.ordered.empty() ) SCut::recheckLiveHoldEverywhere();
 }
 
 bool SLiveMonitor::ensureInput( STrack *track )

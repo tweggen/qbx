@@ -1811,3 +1811,52 @@ so a redo registers the same name. Its inverse is `remove-asset` (objects/
 mixer, built through the registry), which inverts a file-backed asset back to
 this verb. Gated by `sampler_q6_record` (the asset exists, windows the take's
 file, places on a lane, and the undo removes it) and `sampler_q6_land_pad`.
+
+## A capture over a LIVE-OWNED track keeps the previous one (QBX-283)
+
+The author's answer of 2026-11-07 (option A). An asset's capture freezes the
+asset's content, and a track the live lane OWNS (armed, proposal 21 D4)
+answers that freeze with silence. So while the content HEARS a live-owned
+track — child and content links plus the routing edges a freeze hears
+through (`ssampler::assetHears`, QBX-285) — the cut is **held**:
+
+- **The stale capture is not rebuilt.** Every placement keeps playing the last
+  good capture (`lastGoodCapture_`, the last one published while nothing it
+  hears was owned) until the disarm. EDITS inside the content made while armed
+  stay stale through the placements until then. `buildCapture_` checks the hold
+  twice before it reads any content (at entry and again right after sampling
+  `captureGen_`) and serves the last good capture, stamped with the content's
+  current epoch so `ensureReader()` does not rebuild it on every pull.
+  `ensureReader()` keeps a held cut's existing capture.
+- **A capture built while owned is dropped at publish** (the after-check),
+  whether it was also beaten by an invalidation or not: the last good capture
+  is published in its place. Logged once per drop: "capture of 'X' DISCARDED:
+  track T became live-owned while it was built; the previous capture is kept".
+- **A FIRST capture made while armed is silent** (there is nothing to keep): a
+  cut made after the arm is not held, builds, and its freeze is refused and
+  counted. The disarm's invalidation recaptures it.
+- **The question is the shell's** (`SCut::setLiveOwnerHook`, installed by
+  `ssamplerwiring::installLiveOwnership`: the master tracks whose chain
+  processors are live-owned, `twPluginSlotProcessor::liveOwned()`, plus the
+  ones about to be). objects/cut names neither objects/sampler nor the shell.
+- **It is asked where ownership flips** (`SCut::recheckLiveHoldEverywhere`,
+  called from `SLiveMonitor::setClosureOwned`): an ARM asks BEFORE the
+  processors flip, and a newly held cut first DRAINS a build already running
+  (waits on `captureBuildMutex_`, at most 250 ms) so it finishes over
+  processors that are not owned yet; a build still running after that is the
+  after-check's ("a build still running at the arm; …"). A RELEASE — a disarm,
+  a render's suspension (a render hears the asset as it is), monitor Auto on
+  Play — asks AFTER the flip, and a freed cut logs "…no longer live-owned;
+  recapturing" and invalidates its capture. A build that finishes during the
+  arm's drain is discarded too: the previous capture is what the rule keeps.
+- **Test seams**: `set-capture-gate` (a build on another thread waits after
+  both before-checks, before reading content; `holdMs` bounds the wait) and
+  `assert-capture-hold` (`held`, `heldFor`).
+
+Gates: `asset_capture_armed_holds` (monitor On while playing: the placement
+plays the previous capture, 0.5568, and no refusal is counted; the stale edit;
+the disarm's recapture; a first capture made while armed is silent until the
+disarm) and `asset_capture_armed_race` (a build held at the gate across the
+arm is discarded; the disarm alone recaptures; a build held only 150 ms is
+drained before the flip, with no further refusal). Sabotages: proposal 21
+§13.4.

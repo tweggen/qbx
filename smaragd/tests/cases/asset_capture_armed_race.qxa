@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-283, THE RACE: THE TRACK IS ARMED WHILE THE ASSET'S CAPTURE IS BEING
+  BUILT. asset_capture_armed_holds gates the check made BEFORE a build; an
+  arm that lands after a build passed it is the check made AFTER: a capture
+  built while its content became live-owned may hold the guard's silence and
+  is DROPPED at publish, the previous one kept.
+
+  THE FIXTURE is asset_capture_armed_holds'. The race is made deterministic
+  by the test gate (set-capture-gate): an edit inside the asset (velocity
+  100 -> 50) makes the next build, on a revalidator worker, wait at the gate,
+  after the before-check and before it reads any content; the track is armed;
+  then the gate opens. The build freezes the owned sine (one refusal), is
+  discarded, and the placement keeps the previous capture (velocity 100).
+  The disarm alone recaptures (the edit, 0.278). A last section gates the
+  arm's DRAIN: a build held only 150 ms is waited out before the flip.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1, with the live-instrument cases.
+-->
+<SActionScript version="1" name="asset_capture_armed_race">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Inst"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="1920" name="Held"/>
+    <add-note clip="0,0" tick="0" dur="1920" key="69" velocity="100" channel="0"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <create-asset container="0" startOffset="0" duration="48000" assetName="InstA"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Lane"/>
+    <place-asset assetName="InstA" trackPath="1" timePos="144000"/>
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <assert-meter trackPath="1" position="155648" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== the next build waits at the gate; the track is armed under it -->
+    <set-capture-gate assetName="InstA" ready="false"/>
+    <set-notes clip="0,0"><n tick="0" dur="1920" key="69" velocity="50" channel="0"/></set-notes>
+    <wait-ms ms="600"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="600"/>
+    <assert-capture-hold assetName="InstA" held="1" heldFor="0"/>
+
+    <!-- ===== the gate opens: the build ran over the owned sine, and is dropped -->
+    <set-capture-gate assetName="InstA" ready="true"/>
+    <wait-ms ms="800"/>
+    <assert-log contains="capture of 'InstA' DISCARDED: track 0 became live-owned while it was built; the previous capture is kept"
+                minCount="1" maxCount="1"/>
+    <assert-render-policy liveOwnedRefusals="1000" minLiveOwnedRefusals="1"/>
+    <assert-meter trackPath="1" position="155648" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== the disarm alone recaptures: the edit is heard -->
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="0"/>
+    <assert-log contains="capture of 'InstA': track 0 is no longer live-owned; recapturing"
+                minCount="1" maxCount="1"/>
+    <wait-ms ms="600"/>
+    <assert-capture-hold assetName="InstA" held="0" heldFor=""/>
+    <assert-meter trackPath="1" position="155648" minRms="0.26" maxRms="0.30"/>
+
+    <!-- ===== THE DRAIN: a build already running when the track is armed is
+         waited for (at most 250 ms) BEFORE the processors flip, so it freezes
+         nothing owned. Here the build is held for only 150 ms: the arm waits
+         it out, no further refusal is counted (still the one of the race
+         above), the "still running" line is not written, and the build, made
+         from an edit just before the arm, is discarded like any capture
+         published under the hold: the placement keeps velocity 50. -->
+    <set-capture-gate assetName="InstA" ready="false" holdMs="150"/>
+    <set-notes clip="0,0"><n tick="0" dur="1920" key="69" velocity="100" channel="0"/></set-notes>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log contains="a build still running at the arm" minCount="0" maxCount="0"/>
+    <wait-ms ms="600"/>
+    <assert-capture-hold assetName="InstA" held="1" heldFor="0"/>
+    <assert-render-policy liveOwnedRefusals="1" minLiveOwnedRefusals="1"/>
+    <assert-meter trackPath="1" position="155648" minRms="0.26" maxRms="0.30"/>
+    <set-capture-gate assetName="InstA" ready="true"/>
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="0"/>
+    <assert-log contains="capture of 'InstA': track 0 is no longer live-owned; recapturing"
+                minCount="1" maxCount="1"/>
+    <wait-ms ms="600"/>
+    <assert-meter trackPath="1" position="155648" minRms="0.53" maxRms="0.58"/>
+  </actions>
+
+</SActionScript>
