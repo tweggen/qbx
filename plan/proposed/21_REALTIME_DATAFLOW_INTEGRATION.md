@@ -583,7 +583,7 @@ the track was armed.
    silence and announce it). The mechanism is in objects/cut's CONTRACT,
    "A capture over a LIVE-OWNED track keeps the previous one".
 3. **Found while building it**:
-   - **An arm's own invalidation starts a capture build an instant before the hold.** Measured: the build passed its before-check, then froze the sine after the flip, and one refusal was counted on every arm. So the arm asks the cuts BEFORE flipping the processors, and a newly held cut DRAINS a running build, at most 250 ms. A longer build is the after-check's.
+   - **An arm's own invalidation starts a capture build an instant before the hold.** Measured: the build passed its before-check, then froze the sine after the flip, and one refusal was counted on every arm. So the arm asks the cuts BEFORE flipping the processors, and a newly held cut DRAINS a running build, at most 250 ms. A longer build is the after-check's. A build that finishes during the drain is discarded as well, so an edit made just before the arm stays stale until the disarm; that is the author's decision of 2026-11-07, not an open choice.
    - **Playback capture frame 0 is the DEVICE start.** Under monitor On the device opens at the arm, so a case that arms before Play measures a window shifted by the time between them. The case arms after the transport starts, as `live_instrument_disarm_playback` does.
 4. **Gates**:
    - `qxa.asset_capture_armed_holds`:

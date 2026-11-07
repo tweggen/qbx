@@ -1849,6 +1849,8 @@ through (`ssampler::assetHears`, QBX-285) — the cut is **held**:
   Play — asks AFTER the flip, and a freed cut logs "…no longer live-owned;
   recapturing" and invalidates its capture. A build that finishes during the
   arm's drain is discarded too: the previous capture is what the rule keeps.
+  That is the author's decision of 2026-11-07, not an open choice: an edit
+  made just before the arm stays stale until the disarm.
 - **Test seams**: `set-capture-gate` (a build on another thread waits after
   both before-checks, before reading content; `holdMs` bounds the wait) and
   `assert-capture-hold` (`held`, `heldFor`).
