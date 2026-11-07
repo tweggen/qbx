@@ -504,7 +504,11 @@ changed for it.
     answers silence, so a bounce of content that holds one would be silence
     there. `ssampler::liveOwnerOf(body)` — a hook the shell installs over
     `SLiveMonitor::liveOwnedTracks()` (the closure only) and the PLAIN child/content walk from the body,
-    never the sampler hops — is asked twice: BEFORE a bounce starts
+    never the sampler hops — since QBX-285 that walk (`ssampler::assetHears`)
+    also follows the ROUTING edges a bounce hears through (invariant 34: a
+    return's aux source, each key lane, a send lane's senders; never a lane's
+    outgoing sends), so an armed source that a return or a keyed slot inside
+    the asset taps holds the bounce too — is asked twice: BEFORE a bounce starts
     (`startBounce_`: owned → no job, no `renders` count) and AFTER it finished
     (`installFinished_`: owned now → the result is DISCARDED, because a track
     armed while the job ran may have given it silence, frozen by the worker or
@@ -555,11 +559,11 @@ changed for it.
     would build one of proposal 55 D7's same-arrangement shapes (a return
     into its own source folder, a keyed track into its own key source) is
     refused as a reference cycle rather than built and left for the mixer
-    pass to unwire (the author, 2026-11-05). Not covered: the live-owner
-    check `liveOwnerOf` (invariant 33) still walks child and content links
-    only, so a bounce over a return of an ARMED source is not deferred
-    (QBX-285). Gates: `sampler_routing_cycle_link`, `…_return`,
-    `…_sidechain`, `…_send`, `…_late`, `…_d7_move`.
+    pass to unwire (the author, 2026-11-05). The live-owner check
+    (invariant 33) follows the same edges through the same hook (QBX-285).
+    Gates: `sampler_routing_cycle_link`, `…_return`, `…_sidechain`,
+    `…_send`, `…_late`, `…_d7_move`; for the live-owner half
+    `sampler_armed_routing_waits` and `sampler_armed_routing_race`.
 
 ### QBX-282: every program verb on a library instance is an overlay edit
 
@@ -745,6 +749,13 @@ absolute (there is nothing to be relative to).
   and `place-asset` refused through a key edge; `…_d7_move` refuses a
   reparent-track that would build a D7 same-arrangement shape. Sabotages:
   proposal 56 §11 "QBX-269".
+- `qxa.sampler_armed_routing_waits`, `qxa.sampler_armed_routing_race`
+  (QBX-285, invariants 33 and 34) — a bounce over an asset whose return, keyed
+  slot, or slot keyed from a send lane taps an ARMED source waits
+  (`waiting="track armed" waitingFor=` the source) and keeps its previous
+  generation; a re-ask after another arm leaves it waiting; an asset that only
+  sends is not held; the disarm re-bounces; a bounce running when the source
+  is armed is discarded. Sabotages: proposal 56 §11 "QBX-285".
 
 - `qxa.sampler_q4_stretch` (QBX-268) — Q4.1: tests/sampler_q4_loop.wav (2
   beats at 120 BPM, a 1 kHz carrier under four hits, the first accented), zone

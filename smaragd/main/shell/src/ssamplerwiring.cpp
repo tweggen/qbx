@@ -198,13 +198,14 @@ void installLiveOwnership( SApplication *app )
     ssampler::setLiveOwnerHook( [ap]( SObject *body ) -> QString {
         SLiveMonitor *m = ap ? ap->liveMonitor() : nullptr;
         if( !m || !body ) return QString();
-        // The PLAIN walk (child and content links): what a freeze of the
-        // body's content reaches. Never the sampler hops of the cycle walk --
-        // a second sampler inside the content plays its own installed
+        // What a freeze of the body's content HEARS: child and content links
+        // and, since QBX-285, the routing edges (a return's source, a key
+        // lane, a send lane's senders), so an armed source a return inside the
+        // asset taps holds the bounce too. Never the sampler hops of the cycle
+        // walk -- a second sampler inside the content plays its own installed
         // generation, its asset is not frozen by this bounce.
         for( STrack *t : m->liveOwnedTracks() ) {
-            QSet<const SObject *> seen;
-            if( !sarrangements::detail::reachesRec( body, t, seen, nullptr ) ) continue;
+            if( !ssampler::assetHears( body, t ) ) continue;
             SProject *proj = body->getProjectSafe();
             const QString spec = proj ? splacements::specOf( proj, t ) : QString();
             return spec.isEmpty() ? t->getSName() : spec;

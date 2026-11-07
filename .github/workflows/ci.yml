@@ -16,6 +16,7 @@ jobs:
   static:
     name: Static checkers
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: ./ci/gates.sh --static
@@ -33,6 +34,11 @@ jobs:
   build-and-test:
     name: Build + ctest (Linux)
     runs-on: ubuntu-latest
+    # A green run takes 14-19 min (15 runs measured 2026-11-06). Without a limit
+    # a runner-side stall waits for GitHub's 6 h default: on 2026-11-05 #351's
+    # `apt-get update` hung on the Azure mirror and the job sat for 6 h 0 m
+    # before turning red, having built nothing. 60 min is three green runs.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,6 +49,9 @@ jobs:
           submodules: recursive
 
       - name: Install build dependencies
+        # Seconds when the mirror answers; a hang here is the runner's, not
+        # the change's (re-run the job).
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \

@@ -94,8 +94,8 @@
     <!-- ===================== 4: the release: unkeyed, Bass may move in -->
     <clear-plugin-sidechain trackPath="2" slot="0"/>
     <reparent-track source="2" destParent="1"/>
-    <assert-track-name trackPath="1,1" name="Bass"/>
     <assert-log contains="would close" minCount="0" maxCount="0"/>
+    <assert-track-name trackPath="1,1" name="Bass"/>
   </actions>
 
 </SActionScript>

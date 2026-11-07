@@ -61,19 +61,19 @@
     <reparent-track source="1" destParent="0" expectReject="true"/>
     <assert-log contains="reparent-track: refused, moving &quot;Src Aux 1&quot; into &quot;Src&quot; would close a reference cycle"
                 minCount="1" maxCount="1"/>
+    <assert-log contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
     <assert-track-count count="5"/>
     <assert-track-name trackPath="1" name="Src Aux 1"/>
     <assert-return-track trackPath="1" isReturn="1" source="0" routed="1"/>
-    <assert-log contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
 
     <!-- ====================== 2: a keyed track into its own key source -->
     <reparent-track source="3" destParent="2" expectReject="true"/>
     <assert-log contains="reparent-track: refused, moving &quot;Bass&quot; into &quot;Key&quot; would close a reference cycle"
                 minCount="1" maxCount="1"/>
+    <assert-log contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
     <assert-track-count count="5"/>
     <assert-track-name trackPath="3" name="Bass"/>
     <assert-plugin-sidechain trackPath="3" slot="0" keyed="1" source="2" wired="1"/>
-    <assert-log contains="[ROUTE] cycle" minCount="0" maxCount="0"/>
 
     <!-- ================================ 3: the positive control, undoable -->
     <reparent-track source="1" destParent="4"/>
@@ -92,9 +92,9 @@
     <!-- ==================== 4: the release: unrouted, it may move in -->
     <clear-return-source trackPath="1"/>
     <reparent-track source="1" destParent="0"/>
+    <assert-log contains="would close" minCount="0" maxCount="0"/>
     <assert-track-name trackPath="0,0" name="Src Aux 1"/>
     <assert-return-track trackPath="0,0" isReturn="0"/>
-    <assert-log contains="would close" minCount="0" maxCount="0"/>
   </actions>
 
 </SActionScript>

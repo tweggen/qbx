@@ -886,7 +886,8 @@ foreach(_liveinst live_instrument_play live_instrument_merge
                   live_instrument_disarm_playback live_instrument_ownership
                   live_instrument_thru live_instrument_keyboard
                   sampler_q5_live_play sampler_q5_live_playing
-                  sampler_q5_live_generation sampler_armed_bounce_waits)
+                  sampler_q5_live_generation sampler_armed_bounce_waits
+                  sampler_armed_routing_waits)
     if(TEST qxa.${_liveinst})
         set_tests_properties(qxa.${_liveinst} PROPERTIES
             RUN_SERIAL TRUE
@@ -899,11 +900,14 @@ endforeach()
 # before it is released, so the worker's own refusal check would never be
 # reached; the debounce is put out of reach for this one case (the case says
 # why). It arms a live instrument, so it is RUN_SERIAL like the six above.
-if(TEST qxa.sampler_armed_bounce_race)
-    set_tests_properties(qxa.sampler_armed_bounce_race PROPERTIES
-        RUN_SERIAL TRUE
-        ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS=60000")
-endif()
+# QBX-285's race (a TAPPED source armed under a held bounce) is the same shape.
+foreach(_liverace sampler_armed_bounce_race sampler_armed_routing_race)
+    if(TEST qxa.${_liverace})
+        set_tests_properties(qxa.${_liverace} PROPERTIES
+            RUN_SERIAL TRUE
+            ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1;SMARAGD_SAMPLER_BOUNCE_DEBOUNCE_MS=60000")
+    endif()
+endforeach()
 
 # --- MIDI recording (proposal 21 L4 = 37 P8b) --------------------------------
 #
