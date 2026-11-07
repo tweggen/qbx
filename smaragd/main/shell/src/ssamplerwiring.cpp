@@ -5,6 +5,7 @@
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/objects/sampler/ssamplerprogram.h"
+#include "app/objects/cut/scut.h"
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/sampler/ssamplerslots.h"
 #include "app/objects/track/spluginchain.h"
@@ -19,6 +20,7 @@
 #include "tw/core/twlog.h"
 
 #include "tw/plugins/twplugindescriptor.h"
+#include "tw/plugins/twpluginslotproc.h"
 #include "tw/sampler/twsamplerregistry.h"
 
 #include <QDebug>
@@ -192,9 +194,52 @@ void install()
     } );
 }
 
+namespace {
+// The tracks whose chain the live lane owns RIGHT NOW, read from the
+// processors' own flags (twPluginSlotProcessor::liveOwned) rather than the
+// monitor's closure: SLiveMonitor asks the cuts again from inside
+// setClosureOwned(), before its closure bookkeeping has caught up, and the
+// flags are the ownership the freeze guard actually checks.
+void collectOwned( SObject *o, std::vector<STrack *> &out, QSet<SObject *> &seen )
+{
+    if( !o || seen.contains( o ) ) return;
+    seen.insert( o );
+    if( STrack *t = dynamic_cast<STrack *>( o ) ) {
+        if( SPluginChain *chain = t->getPluginChain() ) {
+            for( int i = 0; i < chain->getSlotCount(); ++i ) {
+                SPluginSlot *slot = chain->getSlotAt( i );
+                const auto proc = slot ? slot->getProcessor() : nullptr;
+                if( proc && proc->liveOwned() ) { out.push_back( t ); break; }
+            }
+        }
+    }
+    for( SLink *lk : o->childLinks() )
+        if( lk && lk->getSObject().isLane() ) collectOwned( &lk->getSObject(), out, seen );
+}
+}  // namespace
+
 void installLiveOwnership( SApplication *app )
 {
     QPointer<SApplication> ap( app );
+    // QBX-283: the same question for an asset's own capture (objects/cut may
+    // not name objects/sampler or the shell, so it is a hook there too).
+    SCut::setLiveOwnerHook( [ap]( SCut *cut, const std::vector<SObject *> &alsoOwned ) -> QString {
+        SProject *proj = ap ? ap->getCurrentProject() : nullptr;
+        if( !proj || !cut ) return QString();
+        std::vector<STrack *> owned;
+        QSet<SObject *> seen;
+        // check_root_resolution: master -- the live lane owns master tracks only
+        collectOwned( proj->masterRoot(), owned, seen );
+        for( SObject *o : alsoOwned )
+            if( STrack *t = dynamic_cast<STrack *>( o ) )
+                if( std::find( owned.begin(), owned.end(), t ) == owned.end() ) owned.push_back( t );
+        for( STrack *t : owned ) {
+            if( !ssampler::assetHears( cut, t ) ) continue;
+            const QString spec = splacements::specOf( proj, t );
+            return spec.isEmpty() ? t->getSName() : spec;
+        }
+        return QString();
+    } );
     ssampler::setLiveOwnerHook( [ap]( SObject *body ) -> QString {
         SLiveMonitor *m = ap ? ap->liveMonitor() : nullptr;
         if( !m || !body ) return QString();

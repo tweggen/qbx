@@ -891,6 +891,9 @@ const Fixture kFixtures[] = {
       "<set-return-source trackPath='2' sourcePath='0' slot='1' bus='2'/>" },
     { "clear-return-source",
       "<clear-return-source trackPath='2'/>" },
+    // QBX-283: the asset capture hold's test verbs.
+    { "set-capture-gate",    "<set-capture-gate assetName='A' ready='false'/>" },
+    { "assert-capture-hold", "<assert-capture-hold assetName='A' held='1' heldFor='0'/>" },
     { "assert-return-track",
       "<assert-return-track trackPath='1' isReturn='1' source='0' slot='0' bus='1'"
       " routed='1' mapping='mapping=copy' mask='2'/>" },
@@ -1345,6 +1348,8 @@ const LaneRow kLaneRows[] = {
       "a system lane is never a return (set-return-source refuses one), so it "
       "has no source to clear and refuses on that" },
     { "assert-return-track", Accept, "read-only" },
+    { "set-capture-gate",    Accept, "a test seam on an asset body, which names no lane" },
+    { "assert-capture-hold", Accept, "read-only" },
 
     // ================== PROPOSAL 55 M4: THE SIDECHAIN VERBS =================
     //

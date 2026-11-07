@@ -5,6 +5,9 @@
 #include <qobject.h>
 #include <mutex>
 #include <atomic>
+#include <functional>
+#include <thread>
+#include <vector>
 #include <memory>
 #include <chrono>
 #include "app/model/sobject.h"
@@ -130,6 +133,39 @@ public:
     // survives reader rebuilds (readers are minted lazily). M1 callers: the
     // set-render-gate test verb; M5 wires real spectral-aspect readiness here.
     void setRenderGateReady( bool ready );
+
+    // --- QBX-283: a capture over a LIVE-OWNED track keeps its previous one ---
+    //
+    // A capture freezes the content; a track the live lane OWNS (armed,
+    // proposal 21 D4) answers that freeze with silence. The author's answer
+    // (2026-11-07, QBX-283): while the content reaches a live-owned track the
+    // stale capture is NOT rebuilt -- every placement keeps playing the last
+    // good capture until the disarm, edits inside the content made meanwhile
+    // included; a capture built while owned is dropped at publish; the disarm
+    // recaptures. Which tracks are owned and what the content hears is the
+    // shell's knowledge (SLiveMonitor, ssampler::assetHears), so it is a hook:
+    // given a cut, the spec of a live-owned track its content hears ("" when
+    // none), counting `alsoOwned` as owned too (an arm asks BEFORE it flips
+    // the processors, so no build can start in between). Main thread.
+    using LiveOwnerOf = std::function<QString( SCut *cut,
+                                               const std::vector<SObject *> &alsoOwned )>;
+    static void setLiveOwnerHook( LiveOwnerOf hook );
+    // Ask every container-backed cut again (the shell calls it wherever the
+    // live lane's ownership flips). Holds the newly owned, releases and
+    // recaptures the freed. Main thread.
+    static void recheckLiveHoldEverywhere( const std::vector<SObject *> &alsoOwned = {} );
+    void recheckLiveHold( const std::vector<SObject *> &alsoOwned = {} );
+    bool    liveHeld() const { return liveHold_.load(); }
+    QString liveHeldFor() const
+    {
+        std::lock_guard<std::mutex> lock( mutex() );
+        return liveHoldOwner_;
+    }
+    // TEST SEAM (set-capture-gate): a capture build on a thread other than the
+    // one that closed the gate waits at the gate -- after the before-checks,
+    // before any content is read -- until it opens (bounded, 10 s), or for at
+    // most `holdMs` when that is positive.
+    void setCaptureGateReady( bool ready, int holdMs = 0 );
 
     // Proposal 19 Phase 2b: blocking snapshot for the freeze/resolution path —
     // always returns the CURRENT reader (never the try-lock lastGoodSnapshot_
@@ -795,6 +831,17 @@ private:
     // Set (never cleared) when buildCapture_ publishes a capture; gates
     // onArrangementChanged(). Atomic: written on the reval worker.
     std::atomic<bool> everHadCapture_{false};
+    // QBX-283: see recheckLiveHold(). liveHold_ is read by the build on any
+    // thread; the owner string and the recheck are the main thread's.
+    std::atomic<bool> liveHold_{ false };
+    QString liveHoldOwner_;
+    // The last capture built while nothing it hears was live-owned; what a
+    // held cut serves. Under mutex(), as capture_.
+    std::shared_ptr<twCapturingSource> lastGoodCapture_;
+    std::atomic<bool> captureGateReady_{ true };
+    std::atomic<int>  captureGateHoldMs_{ 0 };
+    std::thread::id   captureGateThread_;
+    void publishHeldCapture_( const char *why );
     // Peak cache over the capture, for the waveform preview.
     // TODO: Phase 4 future - replace entirely with two-page buffer model.
     preview_t *capPeaks_ = nullptr;

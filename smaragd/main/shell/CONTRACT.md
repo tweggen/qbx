@@ -1089,6 +1089,19 @@ content walk — and connects `liveLanesMayHaveChanged` to
 above, so a waiting layer is bounced there like any due one, the barrier's
 line counts it, and the render is the same bytes as in a fresh process.
 
+**An asset's CAPTURE over an armed track keeps the previous one (QBX-283;
+objects/cut CONTRACT).** `installLiveOwnership()` also installs
+`SCut::setLiveOwnerHook` — a cut → the spec of a master track whose chain
+processors are live-owned (`twPluginSlotProcessor::liveOwned()`, not the
+monitor's closure bookkeeping, which lags the flip), or which the caller is
+about to own, that the cut's content hears (`ssampler::assetHears`). And
+`SLiveMonitor::setClosureOwned()` asks every cut again
+(`SCut::recheckLiveHoldEverywhere`): an ARM before the processors flip, with
+the arriving closure as "about to be owned", so a held cut drains a running
+build while nothing is owned yet; a RELEASE (a disarm, a render's
+suspension, monitor Auto on Play) after the flip, so a freed cut recaptures
+what is there now.
+
 ## The media layer's two hooks (proposal 38 gate 3)
 
 Three injections, split across two classes because the status bar belongs to

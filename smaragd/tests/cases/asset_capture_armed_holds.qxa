@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-283: A PLACEMENT OF AN ASSET WHOSE CONTENT HOLDS AN ARMED INSTRUMENT
+  TRACK KEEPS PLAYING ITS PREVIOUS CAPTURE UNTIL THE DISARM (the author's
+  answer of 2026-11-07, option A).
+
+  THE DEFECT. An asset's own capture (the SCut a placement plays) freezes the
+  asset's content. A track the live lane OWNS answers a freeze with silence
+  (proposal 21 D4), so while the track was armed the capture was rebuilt as
+  silence and every placement of the asset played nothing.
+
+  THE RULE. While the content hears a live-owned track its stale capture is
+  not rebuilt: the placements keep the last good capture, edits inside the
+  asset made meanwhile included, and the disarm recaptures. A FIRST capture
+  made while armed (no previous one) is still silent.
+
+  ======================================================= the fixture
+
+  Master track 0 "Inst": the test sine, one note (key 69, velocity 100, 1 s:
+  rms 0.556769 closed form), MIDI input capture, MUTED so the master hears
+  the placement alone. Asset "InstA" windows track 0 over [0, 48000). Master
+  track 1 "Lane": InstA placed at 144000 (3 s). The meter page at 155648 and
+  the playback window [156000, 180000) carry the placement alone.
+
+  MEASURED ON MAIN fe250a00: armed under monitor On and playing, the window
+  read rms 0 and liveOwnedRefusals rose from 0 to 2 (the capture's freeze of
+  the owned sine was refused).
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1, with the live-instrument cases.
+-->
+<SActionScript version="1" name="asset_capture_armed_holds">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="Inst"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="1920" name="Held"/>
+    <add-note clip="0,0" tick="0" dur="1920" key="69" velocity="100" channel="0"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <create-asset container="0" startOffset="0" duration="48000" assetName="InstA"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="1" name="Lane"/>
+    <place-asset assetName="InstA" trackPath="1" timePos="144000"/>
+    <set-track-mute trackPath="0" muted="1"/>
+
+    <!-- =============== 1. nothing armed: the placement plays the note -->
+    <assert-meter trackPath="1" position="155648" minRms="0.53" maxRms="0.58"/>
+    <assert-capture-hold assetName="InstA" held="0" heldFor=""/>
+
+    <!-- ===== 2. armed under monitor On while playing: the capture is HELD,
+         the placement at 3 s plays the previous capture, and nothing freezes
+         the owned sine. Armed AFTER the transport starts, so the capture's
+         frame 0 (the device start) is the play start, as in
+         live_instrument_disarm_playback. -->
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log contains="capture of 'InstA' HELD: track 0 is armed (live-owned); its placements keep the previous capture until the track is disarmed"
+                minCount="1" maxCount="1"/>
+    <wait-ms ms="4600"/>
+    <toggle-playback play="0"/>
+    <dump-playback-capture filename="acah_on.wav" minFrames="200000"/>
+    <assert-audio-energy filename="acah_on.wav" channel="0"
+                         startFrame="156000" frameCount="24000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <assert-render-policy liveOwnedRefusals="0"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <assert-capture-hold assetName="InstA" held="1" heldFor="0"/>
+    <assert-meter trackPath="1" position="155648" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== 3. an edit inside the asset while armed stays STALE through the
+         placement (velocity 50 would read 0.278): still the previous level. -->
+    <set-notes clip="0,0"><n tick="0" dur="1920" key="69" velocity="50" channel="0"/></set-notes>
+    <wait-ms ms="600"/>
+    <assert-capture-hold assetName="InstA" held="1" heldFor="0"/>
+    <assert-meter trackPath="1" position="155648" minRms="0.53" maxRms="0.58"/>
+
+    <!-- ===== 4. the DISARM recaptures: the edit is heard. Under On a track
+         is live armed or not (proposal 21 D9), so the mode goes back first. -->
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <arm-track trackPath="0" armed="0"/>
+    <assert-log contains="capture of 'InstA': track 0 is no longer live-owned; recapturing"
+                minCount="1" maxCount="1"/>
+    <wait-ms ms="600"/>
+    <assert-capture-hold assetName="InstA" held="0" heldFor=""/>
+    <assert-meter trackPath="1" position="155648" minRms="0.26" maxRms="0.30"/>
+
+    <!-- ===== 5. a FIRST capture made while armed has nothing to keep: an
+         asset created and placed while the track is armed (stopped, Auto) is
+         silent until the disarm, and heard after it. -->
+    <arm-track trackPath="0" armed="1"/>
+    <wait-ms ms="600"/>
+    <create-asset container="0" startOffset="0" duration="48000" assetName="InstB"/>
+    <place-asset assetName="InstB" trackPath="1" timePos="240000"/>
+    <assert-meter trackPath="1" position="251904" minRms="0" maxRms="0.00001"/>
+    <assert-meter trackPath="1" position="155648" minRms="0.26" maxRms="0.30"/>
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="600"/>
+    <assert-meter trackPath="1" position="251904" minRms="0.26" maxRms="0.30"/>
+  </actions>
+
+</SActionScript>
