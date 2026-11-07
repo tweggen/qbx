@@ -887,7 +887,8 @@ foreach(_liveinst live_instrument_play live_instrument_merge
                   live_instrument_thru live_instrument_keyboard
                   sampler_q5_live_play sampler_q5_live_playing
                   sampler_q5_live_generation sampler_armed_bounce_waits
-                  sampler_armed_routing_waits)
+                  sampler_armed_routing_waits
+                  asset_capture_armed_holds asset_capture_armed_race)
     if(TEST qxa.${_liveinst})
         set_tests_properties(qxa.${_liveinst} PROPERTIES
             RUN_SERIAL TRUE

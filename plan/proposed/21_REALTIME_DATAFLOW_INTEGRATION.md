@@ -561,3 +561,52 @@ Gates added for these: T1 (irregular RT grid, sample-exact stream), T2
 (threaded pump vs a variable-block RT, 500 blocks, 0 spurious repositions,
 occupancy = ⌈lead/block⌉+1), T3 (end to end through the real callback, both
 lanes summed, no holes), T4 (rate refusal, both branches).
+
+### 13.4 QBX-283 (2026-11-07): an asset's capture over a live-owned track
+
+D4 names "a preview/asset demand on the reval lane" as the freeze that meets a
+live-owned processor and is answered with counted silence; it did not say what
+a PLACEMENT of that asset then plays. The answer was: silence, for as long as
+the track was armed.
+
+1. **Measured on main fe250a00**:
+   - The fixture is a master instrument track (the test sine, one 1 s note, muted), an asset over it, and that asset placed on another master lane at 3 s.
+   - Armed under monitor On while playing, the placement's window read rms 0, and `liveOwnedRefusals` rose.
+   - Under monitor Auto it was heard on Play, because the track is released then. It was also heard in an offline render, because the render suspends the live lane.
+   - A track inside an arrangement never goes live (`SLiveMonitor::rootMixer` is master-only), so the exposure is a master track or folder that is captured into an asset placed elsewhere in the master. That arrangement limit is QBX-286.
+2. **The author's answer (option A)**: while the content hears a live-owned
+   track, its stale capture is not rebuilt; the placements keep the last good
+   capture until the disarm, edits made meanwhile included; a capture built
+   while owned is dropped at publish; the disarm recaptures. The rejected
+   options were B (keep only the armed track's own pre-arm pages, an engine
+   change), C (feed the live performance into the placement) and D (keep the
+   silence and announce it). The mechanism is in objects/cut's CONTRACT,
+   "A capture over a LIVE-OWNED track keeps the previous one".
+3. **Found while building it**:
+   - **An arm's own invalidation starts a capture build an instant before the hold.** Measured: the build passed its before-check, then froze the sine after the flip, and one refusal was counted on every arm. So the arm asks the cuts BEFORE flipping the processors, and a newly held cut DRAINS a running build, at most 250 ms. A longer build is the after-check's. A build that finishes during the drain is discarded as well, so an edit made just before the arm stays stale until the disarm; that is the author's decision of 2026-11-07, not an open choice.
+   - **Playback capture frame 0 is the DEVICE start.** Under monitor On the device opens at the arm, so a case that arms before Play measures a window shifted by the time between them. The case arms after the transport starts, as `live_instrument_disarm_playback` does.
+4. **Gates**:
+   - `qxa.asset_capture_armed_holds`:
+     - the placement plays the previous capture (0.5568, two-sided against the closed form of the disarmed level), and no refusal is counted;
+     - the stale edit (velocity 100 → 50, still 0.55 while armed, 0.278 after the disarm);
+     - a first capture made while armed is silent until the disarm.
+   - `qxa.asset_capture_armed_race`:
+     - a build held at the gate across the arm is discarded, and the previous capture is kept;
+     - the disarm alone recaptures;
+     - a build held only 150 ms is drained before the flip, with no further refusal.
+5. **Sabotages that bite.** The harness writes every file from its own saved bytes, touches it, rebuilds and runs both cases plus seven bystanders: `sampler_armed_bounce_waits`, `…_race`, `sampler_armed_routing_waits`, `…_race`, `live_instrument_disarm_playback`, `sampler_q3_asset_link` and `extract_arrangement_roundtrip`. The clean rebuild after the last passes all nine.
+
+   | Sabotage | Cases that fail |
+   |---|---|
+   | S0: on main | both: silence, refusals |
+   | S1: both before-checks off | both, by their refusal counts (the after-check still keeps the audio) |
+   | S2: the after-check off | `…_race` |
+   | S3: the re-ask's release off | both: no recapture |
+   | S4: the rejected design, rebuild anyway (never hold) | both |
+   | S5: the drain off | both, by refusal counts |
+   | S6: the hold asked after the flip (the first build's order) | `…_race`'s drain section |
+
+   The bystanders passed under every sabotage. B and D were not built as sabotages: S4 is D minus its log line, and B would need the engine change.
+6. **Not gated**:
+   - The drain's 250 ms bound on a real long asset. A build that long is still discarded and counted.
+   - Recording in Auto (live-owned while recording) takes the same path, but no case records.

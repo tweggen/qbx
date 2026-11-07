@@ -6,6 +6,8 @@
 #include <vector>
 #include <chrono>
 #include <limits>
+#include <set>
+#include <thread>
 
 #include <QDebug>
 #include <QTimer>
@@ -81,6 +83,119 @@ uint64_t SCut::contentEpochForCapture_() const
     return rootComp ? (uint64_t) rootComp->contentEpochNow() : 0;
 }
 
+// --- QBX-283: the live hold ---------------------------------------------------
+namespace {
+SCut::LiveOwnerOf &liveOwnerSlot()
+{
+    static SCut::LiveOwnerOf h;
+    return h;
+}
+// Every cut, for recheckLiveHoldEverywhere(). Cuts are made and destroyed on
+// the main thread; the mutex is a belt for the odd off-thread teardown.
+std::mutex &cutRegistryMutex()
+{
+    static std::mutex m;
+    return m;
+}
+std::set<SCut *> &cutRegistry()
+{
+    static std::set<SCut *> r;
+    return r;
+}
+}  // namespace
+
+void SCut::setLiveOwnerHook( LiveOwnerOf hook ) { liveOwnerSlot() = std::move( hook ); }
+
+void SCut::recheckLiveHoldEverywhere( const std::vector<SObject *> &alsoOwned )
+{
+    std::vector<SCut *> cuts;
+    {
+        std::lock_guard<std::mutex> lock( cutRegistryMutex() );
+        cuts.assign( cutRegistry().begin(), cutRegistry().end() );
+    }
+    for( SCut *c : cuts ) {
+        bool alive;
+        {
+            std::lock_guard<std::mutex> lock( cutRegistryMutex() );
+            alive = cutRegistry().count( c ) != 0;
+        }
+        if( alive ) c->recheckLiveHold( alsoOwned );
+    }
+}
+
+void SCut::recheckLiveHold( const std::vector<SObject *> &alsoOwned )
+{
+    // Only a cut that captures its content: a sample-backed cut reads its file
+    // and never freezes a track.
+    if( !content_ || content_->getSObject().getRandomSource() ) return;
+    if( isLiveRecording() || isPureEventContent() ) return;
+    const QString owner = liveOwnerSlot() ? liveOwnerSlot()( this, alsoOwned ) : QString();
+    if( !owner.isEmpty() ) {
+        {
+            std::lock_guard<std::mutex> lock( mutex() );
+            liveHoldOwner_ = owner;
+        }
+        if( !liveHold_.exchange( true ) ) {
+            // THE DRAIN, before the caller flips the processors: a build that
+            // started before the hold (an arm's own invalidation starts one)
+            // finishes over processors that are not owned yet. Bounded: a
+            // build that takes longer is the after-check's.
+            bool drained = false;
+            for( int i = 0; i < 50 && !drained; ++i ) {
+                if( captureBuildMutex_.try_lock() ) {
+                    captureBuildMutex_.unlock();
+                    drained = true;
+                } else {
+                    std::this_thread::sleep_for( std::chrono::milliseconds( 5 ) );
+                }
+            }
+            if( !drained )
+                TW_LOGW( "cut", "capture of '%s': a build still running at the arm; if it "
+                                "hears the armed track it is discarded at publish",
+                         getSName().toUtf8().constData() );
+            const bool had = (bool) captureSnapshot() || [this] {
+                std::lock_guard<std::mutex> lock( mutex() );
+                return (bool) lastGoodCapture_;
+            }();
+            TW_LOGW( "cut", "capture of '%s' HELD: track %s is armed (live-owned); %s "
+                            "until the track is disarmed",
+                     getSName().toUtf8().constData(), owner.toUtf8().constData(),
+                     had ? "its placements keep the previous capture"
+                         : "it has no capture and its placements play nothing" );
+        }
+        return;
+    }
+    if( liveHold_.exchange( false ) ) {
+        TW_LOGW( "cut", "capture of '%s': track %s is no longer live-owned; recapturing",
+                 getSName().toUtf8().constData(), liveHoldOwner_.toUtf8().constData() );
+        {
+            std::lock_guard<std::mutex> lock( mutex() );
+            liveHoldOwner_.clear();
+        }
+        // What a content edit does (onArrangementChanged): the next pull
+        // re-captures what the content is NOW, the held edits included.
+        invalidateCapture();
+    }
+}
+
+void SCut::setCaptureGateReady( bool ready, int holdMs )
+{
+    captureGateThread_ = std::this_thread::get_id();
+    captureGateHoldMs_.store( holdMs > 0 ? holdMs : 0 );
+    captureGateReady_.store( ready );
+}
+
+void SCut::publishHeldCapture_( const char *why )
+{
+    // Serve the last good capture, stamped with the content's CURRENT epoch so
+    // ensureReader() does not take it for stale and rebuild it on every pull.
+    const uint64_t now = contentEpochForCapture_();
+    std::lock_guard<std::mutex> lock( mutex() );
+    capture_ = lastGoodCapture_;
+    captureContentEpoch_.store( now );
+    (void) why;
+}
+
 void SCut::ensureReader()
 {
     // Same rule as buildCapture_ (proposal 21 L3b): a live recording has no
@@ -105,6 +220,10 @@ void SCut::ensureReader()
             captureStaleReported_.store( false );
             return;
         }
+        // QBX-283: while the content hears a live-owned track a stale capture
+        // is the one to keep -- a rebuild would freeze the owned track's
+        // silence. The disarm's recheck invalidates it.
+        if( liveHold_.load() && captureSnapshot() ) return;
         // BOUNDED (see kMaxCaptureRebuildAttempts): a container capture can be
         // stale on every rebuild, and retrying forever hangs the UI thread.
         if( captureRebuildAttempts_.load() >= kMaxCaptureRebuildAttempts ) {
@@ -392,9 +511,35 @@ void SCut::buildCapture_()
         // thread and captureBuildMutex_ (held here) does not exclude it.
         return;  // Already built
     }
+    // QBX-283, BEFORE the build: content that hears a live-owned track would
+    // be frozen into the ownership guard's silence (proposal 21 D4). Serve the
+    // last good capture instead, until the disarm (recheckLiveHold).
+    if( liveHold_.load() ) {
+        publishHeldCapture_( "before" );
+        return;
+    }
     // Sampled BEFORE any content is read (see captureGen_): an invalidation
     // that lands from here on must not be overwritten by this build's publish.
     const uint64_t genAtEntry = captureGen_.load();
+    // QBX-283: asked again after the gate, as late as possible before the
+    // content is read -- an arm's own invalidation can start this build an
+    // instant before the arm holds the cut. What slips past this is the
+    // after-check's (at publish).
+    if( liveHold_.load() ) {
+        publishHeldCapture_( "before" );
+        return;
+    }
+    // TEST SEAM (set-capture-gate): hold a build that is not on the thread
+    // that closed the gate, here, after both before-checks and before any
+    // content is read. Bounded: a forgotten gate must not hang the suite.
+    if( !captureGateReady_.load() && std::this_thread::get_id() != captureGateThread_ ) {
+        TW_LOGW( "cut", "capture of '%s' WAITS at the test gate", getSName().toUtf8().constData() );
+        const int hold = captureGateHoldMs_.load();
+        const int steps = hold > 0 ? ( hold + 9 ) / 10 : 1000;
+        for( int i = 0; i < steps && !captureGateReady_.load(); ++i )
+            std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+    }
+
 
     SObject &c = content_->getSObject();
     uint64_t pendingCaptureEpoch = 0;   // see captureContentEpoch_
@@ -683,6 +828,17 @@ void SCut::buildCapture_()
         // close enough for what the line is for.
         const uint64_t q258Now = contentEpochForCapture_();
         std::lock_guard<std::mutex> lock( mutex() );
+        if( captureGen_.load() != genAtEntry && liveHold_.load() ) {
+            // Beaten by an invalidation AND held since: what the placements
+            // should hear is the last good capture, not nothing.
+            capture_ = lastGoodCapture_;
+            captureContentEpoch_.store( pendingCaptureEpoch );
+            TW_LOGW( "cut", "capture of '%s' DISCARDED: track %s became live-owned "
+                            "while it was built; the previous capture is kept",
+                     getSName().toUtf8().constData(),
+                     liveHoldOwner_.toUtf8().constData() );
+            return;
+        }
         if( captureGen_.load() != genAtEntry ) {
             TW_LOGW( "cut", "[Q258] cut=%p capture '%s' DROPPED after %lld ms "
                             "(%lld frames): an invalidateCapture() beat it",
@@ -695,7 +851,20 @@ void SCut::buildCapture_()
             // capture that invalidation existed to remove.
             return;
         }
+        // QBX-283, AFTER the build: content that became live-owned while it
+        // was frozen may hold the guard's silence. Not published: the last
+        // good capture is served instead (none: the placements stay silent).
+        if( liveHold_.load() ) {
+            TW_LOGW( "cut", "capture of '%s' DISCARDED: track %s became live-owned "
+                            "while it was built; the previous capture is kept",
+                     getSName().toUtf8().constData(),
+                     liveHoldOwner_.toUtf8().constData() );
+            capture_ = lastGoodCapture_;
+            captureContentEpoch_.store( pendingCaptureEpoch );
+            return;
+        }
         capture_ = newCapture;
+        lastGoodCapture_ = newCapture;
         captureContentEpoch_.store( pendingCaptureEpoch );
         // [Q258-DIAG] stamped == now is the dangerous case: this capture is
         // believed CURRENT, so if its audio is wrong it stays wrong until a
@@ -1460,6 +1629,10 @@ twEventClipResolved SCut::resolveEventFeed( offset_t )
 
 SCut::~SCut()
 {
+    {
+        std::lock_guard<std::mutex> lock( cutRegistryMutex() );
+        cutRegistry().erase( this );
+    }
     // FIRST, before tearing down any member: retire from the revalidator. The
     // reval queue holds a BORROWED pointer to this cut, and removeRef()'s
     // deleteLater() is a one-way trip — a preview job scheduled (e.g. from a
@@ -1543,6 +1716,10 @@ SCut::SCut( SProject *parentProject, SObject &content )
 {
     // Get revalidator from project (Phase 4, async capture model)
     revalidator_ = (parentProject != nullptr) ? parentProject->getRevalidator() : nullptr;
+    {
+        std::lock_guard<std::mutex> lock( cutRegistryMutex() );
+        cutRegistry().insert( this );
+    }
 
     // Own content link. Construct with parent=NULL, then setParent (slink.h
     // rule): a parent passed into the ctor delivers ChildAdded — and our
