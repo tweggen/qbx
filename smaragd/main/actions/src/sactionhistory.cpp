@@ -31,22 +31,31 @@ void SActionHistory::submit(SAction *forward, bool skipHistory)
     }
 
     if (skipHistory) {
-        // Apply directly without adding to history (for undo/redo operations).
+        // Apply directly without adding to history (for undo operations).
         // Don't delete the action: it's owned by the undo command and will be deleted
         // when the undo command is destroyed. Just apply it and discard the inverse.
-        SApplyResult result = applyPropagatingRoot(forward, project);
-        if (result.applied) {
-            project->notifyArrangementChanged();   // invalidate cached renders
-        }
-        if (result.inverse) {
-            delete result.inverse;
-        }
+        delete reapply(forward);
     } else {
         // Normal path: add to queue and undo history.
         quint64 id = queue_->enqueue(forward);
         inFlight_.append({id, forward});
         drain_();
     }
+}
+
+SAction *SActionHistory::reapply(SAction *forward)
+{
+    SProject *project = SAppContext::get().getCurrentProject();
+    if (!project || !forward) return nullptr;
+    SApplyResult result = applyPropagatingRoot(forward, project);
+    if (result.applied) {
+        project->notifyArrangementChanged();   // invalidate cached renders
+    } else if (result.inverse) {
+        // Nothing applied, so nothing this could undo.
+        delete result.inverse;
+        return nullptr;
+    }
+    return result.inverse;
 }
 
 void SActionHistory::drain_()

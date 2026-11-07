@@ -1292,16 +1292,23 @@ int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
     SCleanupTakesAction *act = new SCleanupTakesAction(
         QStringLiteral( "project" ), clips, answers.includeOriginals,
         answers.files );
-    stimeline::submitActive( act );
-    // AFTER the submit: the counts on the action are what its apply() actually
-    // did, which with `includeOriginals` checked is more than the preview
-    // showed. Reporting the preview's number here would make the status line
+    // AFTER the submit: the counts are what its apply() actually did, which
+    // with `includeOriginals` checked is more than the preview showed.
+    // Reporting the preview's number here would make the status line
     // disagree with the undo step the user just got.
-    const int removed = act->removedTakes();
+    //
+    // THROUGH THE REPORT, NEVER `act->` (QBX-276): the history deletes an
+    // action that applied with no inverse, so `act` may be gone by the time
+    // submitActive() returns.
+    SCleanupTakesAction::Report report;
+    act->reportTo( &report );
+    stimeline::submitActive( act );
+    act = nullptr;
+    const int removed = report.removedTakes;
     TW_LOGI( "ui.timeline",
              "cleanup-takes: removed %d take(s) from %s, kept %d original "
              "clip(s)%s", removed, qPrintable( scopeText ),
-             act->keptOriginals(),
+             report.keptOriginals,
              answers.files ? ", orphan files binned" : "" );
     if( SMainWindow *mw = sCleanupMainWindow() )
         mw->postHint( tr( "Removed %n take(s).", "", removed )

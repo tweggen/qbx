@@ -180,6 +180,13 @@ SApplyResult SCleanupTakesAction::apply( SProject *project )
                              includeOriginals_ );
     removedTakes_  = p.removedTakes;
     keptOriginals_ = p.keptOriginals;
+    if( report_ ) {
+        report_->removedTakes  = removedTakes_;
+        report_->keptOriginals = keptOriginals_;
+        // One submit, one report: a redo re-applies this action long after
+        // the gesture's stack frame is gone.
+        report_ = nullptr;
+    }
 
     SCompositeAction *macro = new SCompositeAction;
     for( const auto &col : p.perColumn ) {

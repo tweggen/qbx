@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-276: AFTER A REDO, AN UNDO RUNS THE INVERSE OF THE REDO, not the inverse
+  the action produced the first time.
+
+  midi_rec_union_r2 SEGFAULTed intermittently after its last assertion. Under
+  ASan it is a heap-use-after-free on every run, in verify-undo's first undo.
+  place-midi-recording holds its plan (the merge-columns child above all)
+  because the inverse borrows from it, and it re-plans from scratch on every
+  apply: a redo deleted the first plan. SActionUndoCommand kept the FIRST
+  inverse, though, and SActionHistory deleted the one the redo returned. So
+  the next undo's unmerge-columns read its operands out of a freed
+  SMergeColumnsAction. In an ordinary build the allocator usually hands that
+  block straight back to the re-plan's own merge, which is why it passed most
+  of the time.
+
+  place-recording holds and rebuilds its plan the same way. The fix is in the one place the rule can
+  live: a redo hands its inverse back, and the undo command adopts it.
+
+  THIS CASE GATES THE PROTOCOL, NOT ONE VERB. probe-reapply's inverse borrows
+  its forward exactly as unmerge-columns borrows its merge, and it knows which
+  application stamped it. It answers in integers, so an ordinary build sees a
+  stale inverse whatever the allocator does. Three undo/redo rounds: the
+  first undo runs the first application's inverse (fine either way); the
+  second and third run after a redo, and under the old protocol both are
+  stale.
+-->
+<SActionScript version="1" name="undo_redo_adopts_inverse">
+
+  <setup project="new"/>
+
+  <actions>
+    <probe-reapply/>
+    <undo/>
+    <redo/>
+    <undo/>
+    <redo/>
+    <undo/>
+    <redo/>
+    <assert-reapply-probe stale="0" undos="3"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

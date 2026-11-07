@@ -24,6 +24,17 @@ public:
     // If skipHistory is true, applies without adding to undo stack (for undo/redo operations).
     void submit(SAction *forward, bool skipHistory = false);
 
+    // Re-apply an action the undo stack already OWNS (a redo), without adding
+    // to history, and hand back the inverse that application produced -- the
+    // caller owns it. nullptr when nothing applied or no inverse came back.
+    //
+    // A redo must keep THIS inverse rather than the first one (QBX-276): an
+    // inverse may borrow state from the application that made it, and a verb
+    // that re-plans on every apply (place-recording, place-midi-recording)
+    // frees the previous plan's children -- which
+    // is exactly what the first inverse borrowed.
+    SAction *reapply(SAction *forward);
+
     // Undo the most recent action: try cancel if in-flight, else pop QUndoStack.
     void undo();
 

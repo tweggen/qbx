@@ -618,6 +618,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sassertsendinputsaction.h
     testkit/include/app/testkit/sassertreturntrackaction.h
     testkit/include/app/testkit/scapturetestactions.h
+    testkit/include/app/testkit/sreapplyprobeactions.h
     testkit/include/app/testkit/sassertpluginsidechainaction.h
     testkit/include/app/testkit/ssendstripactions.h
     testkit/src/sactionrunner.cpp
@@ -689,6 +690,7 @@ set(APP_UI_FILES
     testkit/src/sassertsendinputsaction.cpp
     testkit/src/sassertreturntrackaction.cpp
     testkit/src/scapturetestactions.cpp
+    testkit/src/sreapplyprobeactions.cpp
     testkit/src/sassertpluginsidechainaction.cpp
     testkit/src/ssendstripactions.cpp
     # proposal 38 gate 4: the WebDAV stub server. Deliberately NOT under
