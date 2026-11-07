@@ -41,6 +41,26 @@
 // Ids are never reused (DESIGN §2): an undone add-zone leaves nextId where the
 // add put it, so a new add-zone after it gets a new id (Q1.q2).
 //
+// ON A LIBRARY INSTANCE (QBX-282; nassau-digital DESIGN §8, the author's
+// answers of 2026-11-07; objects/sampler invariant 35) every verb here records
+// an OVERLAY edit instead, and its inverse is restore-sampler-state with the
+// instance's whole state before (ssamplerlibraryactions.h):
+//
+//     set-zone, set-layer, set-sampler-program -> the core's set-zone /
+//                         set-layer / set-program, one per target (a list
+//                         and ALL expanded over what plays now), a relative
+//                         value stored as its absolute result; one GESTURE
+//                         leaves one verb per target, its .was from before
+//                         the gesture; src="asset:" stores `link:<n>`
+//     add-zone, add-layer -> add-zone (+ one add-layer per layer) / add-layer,
+//                         ids from the overlay range (1000000 on); an
+//                         explicit add-zone `id` only when it is the
+//                         overlay's next id; the redo puts back the same ids
+//     remove-zone, remove-layer -> hide-zone / hide-layer, of a base object
+//                         and of one the overlay added alike
+//     reinsert-zone, reinsert-layer, restore-sampler-values -> REFUSED: they
+//                         are a program of its own's inverses
+//
 // EVERY REFUSAL is announced (qWarning, the verb's name first) and mutates
 // nothing — the program is edited on a copy (SSamplerProgram::edit) and the
 // program object itself is created only by an edit that is going to succeed.
@@ -103,6 +123,11 @@ private:
     std::uint32_t createdId_    = 0;
     std::string   createdXml_;
     std::size_t   createdIndex_ = 0;
+    // ON A LIBRARY (QBX-282): the state the first apply left, so the redo puts
+    // back the same overlay ids (an undo keeps the overlay's nextId advanced,
+    // and a fresh add would take new ones).
+    bool          libDone_ = false;
+    std::string   libAfterBase_, libAfterOverlay_;
 };
 
 // remove-zone: `zone`.
@@ -158,6 +183,8 @@ private:
     std::string      createdXml_;
     std::uint32_t    createdZone_  = 0;
     std::size_t      createdIndex_ = 0;
+    bool             libDone_ = false;   // as SAddZoneAction (QBX-282)
+    std::string      libAfterBase_, libAfterOverlay_;
 };
 
 // remove-layer: `layer`.

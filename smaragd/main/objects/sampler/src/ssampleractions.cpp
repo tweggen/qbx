@@ -3,6 +3,7 @@
 #include "app/actions/sactionregistry.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
+#include "app/objects/sampler/ssamplerlibraryactions.h"
 #include "app/objects/sampler/ssamplerprogram.h"
 #include "app/objects/sampler/ssamplerslots.h"
 
@@ -190,6 +191,50 @@ void writeText( QDomElement &elem, const std::string &xml )
     elem.appendChild( elem.ownerDocument().createCDATASection( QString::fromStdString( xml ) ) );
 }
 
+// THE INVERSE OF EVERY OVERLAY EDIT ON A LIBRARY INSTANCE (QBX-278, QBX-282):
+// the instance's whole program state before it.
+SAction *restoreStateOf( const QString &trackPath, int slotIndex, const SSamplerProgram::ProgramState &s )
+{
+    return new SRestoreSamplerStateAction( trackPath, slotIndex, s.library, s.program, s.base, s.overlay );
+}
+
+// An overlay edit on a library instance (QBX-282): `fn` records it on a copy
+// of the library (SSamplerProgram::editLibrary); `inverse` is set to the
+// restore of the state before. False with `why` (the core's reason first).
+bool libraryEdit( SSamplerProgram *prog, const QString &trackPath, int slotIndex,
+                  const std::function<bool( audio::twSamplerLibrary &, std::string & )> &fn,
+                  SAction **inverse, QString *why )
+{
+    const SSamplerProgram::ProgramState before = prog->programState();
+    std::string err;
+    QString     w;
+    if( !prog->editLibrary( [&]( audio::twSamplerLibrary &lib ) { return fn( lib, err ); }, &w ) ) {
+        if( why ) *why = err.empty() ? w : QString::fromStdString( err );
+        return false;
+    }
+    *inverse = restoreStateOf( trackPath, slotIndex, before );
+    return true;
+}
+
+// The redo of a library add (QBX-282): the very state its first apply left,
+// so the overlay ids come back (an undo keeps the overlay's nextId advanced).
+SApplyResult redoLibraryAdd( SSamplerProgram *prog, const QString &trackPath, int slotIndex,
+                             const std::string &base, const std::string &overlay, QString *why )
+{
+    const SSamplerProgram::ProgramState before = prog->programState();
+    SSamplerProgram::ProgramState after;
+    after.library = true;
+    after.base    = base;
+    after.overlay = overlay;
+    if( !prog->restoreProgramState( after, why ) ) return { false, nullptr };
+    return { true, restoreStateOf( trackPath, slotIndex, before ) };
+}
+
+QString libraryNote()
+{
+    return QStringLiteral( ", an overlay edit on the library" );
+}
+
 }  // namespace
 
 // ============================================================ the address ===
@@ -228,6 +273,40 @@ QStringList SSamplerAction::addressAttributes()
 SApplyResult SAddZoneAction::apply( SProject *project )
 {
     QString why;
+
+    // A LIBRARY INSTANCE (QBX-282): an overlay add-zone, ids from the overlay range.
+    if( SSamplerProgram *lib = program( project, false, nullptr ); libDone_ || ( lib && lib->isLibrary() ) ) {
+        if( !lib ) return refuse( QStringLiteral( "no program to add to" ) );
+        if( libDone_ ) {
+            const SApplyResult r =
+                redoLibraryAdd( lib, trackPath_, slotIndex_, libAfterBase_, libAfterOverlay_, &why );
+            return r.applied ? r : refuse( why );
+        }
+        for( const SSamplerAttrList &l : layers_ ) {
+            const QString r = linkSrcRefusal( l, false );
+            if( !r.isEmpty() ) return refuse( r );
+        }
+        const twSamplerAttrs zoneAttrs = toCore( zone_ );
+        std::vector<twSamplerAttrs> layerAttrs;
+        for( const SSamplerAttrList &l : layers_ ) layerAttrs.push_back( toCore( l ) );
+        std::uint32_t id  = 0;
+        SAction      *inv = nullptr;
+        if( !libraryEdit( lib, trackPath_, slotIndex_,
+                          [&]( audio::twSamplerLibrary &l, std::string &err ) {
+                              id = l.recordAddZone( zoneAttrs, layerAttrs, &err );
+                              return id != 0;
+                          },
+                          &inv, &why ) )
+            return refuse( why );
+        const SSamplerProgram::ProgramState after = lib->programState();
+        libDone_         = true;
+        libAfterBase_    = after.base;
+        libAfterOverlay_ = after.overlay;
+        qInfo().noquote() << QStringLiteral( "add-zone: track %1 slot %2: zone %3 with %4 layer(s)%5" )
+                                 .arg( trackPath_ ).arg( slotIndex_ ).arg( id ).arg( layers_.size() )
+                                 .arg( libraryNote() );
+        return { true, inv };
+    }
 
     // THE REDO: put back the zone the first apply made, ids and all.
     if( createdId_ != 0 ) {
@@ -313,6 +392,18 @@ SApplyResult SRemoveZoneAction::apply( SProject *project )
     if( zone_ == 0 ) return refuse( QStringLiteral( "no zone id" ) );
     SSamplerProgram *prog = program( project, false, &why );
     if( !prog ) return refuse( why );
+    if( prog->isLibrary() ) {   // QBX-282: a stored hide, base zone or overlay zone alike
+        SAction *inv = nullptr;
+        if( !libraryEdit( prog, trackPath_, slotIndex_,
+                          [&]( audio::twSamplerLibrary &l, std::string &err ) {
+                              return l.recordHideZone( zone_, &err );
+                          },
+                          &inv, &why ) )
+            return refuse( why );
+        qInfo().noquote() << QStringLiteral( "remove-zone: track %1 slot %2: zone %3 hidden%4" )
+                                 .arg( trackPath_ ).arg( slotIndex_ ).arg( zone_ ).arg( libraryNote() );
+        return { true, inv };
+    }
     std::string xml, err;
     std::size_t at = 0;
     if( !prog->edit( [&]( twSamplerProgramModel &m ) {
@@ -392,6 +483,39 @@ SApplyResult SAddLayerAction::apply( SProject *project )
     SSamplerProgram *prog = program( project, false, &why );
     if( !prog ) return refuse( why );
 
+    if( libDone_ || prog->isLibrary() ) {   // a LIBRARY instance (QBX-282), as add-zone's
+        if( libDone_ ) {
+            const SApplyResult r =
+                redoLibraryAdd( prog, trackPath_, slotIndex_, libAfterBase_, libAfterOverlay_, &why );
+            return r.applied ? r : refuse( why );
+        }
+        std::vector<std::uint32_t> zone;
+        if( !parseIdList( zone_, zone ) || zone.size() != 1 )
+            return refuse( QStringLiteral( "zone=\"%1\" is not one zone id" ).arg( zone_ ) );
+        {
+            const QString r = linkSrcRefusal( layer_, false );
+            if( !r.isEmpty() ) return refuse( r );
+        }
+        const twSamplerAttrs attrs = toCore( layer_ );
+        std::uint32_t id  = 0;
+        SAction      *inv = nullptr;
+        if( !libraryEdit( prog, trackPath_, slotIndex_,
+                          [&]( audio::twSamplerLibrary &l, std::string &err ) {
+                              id = l.recordAddLayer( zone.front(), attrs, &err );
+                              return id != 0;
+                          },
+                          &inv, &why ) )
+            return refuse( why );
+        const SSamplerProgram::ProgramState after = prog->programState();
+        libDone_         = true;
+        libAfterBase_    = after.base;
+        libAfterOverlay_ = after.overlay;
+        qInfo().noquote() << QStringLiteral( "add-layer: track %1 slot %2: layer %3 in zone %4%5" )
+                                 .arg( trackPath_ ).arg( slotIndex_ ).arg( id ).arg( zone.front() )
+                                 .arg( libraryNote() );
+        return { true, inv };
+    }
+
     if( createdId_ != 0 ) {   // the redo, as add-zone's
         std::string err;
         if( !prog->edit( [&]( twSamplerProgramModel &m ) {
@@ -451,6 +575,18 @@ SApplyResult SRemoveLayerAction::apply( SProject *project )
     if( layer_ == 0 ) return refuse( QStringLiteral( "no layer id" ) );
     SSamplerProgram *prog = program( project, false, &why );
     if( !prog ) return refuse( why );
+    if( prog->isLibrary() ) {   // QBX-282: a stored hide-layer
+        SAction *inv = nullptr;
+        if( !libraryEdit( prog, trackPath_, slotIndex_,
+                          [&]( audio::twSamplerLibrary &l, std::string &err ) {
+                              return l.recordHideLayer( layer_, &err );
+                          },
+                          &inv, &why ) )
+            return refuse( why );
+        qInfo().noquote() << QStringLiteral( "remove-layer: track %1 slot %2: layer %3 hidden%4" )
+                                 .arg( trackPath_ ).arg( slotIndex_ ).arg( layer_ ).arg( libraryNote() );
+        return { true, inv };
+    }
     std::string   xml, err;
     std::uint32_t zone = 0;
     std::size_t   at   = 0;
@@ -611,6 +747,48 @@ SApplyResult SSetSamplerValuesAction::apply( SProject *project )
         edits.push_back( std::move( e ) );
     }
     if( edits.empty() ) return refuse( QStringLiteral( "nothing to set" ) );
+
+    // A LIBRARY INSTANCE (QBX-282): the core's set-zone / set-layer /
+    // set-program in the overlay. ONE GESTURE IS ONE VERB PER TARGET (the
+    // author's answer of 2026-11-07): the undo stack merges a gesture's steps
+    // after each has applied, so a later step of the same gesture that finds
+    // the instance as the previous step left it records from the state the
+    // gesture STARTED from, replacing that step's verbs. The returned inverse
+    // is the restore of that start, which is what one undo of the whole
+    // gesture must put back.
+    if( prog->isLibrary() ) {
+        const QString key = mergeKey();
+        const SSamplerProgram::LibraryGesture &g = prog->libraryGesture();
+        const bool continuing = !key.isEmpty() && g.key == key &&
+                                g.afterBase == prog->library()->baseXml() &&
+                                g.afterOverlay == prog->library()->overlayXml();
+        const SSamplerProgram::ProgramState start = continuing ? g.before : prog->programState();
+        std::string err;
+        if( !prog->editLibrary(
+                [&]( audio::twSamplerLibrary &lib ) {
+                    if( continuing ) {
+                        audio::twSamplerLibrary from;
+                        if( !audio::twSamplerLibrary::fromXml( start.base, start.overlay, from, &err ) )
+                            return false;
+                        from.raiseOverlayNextId( lib.overlayNextId() );
+                        lib = from;
+                    }
+                    return lib.recordSet( scope, all, ids, edits, &err );
+                },
+                &why ) ) {
+            if( mintedNew ) prog->forgetLink( mintedLink );   // a refusal mutates nothing
+            return refuse( err.empty() ? why : QString::fromStdString( err ) );
+        }
+        prog->setLibraryGesture( { key, start, prog->library()->baseXml(), prog->library()->overlayXml() } );
+        if( mintedLink ) linkId_ = mintedLink;
+        qInfo().noquote() << QStringLiteral( "%1: track %2 slot %3: %4 set%5" )
+                                 .arg( name(), trackPath_ ).arg( slotIndex_ )
+                                 .arg( selectorAttr_.isEmpty() ? QStringLiteral( "the program" )
+                                                               : selectorAttr_ + QLatin1Char( '=' ) + selector_ )
+                                 .arg( continuing ? libraryNote() + QStringLiteral( " (the same gesture)" )
+                                                  : libraryNote() );
+        return { true, restoreStateOf( trackPath_, slotIndex_, start ) };
+    }
 
     std::vector<twSamplerPrior> prior;
     std::string err;

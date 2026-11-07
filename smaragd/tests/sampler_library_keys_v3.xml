@@ -1,0 +1,15 @@
+<NassauDigitalProgram version="1" name="Library Keys" polyphony="32" nextId="8" libraryVersion="3">
+  <zone id="1" keyLo="36" keyHi="47" rootKey="40" mode="oneshot" attack="0.01">
+    <layer id="2" src="test:a"/>
+  </zone>
+  <zone id="3" keyLo="48" keyHi="59" rootKey="52" mode="oneshot">
+    <layer id="4" src="test:b"/>
+    <layer id="5" src="test:c" velLo="64"/>
+  </zone>
+  <zone id="6" keyLo="60" keyHi="72" rootKey="64" mode="oneshot">
+    <layer id="7" src="test:d"/>
+  </zone>
+  <zone id="1000000" keyLo="100" keyHi="100" rootKey="100" mode="oneshot" tune="5">
+    <layer id="1000001" src="test:collide"/>
+  </zone>
+</NassauDigitalProgram>

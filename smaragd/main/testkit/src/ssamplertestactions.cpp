@@ -24,6 +24,7 @@
 #include "tw/sampler/twsamplertypes.h"
 
 #include <QDebug>
+#include <QRegularExpression>
 #include <QDomElement>
 
 #include <algorithm>
@@ -224,8 +225,37 @@ const QStringList &checkNames()
         QStringLiteral( "library" ),      QStringLiteral( "libraryReport" ),
         QStringLiteral( "overlayContains" ), QStringLiteral( "overlayAbsent" ),
         QStringLiteral( "overlayEdits" ), QStringLiteral( "baseVersion" ),
+        // QBX-282: every program verb as an overlay edit, and flatten. The
+        // library state (base + overlay text) captured and compared, the
+        // overlay's stored nextId and the id its next add takes, the base's
+        // own text, and the asset links the object holds.
+        QStringLiteral( "captureLibrary" ), QStringLiteral( "libraryEqualsCaptured" ),
+        QStringLiteral( "overlayNextId" ),  QStringLiteral( "nextOverlayId" ),
+        QStringLiteral( "libraryBaseContains" ), QStringLiteral( "libraryBaseAbsent" ),
+        QStringLiteral( "heldLinks" ),
     };
     return n;
+}
+
+// QBX-282: a library state as captured (base + overlay, each the core's text).
+struct LibraryCapture {
+    std::string base;
+    std::string overlay;
+};
+QHash<QString, LibraryCapture> &libraryCaptures()
+{
+    static QHash<QString, LibraryCapture> c;
+    return c;
+}
+// The overlay text without its root's nextId attribute (ignoreNextId: an undo
+// keeps the overlay's nextId advanced, so ids are never reused).
+QString withoutRootNextId( const QString &overlay )
+{
+    const int end = overlay.indexOf( QLatin1Char( '>' ) );
+    if( end < 0 ) return overlay;
+    QString root = overlay.left( end );
+    root.remove( QRegularExpression( QStringLiteral( " nextId=\"[0-9]*\"" ) ) );
+    return root + overlay.mid( end );
 }
 
 QString idsText( const std::vector<std::uint32_t> &ids )
@@ -418,7 +448,9 @@ SApplyResult SAssertSamplerProgramAction::apply( SProject *project )
     if( has( "library" ) && ( get( "library" ) == QLatin1String( "1" ) ) != prog->isLibrary() )
         fails << QStringLiteral( "library: want %1, got %2" ).arg( get( "library" ) ).arg( prog->isLibrary() ? 1 : 0 );
     if( has( "libraryReport" ) || has( "overlayContains" ) || has( "overlayAbsent" ) || has( "overlayEdits" ) ||
-        has( "baseVersion" ) ) {
+        has( "baseVersion" ) || has( "captureLibrary" ) || has( "libraryEqualsCaptured" ) ||
+        has( "overlayNextId" ) || has( "nextOverlayId" ) || has( "libraryBaseContains" ) ||
+        has( "libraryBaseAbsent" ) ) {
         const audio::twSamplerLibrary *lib = prog->library();
         if( !lib ) {
             fails << QStringLiteral( "the instance does not play a library program" );
@@ -436,7 +468,46 @@ SApplyResult SAssertSamplerProgramAction::apply( SProject *project )
             if( has( "baseVersion" ) && get( "baseVersion" ) != QString::fromStdString( lib->baseVersion() ) )
                 fails << QStringLiteral( "baseVersion: want \"%1\", got \"%2\"" )
                              .arg( get( "baseVersion" ), QString::fromStdString( lib->baseVersion() ) );
+            const QString base = QString::fromStdString( lib->baseXml() );
+            if( has( "libraryBaseContains" ) && !base.contains( get( "libraryBaseContains" ) ) )
+                fails << QStringLiteral( "libraryBaseContains: \"%1\" not in \"%2\"" ).arg( get( "libraryBaseContains" ), base );
+            if( has( "libraryBaseAbsent" ) && base.contains( get( "libraryBaseAbsent" ) ) )
+                fails << QStringLiteral( "libraryBaseAbsent: \"%1\" is in \"%2\"" ).arg( get( "libraryBaseAbsent" ), base );
+            if( has( "overlayNextId" ) && get( "overlayNextId" ).toULongLong() != lib->overlayNextId() )
+                fails << QStringLiteral( "overlayNextId: want %1, got %2" ).arg( get( "overlayNextId" ) ).arg( lib->overlayNextId() );
+            if( has( "nextOverlayId" ) && get( "nextOverlayId" ).toULongLong() != lib->nextOverlayId() )
+                fails << QStringLiteral( "nextOverlayId: want %1, got %2" ).arg( get( "nextOverlayId" ) ).arg( lib->nextOverlayId() );
+            if( has( "libraryEqualsCaptured" ) ) {
+                const QString key = get( "libraryEqualsCaptured" );
+                if( !libraryCaptures().contains( key ) ) {
+                    fails << QStringLiteral( "libraryEqualsCaptured: nothing captured as \"%1\"" ).arg( key );
+                } else {
+                    const LibraryCapture &want = libraryCaptures()[key];
+                    const bool ignore = get( "ignoreNextId" ) == QLatin1String( "1" );
+                    QString wantOverlay = QString::fromStdString( want.overlay );
+                    QString gotOverlay  = overlay;
+                    if( ignore ) {
+                        wantOverlay = withoutRootNextId( wantOverlay );
+                        gotOverlay  = withoutRootNextId( gotOverlay );
+                    }
+                    if( QString::fromStdString( want.base ) != base )
+                        fails << QStringLiteral( "libraryEqualsCaptured \"%1\": the BASE differs.\n--- captured\n%2\n--- now\n%3" )
+                                     .arg( key, QString::fromStdString( want.base ), base );
+                    if( wantOverlay != gotOverlay )
+                        fails << QStringLiteral( "libraryEqualsCaptured \"%1\"%2: the OVERLAY differs.\n--- captured\n%3\n--- now\n%4" )
+                                     .arg( key, ignore ? QStringLiteral( " (nextId ignored)" ) : QString(),
+                                           wantOverlay, gotOverlay );
+                }
+            }
+            if( has( "captureLibrary" ) )
+                libraryCaptures().insert( get( "captureLibrary" ), { lib->baseXml(), lib->overlayXml() } );
         }
+    }
+    if( has( "heldLinks" ) ) {
+        std::vector<std::uint32_t> held;
+        for( std::uint32_t n : prog->heldLinks() ) held.push_back( n );
+        if( get( "heldLinks" ) != idsText( held ) )
+            fails << QStringLiteral( "heldLinks: want [%1], got [%2]" ).arg( get( "heldLinks" ), idsText( held ) );
     }
     if( has( "recordInput" ) && get( "recordInput" ) != prog->recordInput() )
         fails << QStringLiteral( "recordInput: want \"%1\", got \"%2\"" )

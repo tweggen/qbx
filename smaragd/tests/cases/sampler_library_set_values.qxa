@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-282 (nassau-digital DESIGN 8, settled 2026-11-07): ON A LIBRARY
+  INSTANCE EVERY PARAMETER EDIT IS AN OVERLAY EDIT. set-zone records the
+  core's set-zone (one per zone: a list and ALL are expanded over what plays
+  now, a relative value is resolved), set-layer the core's set-layer and
+  set-sampler-program the core's set-program, each parameter with its .was;
+  the base is never written.
+
+  The library (../sampler_library_keys_v1.xml, libraryVersion 1): zone 1
+  (layer 2, attack 0.01), zone 3 (layers 4 and 5), zone 6 (layer 7). Version
+  2 moved zone 1's attack to 0.02, layer 2's src to test:a2, the program's
+  outputLevel to -3 and dropped zone 6.
+
+  Gated here: each verb writes the overlay and the base keeps its value; a
+  zone list and ALL expand to one verb per zone; a relative edit is stored
+  absolute; two separate edits append; one GESTURE (two elements naming one
+  gesture) leaves ONE verb per target with the .was from before the gesture,
+  live, after its undo and redo, and after a reload; the refusals (an
+  unknown parameter, version, libraryVersion, a missing zone) change nothing;
+  undo and redo of each; save and reload; the newer library drifts the edits
+  of zone 1, layer 2 and the program and orphans those of zone 6 while the
+  overlay's values still play; rebase clears the drift and keeps the orphans.
+-->
+<SActionScript version="1" name="sampler_library_set_values">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;3;6" overlayEdits="0"
+                            capture="lib1" captureLibrary="lib1"/>
+
+    <!-- ................................................... set-zone, one zone -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" attack="0.25"/>
+    <assert-log contains="set-zone: track 0 slot 0: zone=1 set, an overlay edit on the library" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="1" baseVersion="1"
+                            overlayContains="&lt;set-zone zone=&quot;1&quot; attack=&quot;0.25&quot; attack.was=&quot;0.01&quot;/&gt;"
+                            scope="zone" id="1" attr="attack" value="0.25" capture="z1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryBaseContains="attack=&quot;0.01&quot;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" overlayEdits="0" baseVersion=""
+                            libraryEqualsCaptured="lib1"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="z1" overlayEdits="1"/>
+
+    <!-- A second, separate edit of the same parameter APPENDS: its .was is the overlay's 0.25. -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" attack="0.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="2"
+                            overlayContains="&lt;set-zone zone=&quot;1&quot; attack=&quot;0.5&quot; attack.was=&quot;0.25&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="z1" overlayEdits="1"/>
+
+    <!-- ...................................... a zone list, relative: one verb per zone -->
+    <set-zone trackPath="0" slotIndex="0" zones="3;6" tune="+2"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="3"
+                            overlayContains="&lt;set-zone zone=&quot;3&quot; tune=&quot;2&quot; tune.was=&quot;0&quot;/&gt;"
+                            capture="list"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains="&lt;set-zone zone=&quot;6&quot; tune=&quot;2&quot; tune.was=&quot;0&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="z1" overlayEdits="1"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="list" overlayEdits="3"/>
+
+    <!-- ...................................................... ALL: every zone now -->
+    <set-zone trackPath="0" slotIndex="0" zone="all" level="-6"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="6"
+                            overlayContains="&lt;set-zone zone=&quot;6&quot; level=&quot;-6&quot; level.was=&quot;0&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="list" overlayEdits="3"/>
+
+    <!-- ........................................................... set-layer -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="test:own"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="4"
+                            overlayContains="&lt;set-layer layer=&quot;2&quot; src=&quot;test:own&quot; src.was=&quot;test:a&quot;/&gt;"
+                            scope="layer" id="2" attr="src" value="test:own"/>
+    <set-layer trackPath="0" slotIndex="0" layers="4;5" pan="=-0.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="6"
+                            overlayContains="&lt;set-layer layer=&quot;5&quot; pan=&quot;-0.5&quot; pan.was=&quot;0&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="4" capture="layer"/>
+
+    <!-- ................................................. set-sampler-program -->
+    <set-sampler-program trackPath="0" slotIndex="0" outputLevel="=-1.5"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="5"
+                            overlayContains="&lt;set-program outputLevel=&quot;-1.5&quot; outputLevel.was=&quot;0&quot;/&gt;"
+                            scope="program" attr="outputLevel" value="-1.5" capture="prog"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="layer" overlayEdits="4"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="prog" overlayEdits="5" captureLibrary="prog"/>
+
+    <!-- ........................................ refusals change nothing -->
+    <set-sampler-program trackPath="0" slotIndex="0" libraryVersion="9" expectReject="true"/>
+    <assert-log contains="set-sampler-program: track 0 slot 0: REFUSED: libraryVersion is not edited by an overlay" minCount="1"/>
+    <set-zone trackPath="0" slotIndex="0" zone="99" tune="1" expectReject="true"/>
+    <assert-log contains="set-zone: track 0 slot 0: REFUSED: no zone with id 99" minCount="1"/>
+    <set-zone trackPath="0" slotIndex="0" zone="1" mode="+1" expectReject="true"/>
+    <assert-log contains="set-zone: track 0 slot 0: REFUSED: a relative edit of &quot;mode&quot; is refused: it is not numeric" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="prog" libraryEqualsCaptured="prog"/>
+
+    <!-- ................................ ONE GESTURE: one verb per target -->
+    <set-zone trackPath="0" slotIndex="0" zones="1;3" cutoff="1000" gesture="1"/>
+    <set-zone trackPath="0" slotIndex="0" zones="1;3" cutoff="2000" gesture="1"/>
+    <set-zone trackPath="0" slotIndex="0" zones="1;3" cutoff="3000" gesture="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="7"
+                            overlayContains="&lt;set-zone zone=&quot;1&quot; cutoff=&quot;3000&quot; cutoff.was=&quot;20000&quot;/&gt;"
+                            overlayAbsent="cutoff=&quot;1000&quot;" captureLibrary="gesture" capture="gesture"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains="&lt;set-zone zone=&quot;3&quot; cutoff=&quot;3000&quot; cutoff.was=&quot;20000&quot;/&gt;"
+                            overlayAbsent="cutoff=&quot;2000&quot;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="prog" libraryEqualsCaptured="prog"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="gesture" libraryEqualsCaptured="gesture"/>
+
+    <!-- ...................................................... save, reload -->
+    <save-project path="../../build/sampler_library_set_values.qxp"/>
+    <assert-file-contains path="../../build/sampler_library_set_values.qxp"
+                          text="&lt;set-zone zone=&quot;1&quot; attack=&quot;0.25&quot; attack.was=&quot;0.01&quot;/&gt;"/>
+    <load-project path="../../build/sampler_library_set_values.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="gesture"
+                            libraryEqualsCaptured="gesture" installed="1" libraryReport=""/>
+
+    <!-- ....................... a newer library: drifted and orphaned edits -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v2.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;3"
+                            scope="zone" id="1" attr="attack" value="0.25"
+                            libraryReport="libraryVersion 1-&gt;2; #0 set-zone drifted attack 0.01-&gt;0.02; #2 set-zone orphaned 6; #3 set-layer drifted src test:a-&gt;test:a2; #4 set-program drifted outputLevel 0-&gt;-3"
+                            capture="v2"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="src" value="test:own"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="program" attr="outputLevel" value="-1.5"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="gesture" libraryReport=""/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="v2"/>
+
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="v2" baseVersion="2"
+                            libraryReport="#2 set-zone orphaned 6"
+                            overlayContains="&lt;set-zone zone=&quot;1&quot; attack=&quot;0.25&quot; attack.was=&quot;0.02&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" baseVersion="1"
+                            libraryReport="libraryVersion 1-&gt;2; #0 set-zone drifted attack 0.01-&gt;0.02; #2 set-zone orphaned 6; #3 set-layer drifted src test:a-&gt;test:a2; #4 set-program drifted outputLevel 0-&gt;-3"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryReport="#2 set-zone orphaned 6" captureLibrary="rebased"/>
+    <save-project path="../../build/sampler_library_set_values_2.qxp"/>
+    <load-project path="../../build/sampler_library_set_values_2.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="v2" libraryEqualsCaptured="rebased"
+                            libraryReport="#2 set-zone orphaned 6"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

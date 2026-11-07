@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-282 (nassau-digital DESIGN 8, settled 2026-11-07): STRUCTURAL EDITS ON
+  A LIBRARY INSTANCE ARE OVERLAY EDITS. add-zone records the core's add-zone
+  plus one add-layer per layer, add-layer the core's add-layer, each with
+  ids from the overlay range (1000000 on); remove-zone and remove-layer
+  record hide-zone and hide-layer, of a base object and of one the overlay
+  added alike. An explicit add-zone id is taken only when it is the
+  overlay's next id. Undo keeps the overlay's nextId advanced, so ids are
+  never reused; redo puts back the same ids.
+
+  The library (../sampler_library_keys_v1.xml): zones 1, 3 (layers 4, 5)
+  and 6 (layer 7). Version 2 drops zone 6; version 3 is version 1 plus a
+  zone 1000000 of its own (an id this overlay's first add took).
+
+  Gated here: each verb writes the overlay and keeps the base; undo exact
+  but for nextId, redo the same ids, a new add after an undo a NEW id; the
+  explicit id rule; save and reload; version 2 orphans the add-layer into
+  zone 6 and its hide; version 3 refuses the colliding add-zone and reports
+  it, and a later set-zone of that id applies to the base's zone, drifted;
+  rebase.
+-->
+<SActionScript version="1" name="sampler_library_structure">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;3;6" nextOverlayId="1000000"
+                            capture="lib1" captureLibrary="lib1"/>
+
+    <!-- ............................................................ add-zone -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="100" keyHi="100" rootKey="100" mode="oneshot">
+      <layer src="test:x"/>
+      <layer src="test:y"/>
+    </add-zone>
+    <assert-log contains="add-zone: track 0 slot 0: zone 1000000 with 2 layer(s), an overlay edit on the library" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000000" overlayEdits="3"
+                            overlayContains="&lt;add-zone zone=&quot;1000000&quot; keyLo=&quot;100&quot;"
+                            overlayNextId="1000003" nextOverlayId="1000003" capture="add" captureLibrary="add"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains="&lt;add-layer layer=&quot;1000002&quot; zone=&quot;1000000&quot; src=&quot;test:y&quot;"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryBaseAbsent="1000000"/>
+    <undo/>
+    <!-- Exact but for nextId: the ids the add took are never handed out again. -->
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" overlayEdits="0"
+                            libraryEqualsCaptured="lib1" ignoreNextId="1" overlayNextId="1000003"
+                            nextOverlayId="1000003"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="add" libraryEqualsCaptured="add"/>
+    <undo/>
+    <add-zone trackPath="0" slotIndex="0" keyLo="101" keyHi="101"><layer src="test:z"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000003" overlayNextId="1000005"/>
+    <undo/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000003"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6" overlayEdits="0"/>
+
+    <!-- The explicit id: only the overlay's next one. -->
+    <add-zone trackPath="0" slotIndex="0" id="8" keyLo="102" keyHi="102" expectReject="true"><layer src="test:z"/></add-zone>
+    <assert-log contains="REFUSED: zone id 8 is not this library overlay's next id 1000005" minCount="1"/>
+    <add-zone trackPath="0" slotIndex="0" id="1000006" keyLo="102" keyHi="102" expectReject="true"><layer src="test:z"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6" overlayEdits="0"/>
+    <add-zone trackPath="0" slotIndex="0" id="1000005" keyLo="102" keyHi="102" mode="oneshot"><layer src="test:z"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000005" overlayEdits="2" capture="added"/>
+
+    <!-- ............................................................ add-layer -->
+    <add-layer trackPath="0" slotIndex="0" zone="6" src="test:e"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="3"
+                            overlayContains="&lt;add-layer layer=&quot;1000007&quot; zone=&quot;6&quot; src=&quot;test:e&quot;"
+                            scope="layer" id="1000007" attr="src" value="test:e" capture="layer"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="added" overlayNextId="1000008"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="layer"/>
+    <add-layer trackPath="0" slotIndex="0" zone="1000005" src="test:f"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="4" scope="layer" id="1000008" attr="src" value="test:f"/>
+
+    <!-- ........................ remove-zone / remove-layer: stored hides -->
+    <remove-zone trackPath="0" slotIndex="0" zone="3"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6;1000005" overlayEdits="5"
+                            overlayContains="&lt;hide-zone zone=&quot;3&quot;/&gt;"
+                            libraryBaseContains="&lt;zone id=&quot;3&quot;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000005" overlayEdits="4"/>
+    <redo/>
+    <remove-zone trackPath="0" slotIndex="0" zone="1000005"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6" overlayEdits="6"
+                            overlayContains="&lt;hide-zone zone=&quot;1000005&quot;/&gt;"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayContains="&lt;add-zone zone=&quot;1000005&quot;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6;1000005"/>
+    <redo/>
+    <remove-layer trackPath="0" slotIndex="0" layer="7"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="7"
+                            overlayContains="&lt;hide-layer layer=&quot;7&quot;/&gt;"/>
+    <remove-layer trackPath="0" slotIndex="0" layer="1000007"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="8"
+                            overlayContains="&lt;hide-layer layer=&quot;1000007&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="1000007" attr="src" value="test:e"/>
+    <redo/>
+    <remove-zone trackPath="0" slotIndex="0" zone="99" expectReject="true"/>
+    <remove-layer trackPath="0" slotIndex="0" layer="7" expectReject="true"/>
+    <!-- The plain-program inverses are no library verbs. -->
+    <reinsert-zone trackPath="0" slotIndex="0" zone="3" at="1" expectReject="true"><![CDATA[<zone id="3"><layer id="4" src="test:b"/></zone>]]></reinsert-zone>
+    <assert-log contains="reinsert-zone: track 0 slot 0: REFUSED: this instance plays a library program" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6" overlayEdits="8" capture="hidden" captureLibrary="hidden"/>
+
+    <!-- ...................................................... save, reload -->
+    <save-project path="../../build/sampler_library_structure.qxp"/>
+    <load-project path="../../build/sampler_library_structure.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="hidden"
+                            libraryEqualsCaptured="hidden" installed="1" nextOverlayId="1000009"/>
+    <!-- A new add after the reload still takes a new id. -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="110" keyHi="110"><layer src="test:g"/></add-zone>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;6;1000009"/>
+    <undo/>
+
+    <!-- ...................... version 2 drops zone 6: its edits are orphaned -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v2.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1"
+                            libraryReport="libraryVersion 1-&gt;2; #2 add-layer orphaned 6; #6 hide-layer orphaned 7; #7 hide-layer orphaned 1000007"/>
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            libraryReport="#2 add-layer orphaned 6; #6 hide-layer orphaned 7; #7 hide-layer orphaned 1000007"/>
+    <undo/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="hidden" libraryReport=""/>
+
+    <!-- ..... version 3 carries zone 1000000 itself: the colliding add is refused.
+         A second instance whose overlay's first add took 1000000, and a
+         set-zone of that id after it. -->
+    <add-track index="-1"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <set-sampler-library trackPath="1" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <add-zone trackPath="1" slotIndex="0" keyLo="90" keyHi="90" mode="oneshot"><layer src="test:h"/></add-zone>
+    <set-zone trackPath="1" slotIndex="0" zone="1000000" tune="3"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" zoneIds="1;3;6;1000000"
+                            overlayContains="&lt;set-zone zone=&quot;1000000&quot; tune=&quot;3&quot; tune.was=&quot;0&quot;/&gt;"/>
+    <set-sampler-library trackPath="1" slotIndex="0" path="../sampler_library_keys_v3.xml"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" zoneIds="1;3;6;1000000"
+                            scope="zone" id="1000000" attr="tune" value="3"
+                            libraryReport="libraryVersion 1-&gt;3; #0 add-zone refused: &lt;add-zone&gt;: id 1000000 is already in the base; #1 add-layer refused: &lt;add-layer&gt;: id 1000001 is already in the base; #2 set-zone drifted tune 0-&gt;5"/>
+    <!-- The base's own zone 1000000 is what the set-zone now changes. -->
+    <assert-sampler-program trackPath="1" slotIndex="0" scope="layer" id="1000001" attr="src" value="test:collide"/>
+    <rebase-sampler-library trackPath="1" slotIndex="0"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" baseVersion="3" libraryReport="#0 add-zone refused: &lt;add-zone&gt;: id 1000000 is already in the base; #1 add-layer refused: &lt;add-layer&gt;: id 1000001 is already in the base"
+                            overlayContains="&lt;set-zone zone=&quot;1000000&quot; tune=&quot;3&quot; tune.was=&quot;5&quot;/&gt;"/>
+    <undo/>
+    <assert-sampler-program trackPath="1" slotIndex="0" libraryReport="libraryVersion 1-&gt;3; #0 add-zone refused: &lt;add-zone&gt;: id 1000000 is already in the base; #1 add-layer refused: &lt;add-layer&gt;: id 1000001 is already in the base; #2 set-zone drifted tune 0-&gt;5"/>
+    <redo/>
+    <save-project path="../../build/sampler_library_structure_2.qxp"/>
+    <load-project path="../../build/sampler_library_structure_2.qxp"/>
+    <assert-sampler-program trackPath="1" slotIndex="0" libraryReport="#0 add-zone refused: &lt;add-zone&gt;: id 1000000 is already in the base; #1 add-layer refused: &lt;add-layer&gt;: id 1000001 is already in the base" scope="zone" id="1000000" attr="tune" value="3"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

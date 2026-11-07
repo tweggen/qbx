@@ -176,10 +176,11 @@ public:
     // An instance whose program comes from a LIBRARY holds a read-only BASE
     // (the library program, as read when set-sampler-library took it) and the
     // user's OVERLAY of edits; what plays (model()) is the base with the
-    // overlay applied. The only overlay edit qbx makes so far is the pad
-    // reassignment (set-pad-key -> the core's set-pad, the author's decision
-    // of 2026-11-04); every other program edit (edit() above) is REFUSED on a
-    // library instance with a reason, never written into the base. Saved
+    // overlay applied. EVERY PROGRAM VERB IS AN OVERLAY EDIT THERE (QBX-278
+    // for the pads, QBX-282 for the rest; invariant 35): the verbs call
+    // editLibrary() with the matching twSamplerLibrary::record*(), and edit()
+    // above REFUSES on a library instance, so nothing is ever written into
+    // what the next overlay edit would recompute away. Saved
     // beside the applied program as <library><base/><overlay/></library>, both
     // as the core's text, so a reload plays what was saved.
     bool isLibrary() const { return library_ != nullptr; }
@@ -198,7 +199,28 @@ public:
         std::string overlay;   // library: the overlay
     };
     ProgramState programState() const;
+    // Restoring a LIBRARY state onto a library instance keeps the overlay's
+    // nextId at least where it is now (QBX-282, the author's answer of
+    // 2026-11-07: ids are never reused, as the core's undoRecordedEdit keeps
+    // them), so an undone add never hands its ids out again. Every other part
+    // of the state is put back byte for byte.
     bool restoreProgramState( const ProgramState &state, QString *why = nullptr );
+
+    // ONE GESTURE, ONE OVERLAY VERB PER TARGET (QBX-282; invariant 35). The
+    // undo stack merges a gesture's set verbs AFTER each has applied, so each
+    // step would append its own verbs. A set verb on a library therefore
+    // notes the state its gesture started from; a later step of the SAME
+    // gesture (same mergeKey) that finds the instance exactly as the previous
+    // step left it records from that start instead, replacing the step before
+    // it. Live state, never saved.
+    struct LibraryGesture {
+        QString      key;          // the set verb's mergeKey(); empty = none
+        ProgramState before;       // the state the gesture started from
+        std::string  afterBase;    // the state its last step left
+        std::string  afterOverlay;
+    };
+    const LibraryGesture &libraryGesture() const { return libraryGesture_; }
+    void setLibraryGesture( const LibraryGesture &g ) { libraryGesture_ = g; }
 
     // --- the selection (select-zones) ----------------------------------------------
     // The ids that are selected AND exist, in selection order. A removed zone
@@ -356,6 +378,11 @@ public:
     void forgetLink( std::uint32_t linkId );
     // The body link <n> targets, or null when there is no such link.
     SObject *linkTarget( std::uint32_t linkId ) const;
+    // The links this object holds and saves: those a layer of what plays
+    // names, and on a library instance every one an OVERLAY verb names too,
+    // an orphaned one included (QBX-282: an orphan may apply again on a later
+    // base and must still find its asset).
+    std::set<std::uint32_t> heldLinks() const { return namedLinks_(); }
     // The bodies the layers link NOW (each once): what the cycle walk follows.
     QList<SObject *> liveLinkTargets() const;
     // Start, now, every bounce a moved asset made due (the debounce cut
@@ -468,6 +495,7 @@ private:
         SLink            *pin = nullptr;
     };
     std::map<std::uint32_t, LinkRec>                links_;
+    LibraryGesture                                  libraryGesture_;
     std::set<std::uint32_t> namedLinks_() const;
     void syncLinkPins_();
     std::uint32_t                                   nextLinkId_ = 1; // never reused

@@ -512,7 +512,12 @@ bool SSamplerEditor::dropOn( const QString &payload, int key, std::uint32_t zone
     auto cleanup = [&]() { qDeleteAll( verbs ); verbs.clear(); };
 
     const QString k = QString::number( key );
-    const QString next = QString::number( m.nextId() );
+    // The id the composite's add hands out, so its set-layer can name the new
+    // layer: the program's nextId, or on a LIBRARY instance the overlay's next
+    // id (QBX-282: an overlay add takes its ids from the overlay range, and
+    // add-zone takes an explicit id there only when it is exactly this one).
+    const std::uint32_t nextId = ( prog && prog->isLibrary() ) ? prog->library()->nextOverlayId() : m.nextId();
+    const QString next = QString::number( nextId );
     if( !zoneId ) {
         // A new one-key zone rooted on the key.
         QDomElement z = verbElement( doc, QStringLiteral( "add-zone" ),
@@ -526,7 +531,7 @@ bool SSamplerEditor::dropOn( const QString &payload, int key, std::uint32_t zone
         if( !add( z ) ) { cleanup(); return false; }
         if( asset &&
             !add( verbElement( doc, QStringLiteral( "set-layer" ),
-                               { { QStringLiteral( "layer" ), QString::number( m.nextId() + 1 ) },
+                               { { QStringLiteral( "layer" ), QString::number( nextId + 1 ) },
                                  { QStringLiteral( "src" ), src } } ) ) ) {
             cleanup();
             return false;
