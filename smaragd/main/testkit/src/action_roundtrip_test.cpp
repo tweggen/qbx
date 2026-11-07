@@ -126,6 +126,8 @@ const Fixture kFixtures[] = {
       "<rebase-sampler-library trackPath='Drums:0' slotIndex='1'/>" },
     { "hide-pad",
       "<hide-pad trackPath='Drums:0' slotIndex='1' n='93'/>" },
+    { "flatten-sampler-library",
+      "<flatten-sampler-library trackPath='Drums:0' slotIndex='1'/>" },
     { "restore-sampler-state",
       "<restore-sampler-state trackPath='Drums:0' slotIndex='1' library='1'"
       " base='&lt;NassauDigitalProgram version=&quot;1&quot;/&gt;'"
@@ -1242,6 +1244,7 @@ const LaneRow kLaneRows[] = {
     { "set-sampler-library",      Accept, "as add-zone; the instance's program becomes a library's" },
     { "rebase-sampler-library",   Accept, "as add-zone; accepts the library's base" },
     { "hide-pad",                 Accept, "as add-zone; hides a library's pad row in the overlay" },
+    { "flatten-sampler-library",  Accept, "as add-zone; the library instance becomes a program of its own" },
     { "restore-sampler-state",    Accept, "as add-zone (the library verbs' inverse)" },
     { "place-sampler-recording",  Accept, "lands in a NassauDigital program, which a system lane cannot hold; never on the lane" },
     { "assert-sampler-recording-level", Accept, "read-only" },

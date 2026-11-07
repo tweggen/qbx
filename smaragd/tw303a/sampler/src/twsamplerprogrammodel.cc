@@ -562,7 +562,9 @@ bool twSamplerProgramModel::reinsertZone( const std::string &xml, std::size_t in
             setError( error, "id " + std::to_string( id ) + " is in use" );
             return false;
         }
-        if( id >= p.nextId ) {
+        // An id of the overlay range (a flattened library's, QBX-282) is never
+        // handed out by a program, so "below nextId" cannot speak for it.
+        if( id >= p.nextId && id < nd::kOverlayIdFirst ) {
             setError( error, "id " + std::to_string( id ) + " was never handed out (nextId " +
                                  std::to_string( p.nextId ) + ")" );
             return false;
@@ -594,7 +596,7 @@ bool twSamplerProgramModel::reinsertLayer( const std::string &xml, std::uint32_t
         setError( error, "id " + std::to_string( l.id ) + " is in use" );
         return false;
     }
-    if( l.id >= p.nextId ) {
+    if( l.id >= p.nextId && l.id < nd::kOverlayIdFirst ) {   // as reinsertZone()
         setError( error, "id " + std::to_string( l.id ) + " was never handed out" );
         return false;
     }
@@ -787,6 +789,194 @@ int twSamplerLibrary::rebase()
     nd::Program current = nd::applyOverlay( impl_->base, impl_->overlay ).program;
     const nd::RebasedOverlay r = nd::rebaseOverlay( impl_->overlay, current, impl_->base );
     return (int)r.refreshed.size();
+}
+
+// --- QBX-282: every program edit on a library instance is an overlay edit ---------
+
+namespace {
+
+// What plays now: the base with the overlay applied (every record*() works on it).
+nd::Program currentOf( const nd::Program &base, const nd::Overlay &overlay )
+{
+    return nd::applyOverlay( base, overlay ).program;
+}
+
+}  // namespace
+
+bool twSamplerLibrary::recordSet( twSamplerScope scope, bool all, const std::vector<std::uint32_t> &ids,
+                                  const std::vector<twSamplerEdit> &edits, std::string *error )
+{
+    if( edits.empty() ) {
+        setError( error, "nothing to set" );
+        return false;
+    }
+    nd::Program current = currentOf( impl_->base, impl_->overlay );
+    nd::RecordedEdit rec;
+    switch( scope ) {
+    case twSamplerScope::Program:
+        rec = nd::recordProgramEdit( impl_->overlay, current, toCore( edits ) );
+        break;
+    case twSamplerScope::Zone:
+        rec = nd::recordZoneEdit( impl_->overlay, current,
+                                  all ? nd::ZoneScope::everyZone() : nd::ZoneScope::zones( ids ),
+                                  toCore( edits ) );
+        break;
+    case twSamplerScope::Layer:
+        if( all ) {
+            setError( error, "the ALL scope is a zone scope (DESIGN §2.1)" );
+            return false;
+        }
+        rec = nd::recordLayerEdit( impl_->overlay, current, ids, toCore( edits ) );
+        break;
+    }
+    if( !rec.ok ) {
+        setError( error, rec.error );
+        return false;
+    }
+    return true;
+}
+
+std::uint32_t twSamplerLibrary::nextOverlayId() const
+{
+    // THE CORE'S OWN CHOICE, by a dry run on copies: the id recordAddZone()
+    // would hand an empty zone is the id the next add of any kind gets. A
+    // second rule here could drift from the core's nextOverlayId().
+    nd::Overlay  o       = impl_->overlay;
+    nd::Program  current = currentOf( impl_->base, o );
+    const nd::RecordedEdit rec = nd::recordAddZone( o, current, nd::Zone{} );
+    return rec.ok ? rec.id : 0;
+}
+
+std::uint32_t twSamplerLibrary::overlayNextId() const { return impl_->overlay.nextId; }
+
+void twSamplerLibrary::raiseOverlayNextId( std::uint32_t atLeast )
+{
+    if( atLeast > impl_->overlay.nextId ) impl_->overlay.nextId = atLeast;
+}
+
+std::uint32_t twSamplerLibrary::recordAddZone( const twSamplerAttrs &zone,
+                                               const std::vector<twSamplerAttrs> &layers,
+                                               std::string *error )
+{
+    if( (int)layers.size() > nd::kMaxLayers ) {
+        setError( error, "a zone has at most " + std::to_string( nd::kMaxLayers ) + " layers" );
+        return 0;
+    }
+    // AN EXPLICIT ZONE ID on a library (the author, 2026-11-07, QBX-282):
+    // accepted only when it is the overlay's next id, which is the id the
+    // core hands out anyway; any other is refused, never honoured.
+    std::uint32_t  wantId = 0;
+    twSamplerAttrs attrs;
+    for( const auto &a : zone ) {
+        if( a.first != "id" ) {
+            attrs.push_back( a );
+            continue;
+        }
+        char *end = nullptr;
+        const unsigned long long v = std::strtoull( a.second.c_str(), &end, 10 );
+        if( a.second.empty() || !end || *end != '\0' || a.second[0] == '-' || v == 0 ||
+            v > 0xFFFFFFF0ull ) {
+            setError( error, "zone id \"" + a.second + "\" is not a positive integer" );
+            return 0;
+        }
+        wantId = (std::uint32_t)v;
+    }
+    nd::Zone z;
+    if( !fillFromAttrs( nd::zoneParams(), attrs, z, "zone", error ) ) return 0;
+    for( const twSamplerAttrs &la : layers ) {
+        nd::Layer l;
+        if( !fillFromAttrs( nd::layerParams(), la, l, "layer", error ) ) return 0;
+        z.layers.push_back( std::move( l ) );
+    }
+    if( wantId != 0 ) {
+        const std::uint32_t next = nextOverlayId();
+        if( wantId != next ) {
+            setError( error, "zone id " + std::to_string( wantId ) +
+                                 " is not this library overlay's next id " + std::to_string( next ) +
+                                 " (a zone added to a library takes the overlay's ids, DESIGN §8)" );
+            return 0;
+        }
+    }
+    nd::Program current = currentOf( impl_->base, impl_->overlay );
+    const nd::RecordedEdit rec = nd::recordAddZone( impl_->overlay, current, std::move( z ) );
+    if( !rec.ok ) {
+        setError( error, rec.error );
+        return 0;
+    }
+    return rec.id;
+}
+
+std::uint32_t twSamplerLibrary::recordAddLayer( std::uint32_t zoneId, const twSamplerAttrs &layer,
+                                                std::string *error )
+{
+    nd::Layer l;
+    if( !fillFromAttrs( nd::layerParams(), layer, l, "layer", error ) ) return 0;
+    nd::Program current = currentOf( impl_->base, impl_->overlay );
+    const nd::Zone *z = current.findZone( zoneId );
+    if( !z ) {
+        setError( error, "no zone with id " + std::to_string( zoneId ) );
+        return 0;
+    }
+    if( (int)z->layers.size() >= nd::kMaxLayers ) {
+        setError( error, "zone " + std::to_string( zoneId ) + " already has " +
+                             std::to_string( nd::kMaxLayers ) + " layers" );
+        return 0;
+    }
+    const nd::RecordedEdit rec = nd::recordAddLayer( impl_->overlay, current, zoneId, std::move( l ) );
+    if( !rec.ok ) {
+        setError( error, rec.error );
+        return 0;
+    }
+    return rec.id;
+}
+
+bool twSamplerLibrary::recordHideZone( std::uint32_t id, std::string *error )
+{
+    nd::Program current = currentOf( impl_->base, impl_->overlay );
+    const nd::RecordedEdit rec = nd::recordHideZone( impl_->overlay, current, id );
+    if( !rec.ok ) setError( error, rec.error );
+    return rec.ok;
+}
+
+bool twSamplerLibrary::recordHideLayer( std::uint32_t id, std::string *error )
+{
+    nd::Program current = currentOf( impl_->base, impl_->overlay );
+    const nd::RecordedEdit rec = nd::recordHideLayer( impl_->overlay, current, id );
+    if( !rec.ok ) setError( error, rec.error );
+    return rec.ok;
+}
+
+std::vector<std::string> twSamplerLibrary::overlaySrcs() const
+{
+    std::vector<std::string> out;
+    for( const nd::XmlNode &v : impl_->overlay.edits )
+        if( const std::string *s = v.attribute( "src" ) ) out.push_back( *s );
+    return out;
+}
+
+twSamplerProgramModel twSamplerLibrary::flattened( std::string *dropped ) const
+{
+    const nd::OverlayResult r = nd::flatten( impl_->base, impl_->overlay );
+    if( dropped ) {
+        std::string out;
+        for( const nd::OverlayEditReport &e : r.edits ) {
+            const char *what = nullptr;
+            switch( e.state ) {
+            case nd::OverlayEditState::Orphaned: what = "orphaned"; break;
+            case nd::OverlayEditState::Refused:  what = "refused"; break;
+            case nd::OverlayEditState::Unknown:  what = "unknown"; break;
+            default: break;
+            }
+            if( !what ) continue;
+            const std::string verb = e.index < impl_->overlay.edits.size() ? impl_->overlay.edits[e.index].name
+                                                                          : std::string( "?" );
+            out += ( out.empty() ? "" : "; " ) + ( "#" + std::to_string( e.index ) + " " + verb + " " + what );
+        }
+        *dropped = out;
+    }
+    twSamplerProgramModel m;
+    m.impl_->program = r.program;
+    return m;
 }
 
 }  // namespace audio

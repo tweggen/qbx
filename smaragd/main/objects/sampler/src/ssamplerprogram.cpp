@@ -504,12 +504,14 @@ bool SSamplerProgram::edit( const std::function<bool( audio::twSamplerProgramMod
         return false;
     }
     if( library_ ) {
-        // DESIGN §8: the base is read-only, and only the pad reassignment is
-        // an overlay edit in qbx so far (QBX-278). Writing into model() would
+        // DESIGN §8: the base is read-only and every program verb records an
+        // overlay edit through editLibrary() instead (QBX-278, QBX-282). What
+        // still reaches here is a plain program's inverse (reinsert-zone,
+        // reinsert-layer, restore-sampler-values): a write into model() would
         // be lost at the next overlay edit and is never what the user meant.
         if( why )
-            *why = QStringLiteral( "this instance plays a library program (%1); only a pad "
-                                   "reassignment (set-pad-key) or hide-pad is an overlay edit so far" )
+            *why = QStringLiteral( "this instance plays a library program (%1); its edits are "
+                                   "overlay edits, and this verb edits a program of its own" )
                        .arg( QString::fromStdString( library_->basePath() ) );
         return false;
     }
@@ -577,6 +579,9 @@ bool SSamplerProgram::restoreProgramState( const ProgramState &state, QString *w
             if( why ) *why = QString::fromStdString( err );
             return false;
         }
+        // Ids are never reused (QBX-282): an undo of an add puts the overlay
+        // back without its verbs but with nextId where the add left it.
+        if( library_ ) lib->raiseOverlayNextId( library_->overlayNextId() );
         model_   = lib->applied();
         library_ = std::move( lib );
     } else {
@@ -942,6 +947,15 @@ std::set<std::uint32_t> SSamplerProgram::namedLinks_() const
         for( std::uint32_t id : model_.layerIds( z ) ) {
             std::string src;
             model_.value( audio::twSamplerScope::Layer, id, "src", &src );
+            std::uint32_t n = 0;
+            if( parseLinkSrc( src, n ) ) named.insert( n );
+        }
+    // A LIBRARY's overlay names links of its own (QBX-282, the author's answer
+    // of 2026-11-07): one an orphaned set-layer names plays nothing now but
+    // applies again on a base that brings its layer back, so it stays held
+    // and saved while any overlay verb names it.
+    if( library_ )
+        for( const std::string &src : library_->overlaySrcs() ) {
             std::uint32_t n = 0;
             if( parseLinkSrc( src, n ) ) named.insert( n );
         }

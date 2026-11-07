@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-282 (nassau-digital DESIGN 8, settled 2026-11-07): A RECORDING INTO A
+  LIBRARY PROGRAM LANDS AS DESIGN 7 SAYS, WRITTEN AS OVERLAY OPS. Where 7
+  makes a zone, an overlay add-zone (ids from 1000000); where the pad's zone
+  exists, an overlay set-layer replacing its layer 1, a base zone included.
+  The take's src is what a recording into a program of its own carries, and
+  the take is registered as an asset as there.
+
+  place-sampler-recording is the verb the recorder submits when a pass into
+  the instrument stops (Q6); it is driven directly here, with the take's
+  file and key named, so the case gates the landing, not the capture.
+
+  The library (../sampler_library_keys_v1.xml): zone 1 covers keys 36..47
+  with layer 2 (test:a). Version 2 changed layer 2's src to test:a2.
+
+  Gated here: a key-view take on key 100 is an overlay add-zone + add-layer
+  and the base gains nothing; a pad-view take on pad 4 (key 40, zone 1)
+  replaces base layer 2 by an overlay set-layer of src, start, end, the loop
+  and beats, each with its .was; undo and redo of each (the redo the same
+  ids); save and reload; version 2 drifts the set-layer (src test:a to
+  test:a2) while the take still plays; rebase clears it.
+-->
+<SActionScript version="1" name="sampler_library_recording">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" zoneIds="1;3;6" capture="lib1"
+                            captureLibrary="lib1"/>
+
+    <!-- ................................... key view: a new overlay zone -->
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_stereo.wav"
+                             srcOffset="0" length="24000" target="key" key="100"/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: key view: a new one-key zone on the last key played, 100" minCount="1"/>
+    <assert-log contains="add-zone: track 0 slot 0: zone 1000000 with 1 layer(s), an overlay edit on the library" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000000" overlayEdits="2"
+                            scope="layer" id="1000001" attr="src" value="file:../test_stereo.wav"
+                            overlayContains="&lt;add-zone zone=&quot;1000000&quot; keyLo=&quot;100&quot; keyHi=&quot;100&quot;"
+                            libraryBaseAbsent="1000000"
+                            capture="take1" captureLibrary="take1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="1000001" attr="end" value="24000"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="1000001" rendering="0" src="file:../test_stereo.wav"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" libraryEqualsCaptured="lib1"
+                            ignoreNextId="1" overlayNextId="1000002" assetAbsent="Recording 1"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="take1" libraryEqualsCaptured="take1"/>
+
+    <!-- ................... pad view: the pad's base zone, its layer 1 replaced -->
+    <set-sampler-view trackPath="0" slotIndex="0" view="pad" padBank="0" pad="4"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" padKey="40"/>
+    <place-sampler-recording trackPath="0" slotIndex="0" filePath="../test_autosaw.wav"
+                             srcOffset="100" length="0"/>
+    <assert-log contains="place-sampler-recording: track 0 slot 0: pad key 40: layer 2 of zone 1 replaced" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6;1000000" overlayEdits="3"
+                            scope="layer" id="2" attr="src" value="file:../test_autosaw.wav"
+                            overlayContains="src=&quot;file:../test_autosaw.wav&quot; src.was=&quot;test:a&quot;"
+                            libraryBaseContains="&lt;layer id=&quot;2&quot; src=&quot;test:a&quot;"
+                            capture="take2" captureLibrary="take2"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains="start=&quot;100&quot; start.was=&quot;0&quot;"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains=" end=&quot;-1&quot; end.was=&quot;-1&quot;"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains=" loopStart=&quot;-1&quot; loopStart.was=&quot;-1&quot;"/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            overlayContains=" beats=&quot;0&quot; beats.was=&quot;0&quot;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="take1" libraryEqualsCaptured="take1"/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="take2" libraryEqualsCaptured="take2"/>
+
+    <!-- ...................................................... save, reload -->
+    <save-project path="../../build/sampler_library_recording.qxp"/>
+    <load-project path="../../build/sampler_library_recording.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="take2"
+                            libraryEqualsCaptured="take2" installed="1"/>
+
+    <!-- ............ version 2 moved layer 2's src: the take's set-layer drifts -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v2.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" scope="layer" id="2" attr="src" value="file:../test_autosaw.wav"
+                            libraryReport="libraryVersion 1-&gt;2; #2 set-layer drifted src test:a-&gt;test:a2"/>
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryReport="" baseVersion="2"
+                            overlayContains="src.was=&quot;test:a2&quot;"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0"
+                            libraryReport="libraryVersion 1-&gt;2; #2 set-layer drifted src test:a-&gt;test:a2"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

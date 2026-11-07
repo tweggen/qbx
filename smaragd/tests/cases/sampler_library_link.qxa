@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-282 (nassau-digital DESIGN 8, settled 2026-11-07): AN ASSET LINK ON A
+  LIBRARY INSTANCE IS AN OVERLAY set-layer. set-layer src="asset:<name>"
+  stores the instance's own link:N as the layer's src, with src.was the
+  base's src; the link table stays this object's. A link stays held and
+  saved while ANY overlay verb names it, an orphaned one included, so a base
+  that brings the layer back plays the asset again.
+
+  The library (../sampler_library_keys_v1.xml): zone 6 holds layer 7
+  (test:d). Version 2 drops zone 6.
+
+  Gated here: the link is stored in the overlay and the base keeps test:d;
+  the layer is bounced from the asset; undo and redo (the redo names the
+  same link); a cycle is still refused; save and reload; version 2 orphans
+  the set-layer and the link is STILL held and saved; reload under version
+  2; version 1 again brings the layer back, linked, bounced; rebase keeps
+  the orphan an orphan.
+-->
+<SActionScript version="1" name="sampler_library_link">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+    <create-file-asset filePath="../test_stereo.wav" srcOffset="0" length="24000" assetName="Hit"/>
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" heldLinks="" capture="lib1"/>
+
+    <!-- ............................................................ the link -->
+    <set-layer trackPath="0" slotIndex="0" layer="7" src="asset:Hit"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" overlayEdits="1" heldLinks="1"
+                            scope="layer" id="7" attr="src" value="link:1"
+                            overlayContains="&lt;set-layer layer=&quot;7&quot; src=&quot;link:1&quot; src.was=&quot;test:d&quot;/&gt;"
+                            libraryBaseContains="src=&quot;test:d&quot;" capture="linked" captureLibrary="linked"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="7" src="link:1" asset="Hit" renders="1" rendering="0"/>
+    <undo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="lib1" overlayEdits="0" heldLinks=""/>
+    <redo/>
+    <assert-sampler-program trackPath="0" slotIndex="0" equalsCaptured="linked" libraryEqualsCaptured="linked"
+                            heldLinks="1"/>
+
+    <!-- The cycle walk still refuses: an asset holding this sampler's own track. -->
+    <create-asset container=":" startOffset="0" duration="48000" assetName="Self"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Self" expectReject="true"/>
+    <assert-log contains="contains this sampler's own track" minCount="1"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" libraryEqualsCaptured="linked" heldLinks="1"/>
+
+    <!-- ...................................................... save, reload -->
+    <save-project path="../../build/sampler_library_link.qxp"/>
+    <assert-file-contains path="../../build/sampler_library_link.qxp" text="assetLinks='1="/>
+    <load-project path="../../build/sampler_library_link.qxp"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" library="1" equalsCaptured="linked"
+                            libraryEqualsCaptured="linked" heldLinks="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="7" src="link:1" asset="Hit" rendering="0"/>
+
+    <!-- ........... version 2 drops zone 6: the set-layer is orphaned, the link held -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v2.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" heldLinks="1"
+                            libraryReport="libraryVersion 1-&gt;2; #0 set-layer orphaned 7"/>
+    <save-project path="../../build/sampler_library_link_2.qxp"/>
+    <assert-file-contains path="../../build/sampler_library_link_2.qxp" text="assetLinks='1="/>
+    <load-project path="../../build/sampler_library_link_2.qxp"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3" heldLinks="1"
+                            libraryReport="libraryVersion 1-&gt;2; #0 set-layer orphaned 7"/>
+    <rebase-sampler-library trackPath="0" slotIndex="0"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" heldLinks="1" baseVersion="2"
+                            libraryReport="#0 set-layer orphaned 7"/>
+
+    <!-- ...... version 1 again: the layer is back, and plays the asset it linked -->
+    <set-sampler-library trackPath="0" slotIndex="0" path="../sampler_library_keys_v1.xml"/>
+    <assert-sampler-program trackPath="0" slotIndex="0" zoneIds="1;3;6" heldLinks="1"
+                            scope="layer" id="7" attr="src" value="link:1"
+                            libraryReport="libraryVersion 2-&gt;1"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="7" src="link:1" asset="Hit" rendering="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

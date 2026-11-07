@@ -25,8 +25,9 @@
 //   restore-sampler-state  `library` = 1 | 0, then `base` + `overlay` (1) or
 //                          `program` (0), each the core's text. Puts the
 //                          instance's whole program state back: the inverse of
-//                          the two verbs above and of set-pad-key on a library
-//                          instance (DESIGN §8: undo removes the edit and
+//                          the two verbs above, of set-pad-key on a library
+//                          instance and, since QBX-282, of every program verb
+//                          there and of flatten (DESIGN §8: undo removes the edit and
 //                          writes the previous value back — restoring the
 //                          overlay as it was before the edit is exactly that).
 //                          Its own inverse is itself with the state it
@@ -42,9 +43,21 @@
 //                          base row, a row that does not play now (already
 //                          hidden, or set-pad-key put it on its default).
 //
+//   flatten-sampler-library  Turn a library instance into a program of its
+//                          own (QBX-282, the author's answer of 2026-11-07;
+//                          the core's flatten()): it plays what the library
+//                          played, keeps the overlay's ids (C8: never
+//                          renumbered, the round-robin hashes them) and no
+//                          libraryVersion; orphaned, refused and unknown edits
+//                          are dropped, as flatten drops them (announced). A
+//                          link only an orphaned edit named is no longer held
+//                          (nothing names it). Inverse restore-sampler-state:
+//                          the library, base and overlay byte for byte.
+//                          REFUSED on an instance that is not a library.
+//
 // set-pad-key on a library instance (ssamplerrecordactions.h) records the
-// core's overlay verb set-pad instead of editing the base. Every other
-// program verb is refused there (SSamplerProgram::edit).
+// core's overlay verb set-pad instead of editing the base, and since QBX-282
+// every other program verb records its overlay edit too (ssampleractions.h).
 
 #include "app/objects/sampler/ssampleractions.h"
 
@@ -87,6 +100,16 @@ public:
 private:
     int  n_    = -1;
     bool hasN_ = false;
+};
+
+class SFlattenSamplerLibraryAction : public SSamplerAction {
+public:
+    SFlattenSamplerLibraryAction() = default;
+    QString name() const override { return QStringLiteral( "flatten-sampler-library" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override;
 };
 
 class SRestoreSamplerStateAction : public SSamplerAction {

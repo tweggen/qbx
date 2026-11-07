@@ -2845,3 +2845,160 @@ keyed slots tap.
    the "would close" absence checks of QBX-269's `sampler_routing_cycle_*`
    releases (each placed after an `assert-*`, not after the verb) check
    nothing; the refusals themselves are gated as stated.
+
+### QBX-282 as built (2026-11-07): every program verb on a library instance is an overlay edit
+
+QBX-278 made a library instance accept only two overlay edits, `set-pad` and
+`hide-pad`. Every other program verb was refused there, and so were
+recordings and asset links. This ticket routes all of them into the user's
+overlay. It uses the core verbs that already exist (`set-zone`,
+`set-layer`, `set-program`, `add-zone`, `add-layer`, `hide-zone`,
+`hide-layer`) and adds a flatten verb.
+
+The phase-1 analysis put nine questions to the author, recorded in
+nassau-digital DESIGN §8 under "Settled on 2026-11-07 (the author, QBX-282)",
+#36. The answers to questions 1–8 took the recommended option; question 9
+went the other way (add flatten now):
+
+1. An asset link is qbx's own `src="link:N"` in an overlay `set-layer`, with
+   `src.was` the base's src. The link table stays qbx's. A link stays held
+   and saved while ANY overlay verb names it, orphaned ones included.
+2. A recording lands as DESIGN §7 says, written as overlay ops.
+3. Removing a zone or layer the overlay itself added records a hide of its id.
+4. One gesture leaves one verb per target, with the `.was` from before the
+   gesture. Separate edits still append.
+5. An explicit `add-zone id=` is accepted on a library only when it is the
+   overlay's next id. The editor's drop predicts its ids from it.
+6. Ids are never reused: an undo keeps the overlay's `nextId` advanced, and
+   the redo restores the same ids.
+7. One qbx verb is one undo step.
+8. A newer base that took an overlay id is accepted. The colliding add is
+   refused and reported, and later verbs naming the id apply to the base's
+   zone, drifted.
+9. **Flatten, built now**: `flatten-sampler-library`.
+
+**No core change.** The core pin stays at `c3cf9e6`, and nassau-digital #36
+is docs only. Contract: objects/sampler invariant 35. Verbs: docs/ACTIONS.md.
+
+1. **tw/sampler.** `twSamplerLibrary` gained these methods, each a forwarder
+   to the core's record*() on what plays now (base + overlay):
+   - `recordSet()`;
+   - `recordAddZone()`, from attribute text like `addZone()`. An explicit
+     `id` is accepted only when it equals `nextOverlayId()`;
+   - `recordAddLayer()`;
+   - `recordHideZone()` and `recordHideLayer()`;
+   - `nextOverlayId()`, the core's own choice made by a dry-run
+     `recordAddZone` on copies, so there is no second rule;
+   - `overlayNextId()` and `raiseOverlayNextId()`;
+   - `overlaySrcs()`;
+   - `flattened()`, the core's `flatten()`, which also names the dropped
+     edits.
+
+   `twSamplerProgramModel::reinsertZone` / `reinsertLayer` now accept an
+   overlay-range id above `nextId`. A flattened program carries such ids, and
+   undoing their removal must work.
+2. **The verbs** (`ssampleractions.cpp`). On a library instance each verb
+   records through `editLibrary()`, and its inverse is
+   `restore-sampler-state` with the state before:
+   - `set-zone` / `set-layer` / `set-sampler-program` record set-zone /
+     set-layer / set-program;
+   - `add-zone` / `add-layer` record adds, and cache the state after for the
+     redo;
+   - `remove-zone` / `remove-layer` record hides;
+   - `reinsert-*` and `restore-sampler-values` stay refused (`edit()` refuses
+     on a library, with a new reason).
+   `place-sampler-recording` and the editor's drop needed nothing beyond
+   their children, except that the drop now predicts from `nextOverlayId()`.
+3. **The gesture.** The undo stack merges a gesture after each step has
+   applied, so each step appended its own verbs. Sabotage S2 below shows the
+   rejected design leaving 1000, 2000 and 3000 in the overlay. Now a set verb
+   on a library notes the gesture's start in
+   `SSamplerProgram::libraryGesture()`, which is live state and not saved. A
+   later step with the same `mergeKey()` that finds the instance exactly as
+   the previous step left it records again from that start.
+4. **Ids.** `restoreProgramState()` from one library state to another keeps
+   the overlay's `nextId` at least where it was. That is the core's
+   `undoRecordedEdit` rule, applied to qbx's whole-state inverse.
+5. **Links.** `namedLinks_()`, which decides what is pinned and saved, also
+   reads every overlay verb's `src`. This is the one deliberate exception to
+   "a link held only while in use", made because an orphan may apply again.
+   `heldLinks()` exposes it to the testkit.
+6. **Flatten.** The instance becomes `{library=false, program=flattened}`
+   through `restoreProgramState()`. Orphaned, refused and unknown edits are
+   dropped and announced. A link only such an edit named is unpinned, and
+   its body is kept weak, so the undo can name it again. DESIGN §8 settles
+   this: flatten drops orphans, and nothing in the result names the link.
+   The undo restores the library, base and overlay byte for byte (the
+   current state is not a library, so no `nextId` floor applies).
+7. **Gates**: six new cases on a library instance. Each covers undo/redo,
+   save/reload and a newer library plus rebase:
+   - `sampler_library_set_values`: one zone, a list, ALL, relative values,
+     set-layer, set-program, the refusals, ONE gesture leaving ONE verb per
+     target; v2 drifts three edits and orphans one; rebase.
+   - `sampler_library_structure`: add-zone and add-layer in the overlay
+     range; the explicit-id rule; no reuse after an undo and the same ids on
+     redo; hides of base and overlay objects; the plain inverses refused; v2
+     orphans; v3's colliding 1000000 (add refused, the later set-zone
+     drifted 0->5); rebase; reload.
+   - `sampler_library_link`: `link:1` in the overlay; the cycle refusal;
+     held across an orphaning v2, two reloads and a rebase; played again
+     under v1.
+   - `sampler_library_recording`: a key-view take as an overlay add-zone; a
+     pad-view take replacing base layer 2 by an overlay set-layer; v2 drift;
+     rebase.
+   - `sampler_library_drop`: the editor's composite drop on overlay ids, no
+     reuse after undo; a base layer linked; v2 drift; rebase.
+   - `sampler_library_flatten`: the flatten itself, with ids and links kept
+     and undo byte-exact; plain verbs afterwards, including the removal of
+     1000000 and its undo; save and reload as a plain program; an orphaned
+     link dropped.
+
+   `sampler_library_pads` now checks the refusal of a plain inverse instead
+   of a `set-zone`. `assert-sampler-program` gained `captureLibrary` /
+   `libraryEqualsCaptured` (with `ignoreNextId`), `overlayNextId`,
+   `nextOverlayId`, `libraryBaseContains` / `libraryBaseAbsent` and
+   `heldLinks`. `action_roundtrip_test` covers the new verb.
+8. **Sabotages.** 23, run through a harness that restores every file from
+   its own saved bytes and touches it. The cases run each time are
+   `sampler_library_*`, `sampler_q7_drop`, `sampler_q1_verbs`,
+   `sampler_q1_zone_id` and `action_roundtrip_test`. **All 23 bite**; the
+   case(s) each one breaks are in brackets:
+   - S1, set verbs skipping the overlay path: every new case.
+   - S2, the rejected 4(b), every gesture step appending its own verbs:
+     [`…_set_values`].
+   - S3, the rejected 6(b), restore letting `nextId` fall back:
+     [`…_structure`, `…_recording`, `…_drop`].
+   - S4 / S5, an add's redo recording again: [`…_structure`, plus
+     `…_recording` and `…_drop` for add-zone].
+   - S6, the explicit id not checked: [`…_structure`].
+   - S7–S10, remove-zone / remove-layer / add-layer / add-zone going through
+     `edit()`: [`…_structure`, plus `…_flatten`, `…_drop` and
+     `…_recording` where they use it].
+   - S11, the rejected T4, links held only for what plays: [`…_link`,
+     `…_flatten`].
+   - S12, the drop predicting from the base's nextId: [`…_drop`].
+   - S13, `recordSet` on the bare base: [four cases].
+   - S14 / S15 / S16, flatten ignoring the overlay / keeping
+     `libraryVersion` / its undo restoring the flattened state:
+     [`…_flatten`].
+   - S17, the overlay-range reinsert refused: [`…_flatten`].
+   - S18 / S22, an edit's inverse being the state AFTER it: [three cases
+     each].
+   - S19, remove-zone hiding a layer: [`…_structure`, `…_flatten`].
+   - S20, `nextOverlayId` reading the stored `nextId` (a second rule):
+     [`…_structure`].
+   - S21, the gesture's start being the step before: [`…_set_values`].
+   - S23, `edit()` not refusing on a library: [`…_pads`, `…_structure`].
+9. **Not gated / not built / known.**
+   - The editor's greyed display of orphaned and drifted edits, and an edits
+     list: out of scope (the author, 2026-11-07).
+   - The recording case drives `place-sampler-recording` directly with the
+     take's file and key. The capture itself is the Q6 cases'.
+   - The pad landing's `set-layer` is built through `makeByName`, whose
+     attribute order is QDom's hash order. So the ORDER of the
+     parameter/`.was` pairs in that overlay verb can differ between
+     processes. What it means and what it plays do not change, and the saved
+     text is kept as written; the case asserts each pair on its own.
+   - The gesture rule's "exactly as the previous step left it" check has no
+     case of its own. Gesture tokens are unique, so a different edit between
+     two steps of one gesture cannot be reached from a script.
