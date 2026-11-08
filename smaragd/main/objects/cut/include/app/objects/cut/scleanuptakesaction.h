@@ -123,11 +123,23 @@ public:
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
-    /// How many takes the last apply() removed, for the caller's confirmation
-    /// line. Read after submitting.
+    /// What the last apply() did, for the caller's confirmation line.
+    /// `removedTakes`: how many takes it removed. `keptOriginals`: how many it
+    /// left alone BECAUSE they were not recordings, the other half of §6.3's
+    /// "3 recordings, 1 original clip (kept)".
+    struct Report {
+        int removedTakes  = 0;
+        int keptOriginals = 0;
+    };
+    /// Where apply() writes its Report. A SUBMITTER MUST READ THE COUNTS FROM
+    /// HERE, never from the action after submit() (QBX-276): the history
+    /// DELETES an action that applied with no inverse -- the files-only run,
+    /// or one that removed nothing -- so `act->...` after the submit read
+    /// freed memory. ASan caught it in cleanup_takes_gesture. The sink must
+    /// outlive the submit; a stack Report beside a synchronous submit does.
+    void reportTo( Report *sink ) { report_ = sink; }
+
     int removedTakes() const { return removedTakes_; }
-    /// ...and how many it left alone BECAUSE they were not recordings, which is
-    /// the other half of §6.3's "3 recordings, 1 original clip (kept)".
     int keptOriginals() const { return keptOriginals_; }
 
 private:
@@ -138,6 +150,7 @@ private:
 
     int removedTakes_   = 0;
     int keptOriginals_  = 0;
+    Report *report_     = nullptr;   // borrowed; see reportTo()
 
     /**
      * Orphan recordings to the OS trash. NOT on the undo stack, and the only

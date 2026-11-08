@@ -294,6 +294,12 @@ private:
      * Not a second source of truth: nothing reads it back, it is rebuilt on
      * every apply (a redo re-plans against the lane as the undo left it), and
      * the previous one is deleted there.
+     *
+     * DELETING IT ON A REDO IS SAFE ONLY BECAUSE THE UNDO COMMAND ADOPTS THE
+     * REDO'S INVERSE (actions CONTRACT inv. 7, QBX-276). Until then it kept
+     * the first apply's inverse, whose `unmerge-columns` borrowed THIS plan's
+     * old merge: an undo after a redo read freed memory, which was
+     * midi_rec_union_r2's intermittent SEGFAULT.
      */
     SCompositeAction   *plan_ = nullptr;
 };

@@ -65,6 +65,26 @@ Invariants:
    (`extract-arrangement`, `dissolve-arrangement`) use neither a composite nor
    a `pathRoot` — and a future one needs a third state, not a widening of
    this.
+7. **AFTER A REDO, THE UNDO COMMAND HOLDS THE REDO'S INVERSE** (QBX-276).
+   `SActionUndoCommand::redo()` re-applies the forward through
+   `SActionHistory::reapply()`, which hands back the inverse that application
+   produced, and the command adopts it, deleting the old one. A redo that
+   returns no inverse keeps the old one. Until QBX-276 the redo's inverse was
+   deleted and the FIRST one kept, which is wrong for any inverse that borrows
+   from the application that made it. `place-recording` and
+   `place-midi-recording` each hold a plan and rebuild it on every apply
+   (`place-sampler-recording` holds one too, but re-applies the SAME children,
+   so it was never exposed); a held plan's `unmerge-columns` reads its
+   operands out of the `merge-columns` child. So an undo after a redo read a
+   freed `SMergeColumnsAction`. ASan reported it on every run of
+   `midi_rec_union_r2`; an ordinary build crashed only sometimes, because the
+   allocator usually handed the freed block straight back to the re-plan's
+   own merge. Gate: `undo_redo_adopts_inverse` (`probe-reapply`, whose
+   inverse knows which application stamped it).
+
+   An inverse may therefore borrow from its forward's CURRENT application and
+   nothing older: a forward may free what an earlier application made,
+   provided the inverse it returns now does not reach it.
 
 How to test: action_roundtrip_test.exe; every qxa case exercises the
 submit/apply/reject path.

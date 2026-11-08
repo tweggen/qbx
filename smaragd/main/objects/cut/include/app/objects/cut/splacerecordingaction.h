@@ -164,7 +164,10 @@ private:
      *
      * It is NOT a second source of truth: nothing reads it back, it is
      * rebuilt from scratch on every apply (a redo re-plans against the lane
-     * as the undo left it), and the previous one is deleted there.
+     * as the undo left it), and the previous one is deleted there. That is
+     * safe only because the undo command adopts the REDO's inverse (actions
+     * CONTRACT inv. 7, QBX-276); it used to keep the first apply's, which
+     * borrowed the plan just deleted.
      *
      * The alternative -- giving `SRestorePinnedClipAction` its own pin -- is
      * the better long-term shape and is a change to two public contracts in

@@ -39,8 +39,22 @@ void SActionUndoCommand::redo()
     // Redo means: apply the forward action without adding to history (to avoid recursion).
     // The forward action is reusable; it's owned by this undo command and will be
     // deleted in the destructor. Don't null out the pointer.
+    //
+    // THE REDO'S INVERSE REPLACES THE FIRST ONE (QBX-276). An inverse describes
+    // the application that produced it, and it may BORROW from it: a held
+    // plan's `unmerge-columns` reads its operands out of the `merge-columns`
+    // child that made them. A verb that re-plans on every apply deletes the
+    // previous plan, so an inverse kept from the first apply would read freed
+    // memory on the next undo -- the midi_rec_union_r2 teardown SEGFAULT, and
+    // an ASan heap-use-after-free every run. Even where nothing is freed, the
+    // first inverse names the objects the FIRST application created, which a
+    // re-plan has replaced. A redo that returns no inverse keeps the old one:
+    // nothing better describes what to undo.
     if (history_ && forward_) {
-        history_->submit(forward_, true);  // skipHistory = true
+        if (SAction *fresh = history_->reapply(forward_)) {
+            delete inverse_;
+            inverse_ = fresh;
+        }
     }
 }
 
