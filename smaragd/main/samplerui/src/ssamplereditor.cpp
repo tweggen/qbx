@@ -153,8 +153,14 @@ QSize SSamplerEditor::zoneViewSize() { return QSize( 760, 400 ); }
 
 QString SSamplerEditor::viewName( View v ) { return SSamplerProgram::viewText( v ); }
 
+// A TOOL window, not a plain Qt::Window (QBX-289). On macOS an owned plain
+// window is NOT kept above its owner and does not join a full-screen Space, so
+// a click in the main window (the asset list a drop starts from) buried the
+// editor behind it. Qt::Tool is an NSPanel there: it floats above the app's
+// windows, joins the Space, and hides while the app is inactive. On Windows
+// and X11 an owned tool window stays above its owner, as the plain one did.
 SSamplerEditor::SSamplerEditor( STrack *track, SPluginSlot *slot, QWidget *parent )
-    : QWidget( parent, Qt::Window ), track_( track ), slot_( slot )
+    : QWidget( parent, Qt::Tool ), track_( track ), slot_( slot )
 {
     setAttribute( Qt::WA_DeleteOnClose );
     setObjectName( QStringLiteral( "samplerEditor" ) );
@@ -726,7 +732,9 @@ QString SSamplerEditor::describe() const
         + QStringLiteral( "|xmlStatus=" ) + xmlPane_->status()
         + QStringLiteral( "|undoIndex=%1" ).arg( undoIndex )
         + QStringLiteral( "|title=" ) + windowTitle()
-        + QStringLiteral( "|status=" ) + statusText();
+        + QStringLiteral( "|status=" ) + statusText()
+        + QStringLiteral( "|windowType=" )
+        + ( windowType() == Qt::Tool ? QStringLiteral( "tool" ) : QStringLiteral( "window" ) );
 }
 
 bool SSamplerEditor::clickView( const QString &v )

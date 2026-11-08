@@ -36,7 +36,15 @@ Files: `ssamplereditor.h` (the window, its registry, the tap, the seams),
    menu) consults the registry first (pluginui CONTRACT, "The app-editor
    registry"). The window is keyed by SLOT in a module-level registry and is
    owned by the strip's `window()` (the main window), never by the strip,
-   which is deleted on every track switch. It is a top-level `Qt::Window`.
+   which is deleted on every track switch. It is a top-level **`Qt::Tool`**
+   window (QBX-289; it was a plain `Qt::Window`): on macOS an owned plain
+   window is not kept above its owner and does not join a full-screen Space,
+   so a click in a full-screen main window — the Extern file list, where an
+   asset drop starts — buried the editor and the drop had no target. A tool
+   window is an NSPanel there (floats above the app's windows, joins the
+   Space, hides while the app is inactive); on Windows and X11 an owned tool
+   window stays above its owner. Gated as `windowType=tool` in
+   `sampler_q7_views`; that it floats is the author's hand check on macOS.
 
 2. **NO CACHED ADDRESS.** The window holds the TRACK and the SLOT
    (`QPointer`s). Every submit derives `trackPath` — qualified by the root that
