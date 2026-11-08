@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-275: A TRANSPORT START UNDER A CLOSURE MUST NOT FREEZE A ROOT PAGE THROUGH
+  THE MASTER CHAIN. master_closure_heard_root failed on CI with
+  liveOwnedRefusals 2: the refusal came 2 ms after the new engine logged its
+  re-root, at page 0, while playback was BUFFERING.
+
+  The cause is ordering inside twSpeaker's frozen-lane start. A start from
+  stopped mints a new AudioEngine, and the readahead's first pass runs the
+  moment its thread starts. The engine used to be handed the below-master root
+  AFTER startReadahead(), so that first pass demanded page 0 of the REWIRE, and
+  a revalidation worker froze it through the master lane's processors while
+  the pump owned them. retireMasterLaneNodes() cannot cover it: it runs when
+  the closure is ENTERED (here, at arm time), before this demand exists.
+
+  THE SEAM MAKES THE RACE CERTAIN instead of likely. set-speaker-attach-hold
+  holds the main thread between startReadahead() and the publish of the
+  engine, which is exactly where the old order installed the root. With the
+  old order and the hold the worker has 300 ms to freeze page 0 the wrong
+  way; with the root installed first the hold changes nothing.
+
+  The arm comes BEFORE the transport start on purpose: that is the ordinary
+  gesture (monitor a take, then press play) and it is the order in which the
+  closure, its retirement and the ownership are all settled before the engine
+  that races them is created.
+-->
+<SActionScript version="1" name="master_closure_attach_hold">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0: armed and monitored on the paced file input. -->
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+
+    <!-- Track 1: never armed; the material the frozen lane renders. -->
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+
+    <!-- A master insert: the master shape is non-linear, so arming enters a
+         CLOSURE and the pump owns the master lane's processors. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="0.5"/>
+    <arm-track trackPath="0" armed="1"/>
+
+    <set-speaker-attach-hold holdMs="300"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="1000"/>
+    <toggle-playback play="0"/>
+
+    <!-- A SECOND start, from a locator far past page 0, gates the other half
+         of the change: an engine handed its root before its readahead ran
+         must NOT raise the seek a running engine needs. That seek targets the
+         pre-seek position, 0, so the playhead would be pulled back there and
+         need 4.2 s to reach 200000 rather than 0.17 s. The ABSOLUTE form of
+         wait-playhead is the one that can see it: minAdvance counts from
+         where it started and a jump backwards wraps to a huge advance. -->
+    <set-speaker-attach-hold holdMs="0"/>
+    <set-locator position="192000"/>
+    <toggle-playback play="1"/>
+    <wait-playhead position="200000" timeoutMs="3000"/>
+    <toggle-playback play="0"/>
+    <arm-track trackPath="0" armed="0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

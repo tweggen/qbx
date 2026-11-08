@@ -1674,6 +1674,17 @@ its entering-flip assertion in **5 runs of 8**; with the retirement it is **8 of
 exclusion path has always needed for exactly this reason — a departing member's
 queued nodes outlive the decision to exclude it.
 
+**The three steps cover the engine that EXISTS when the closure is entered, and
+only that one.** A transport start from stopped later mints a new
+`AudioEngine`, whose readahead issues root demands of its own. Step 2 cannot
+retire those: it ran at arm time, before they existed. The new engine is
+therefore given the below-master root by `twSpeaker` **before its readahead
+starts** (QBX-275; playback CONTRACT, re-rooting property 4). Handed the root
+after the readahead started, which is how it was, the first pass froze page 0
+through the master chain. `master_closure_heard_root` counted
+`liveOwnedRefusals` 2 on CI that way, and `master_closure_attach_hold` widens the
+window with a test-only hold to make the race certain.
+
 **The ORDER OUT is the mirror**, and asymmetric on purpose: `endMasterClosure()`
 releases ownership FIRST and re-roots back second, because the guard fires on
 whoever is not the pump. Re-rooting above the master while its processors are

@@ -344,6 +344,16 @@ public:
         return primingPolls_.load(std::memory_order_relaxed);
     }
 
+    /// TEST SEAM (QBX-275): hold the main thread for `ms` right after a
+    /// frozen-lane start has STARTED the new engine's readahead and before the
+    /// handle is published. It widens the one window in which a readahead
+    /// rooted at the wrong component could issue its first demand, so a case
+    /// can watch the ordering fail instead of hoping a worker loses the race.
+    /// 0 (the default) costs one relaxed load per transport start.
+    void setAttachHoldMsForTest(int ms) {
+        attachHoldMsForTest_.store(ms, std::memory_order_relaxed);
+    }
+
 public:
     // THE FROZEN LANE. Unchanged in every respect except one: when the device is
     // already OPEN (the live lane opened it), it ATTACHES rather than re-opening
@@ -486,6 +496,7 @@ private:
 
     std::atomic<DeviceState>   deviceState_{ DeviceState::CLOSED };
     std::atomic<bool>          liveMasterClosure_{ false };  // proposal 45 M3
+    std::atomic<int>           attachHoldMsForTest_{ 0 };   // QBX-275 seam
     // The re-rooting that travels with that flag (AC3.1). Main-thread only:
     // written by setLiveMasterClosure, read when an engine is attached.
     std::shared_ptr<twComponent> liveFrozenRootUnderMaster_;
