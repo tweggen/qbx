@@ -14,6 +14,17 @@ Invariants:
 1. Progress dialogs POLL session query methods from the GUI thread — they
    must not register Qt-touching callbacks on session threads
    (THREADING.md rule 1).
+1a. **The recording dialog follows the RECORDING, not a recorder** (QBX-290):
+   it polls `SApplication::recordingInProgress()` (either recorder, or the
+   count-in / pre-roll), `recordedSeconds()` and `recordingError()` (the error
+   of a recorder that TOOK PART in the take), and its Stop goes through
+   `SApplication::stopRecording()`. Watching `SAudioRecorder` alone reported
+   every MIDI-only take as "Recording failed: no armed tracks", since the audio
+   half refuses such a take by design. It is ONE window for every take:
+   `beginTake()` resets it on each press. The duration is updated only while
+   the take runs, so the window keeps the length the take reached. Gated by
+   `record_dialog_follows_take.qxa` through `describe()`; a take ending in an
+   error is NOT gated (no headless backend fails a running take).
 2. The render dialog emits absolute start/end seconds; a marked range is
    passed through as-is (the session handles non-zero starts).
 2a. The render dialog DISPLAYS the channel count and does not override it

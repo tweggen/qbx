@@ -444,6 +444,115 @@ static const bool s_reg_asserttransportreadout = (
     ), true
 );
 
+// ------------------------------------- press-record / recording-dialog (QBX-290)
+
+static SMainWindow *sMainWindow()
+{
+    for (QWidget *w : QApplication::topLevelWidgets())
+        if (SMainWindow *win = qobject_cast<SMainWindow *>(w)) return win;
+    return nullptr;
+}
+
+SApplyResult SPressRecordAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = sMainWindow();
+    if (!win) {
+        qWarning() << "press-record: no main window";
+        return {false, nullptr};
+    }
+    if (!win->pressRecord()) {
+        qWarning() << "press-record: the record button is disabled";
+        return {false, nullptr};
+    }
+    // Not undoable: transport, like press-play. A take it starts commits its
+    // own undo step at the stop.
+    return {true, nullptr};
+}
+
+static const bool s_reg_pressrecord = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("press-record"),
+        []{ return new SPressRecordAction; }
+    ), true
+);
+
+SApplyResult SRecordingDialogAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = sMainWindow();
+    if (!win) {
+        qWarning() << "recording-dialog: no main window";
+        return {false, nullptr};
+    }
+    if (!win->recordingDialogGesture(action_)) {
+        qWarning().noquote() << "recording-dialog: no dialog, or an unknown action"
+                             << ("\"" + action_ + "\" (stop|close)");
+        return {false, nullptr};
+    }
+    return {true, nullptr};
+}
+
+void SRecordingDialogAction::writeXml(QDomElement &elem) const
+{
+    elem.setAttribute("action", action_);
+}
+
+bool SRecordingDialogAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    action_ = elem.attribute("action");
+    return action_ == QLatin1String("stop") || action_ == QLatin1String("close");
+}
+
+static const bool s_reg_recordingdialog = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("recording-dialog"),
+        []{ return new SRecordingDialogAction; }
+    ), true
+);
+
+SApplyResult SAssertRecordingDialogAction::apply(SProject * /*project*/)
+{
+    SMainWindow *win = sMainWindow();
+    if (!win) {
+        qWarning() << "assert-recording-dialog: no main window";
+        return {false, nullptr};
+    }
+    const QString got = win->describeRecordingDialog();
+    if (!contains_.isEmpty() && !got.contains(contains_)) {
+        qWarning().noquote() << "assert-recording-dialog FAILED: dialog reports"
+                             << ("\"" + got + "\"") << "which lacks"
+                             << ("\"" + contains_ + "\"");
+        return {false, nullptr};
+    }
+    if (!absent_.isEmpty() && got.contains(absent_)) {
+        qWarning().noquote() << "assert-recording-dialog FAILED: dialog reports"
+                             << ("\"" + got + "\"") << "which contains"
+                             << ("\"" + absent_ + "\"");
+        return {false, nullptr};
+    }
+    qDebug().noquote() << "assert-recording-dialog: OK -" << ("\"" + got + "\"");
+    return {true, nullptr};
+}
+
+void SAssertRecordingDialogAction::writeXml(QDomElement &elem) const
+{
+    if (!contains_.isEmpty()) elem.setAttribute("contains", contains_);
+    if (!absent_.isEmpty())   elem.setAttribute("absent", absent_);
+}
+
+bool SAssertRecordingDialogAction::readXml(const QDomElement &elem, int /*version*/)
+{
+    contains_ = elem.attribute("contains");
+    absent_   = elem.attribute("absent");
+    return true;
+}
+
+static const bool s_reg_assertrecordingdialog = (
+    SActionRegistry::instance().registerType(
+        QStringLiteral("assert-recording-dialog"),
+        []{ return new SAssertRecordingDialogAction; }
+    ), true
+);
+
 // --------------------------------------------------------------- drag-range
 
 QStringList SDragRangeAction::knownAttributes() const

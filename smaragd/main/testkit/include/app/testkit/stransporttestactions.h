@@ -235,6 +235,49 @@ private:
     QString absent_;
 };
 
+// The record BUTTON and its dialog (QBX-290). `press-record` triggers the
+// real record QAction (SMainWindow::onRecordTriggered: a press starts a take
+// and shows the dialog, a press during one stops it); `recording-dialog`
+// `action` = "stop" (the dialog's Stop button) | "close" (its window);
+// `assert-recording-dialog` matches `contains` / `absent` against
+// SRecordingProgressDialog::describe(), or "dialog=none" before the first take.
+class SPressRecordAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral("press-record"); }
+    QStringList knownAttributes() const override { return {}; }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &) const override {}
+    bool readXml(const QDomElement &, int) override { return true; }
+};
+
+class SRecordingDialogAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral("recording-dialog"); }
+    QStringList knownAttributes() const override { return {QStringLiteral("action")}; }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    // "stop" so a default-built verb round-trips; a script that names no
+    // action is still REJECTED on read.
+    QString action_ = QStringLiteral("stop");
+};
+
+class SAssertRecordingDialogAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral("assert-recording-dialog"); }
+    QStringList knownAttributes() const override
+        { return {QStringLiteral("contains"), QStringLiteral("absent")}; }
+    SApplyResult apply(SProject *project) override;
+    void writeXml(QDomElement &elem) const override;
+    bool readXml(const QDomElement &elem, int version) override;
+
+private:
+    QString contains_;
+    QString absent_;
+};
+
 // `drag-range` (QBX-215): a REAL drag in the active arranger's ruler band from
 // `from` to `to` (FRAMES), through the arranger's own range handlers - grid
 // snapping included. A press inside an existing range moves or resizes it,

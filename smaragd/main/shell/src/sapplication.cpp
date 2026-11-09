@@ -1649,6 +1649,11 @@ bool SApplication::startRecording()
     // poll to begin it a second time when the click ran out.
     if( preamblePhase_ != 0 ) return true;
 
+    // A new press: what the last take's recorders did no longer describes
+    // this one (recordingError() must not report a take that has not begun).
+    audioInTake_ = false;
+    midiInTake_  = false;
+
     // COUNT-IN / PRE-ROLL (proposal 21 L5). Only from a STOPPED transport:
     // punching in while the tape is rolling has no count-in in any DAW, and a
     // pre-roll would mean seeking backwards under a running take.
@@ -1742,6 +1747,9 @@ bool SApplication::startRecordingNow_()
     const bool midiOk  = midiRecorder_  ? midiRecorder_->start()  : false;
     const bool audioOk = audioRecorder_ ? audioRecorder_->start() : false;
     midiOwnsTransport_ = ( midiOk && !audioOk );
+    audioInTake_ = audioOk;
+    midiInTake_  = midiOk;
+    if( midiOk ) midiTakeClock_.start();
     if( !midiOk && !audioOk ) return false;
     if( midiOwnsTransport_ ) {
         setRecordingStartFrame( midiRecorder_->recordStartFrame() );
@@ -1749,6 +1757,25 @@ bool SApplication::startRecordingNow_()
         else              liveLanesChanged();
     }
     return true;
+}
+
+double SApplication::recordedSeconds() const
+{
+    if( audioInTake_ && audioRecorder_ && audioRecorder_->isActive() )
+        return audioRecorder_->recordedSeconds();
+    if( midiInTake_ && midiRecorder_ && midiRecorder_->isActive()
+        && midiTakeClock_.isValid() )
+        return midiTakeClock_.elapsed() / 1000.0;
+    return 0.0;
+}
+
+QString SApplication::recordingError() const
+{
+    if( audioInTake_ && audioRecorder_ && !audioRecorder_->errorMessage().isEmpty() )
+        return audioRecorder_->errorMessage();
+    if( midiInTake_ && midiRecorder_ && !midiRecorder_->errorMessage().isEmpty() )
+        return midiRecorder_->errorMessage();
+    return QString();
 }
 
 void SApplication::stopRecording()

@@ -721,7 +721,10 @@ foreach(_rec record_offset_zero record_loop_takes record_loop_late_start record_
               # P6's Unused recordings list (plan 53 §6.3 / QBX-184): it needs
               # a real press, because what it gates is what the project holds
               # after a take has been UNDONE.
-              unused_recordings_list)
+              unused_recordings_list
+              # The record dialog follows the RECORDING (QBX-290): a real
+              # press, a MIDI-only take and a mixed one in the same window.
+              record_dialog_follows_take)
     if(TEST qxa.${_rec})
         set_tests_properties(qxa.${_rec} PROPERTIES
             RUN_SERIAL TRUE

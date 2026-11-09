@@ -790,6 +790,14 @@ public slots:
     // tracking (noteUserNavigatedLocator is deliberately NOT called here), and
     // exercising the real slot is what proves the two do not interfere.
     void stopPlaying();
+    // The record button and the recording dialog, for the `press-record`,
+    // `recording-dialog` and `assert-recording-dialog` testkit verbs
+    // (QBX-290). pressRecord() goes through the QAction and is false when it
+    // is disabled; the gesture is "stop" (the dialog's button) or "close" (its
+    // window), false when there is no dialog or the gesture is unknown.
+    bool pressRecord();
+    QString describeRecordingDialog() const;
+    bool recordingDialogGesture( const QString &gesture );
 
     // Show + raise the event editor dock, ACTIVELY re-querying the current
     // selection (or binding an explicit clip) rather than trusting only the

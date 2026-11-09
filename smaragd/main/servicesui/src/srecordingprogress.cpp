@@ -1,6 +1,6 @@
 #include "app/servicesui/srecordingprogress.h"
 
-#include "app/shell/saudiorecorder.h"
+#include "app/shell/sapplication.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -11,9 +11,8 @@
 #include <iomanip>
 #include <sstream>
 
-SRecordingProgressDialog::SRecordingProgressDialog(SAudioRecorder *recorder,
-                                                   QWidget *parent)
-    : QDialog(parent), recorder_(recorder) {
+SRecordingProgressDialog::SRecordingProgressDialog(QWidget *parent)
+    : QDialog(parent) {
     setWindowTitle("Recording...");
     setMinimumWidth(400);
     // NON-MODAL (proposal 21 L3b): the take runs while the app stays usable.
@@ -44,8 +43,6 @@ SRecordingProgressDialog::SRecordingProgressDialog(SAudioRecorder *recorder,
 
     setLayout(mainLayout);
 
-    // Connect button
-    connect(stopButton_, &QPushButton::clicked, this, &SRecordingProgressDialog::onStopClicked);
 
     // We deliberately do NOT install session callbacks: those fire on the
     // recording WORKER thread, and a worker std::thread touching Qt (timers,
@@ -55,7 +52,33 @@ SRecordingProgressDialog::SRecordingProgressDialog(SAudioRecorder *recorder,
     // Setup timer for time display + completion polling.
     updateTimer_ = new QTimer(this);
     connect(updateTimer_, &QTimer::timeout, this, &SRecordingProgressDialog::updateTimeDisplay);
+    beginTake();
+}
+
+void SRecordingProgressDialog::beginTake() {
+    isComplete_ = false;
+    failed_ = false;
+    recordedDuration_ = 0.0;
+    updateCount_ = 0;
+    statusLabel_->setText("Recording in progress...");
+    durationLabel_->setText("Duration: " + formatTime(0.0));
+    stopButton_->setText("Stop Recording");
+    stopButton_->disconnect();
+    connect(stopButton_, &QPushButton::clicked, this, &SRecordingProgressDialog::onStopClicked);
     updateTimer_->start(100);  // Poll every 100ms
+}
+
+QString SRecordingProgressDialog::describe() const {
+    const char *state = !isComplete_ ? "recording" : (failed_ ? "failed" : "complete");
+    return QStringLiteral("open=%1|state=%2|status=%3|duration=%4")
+        .arg(isVisible() ? 1 : 0)
+        .arg(QLatin1String(state))
+        .arg(statusLabel_->text())
+        .arg(durationLabel_->text());
+}
+
+void SRecordingProgressDialog::pressStop() {
+    stopButton_->click();
 }
 
 SRecordingProgressDialog::~SRecordingProgressDialog() {
@@ -79,6 +102,7 @@ QString SRecordingProgressDialog::formatTime(double seconds) const {
 void SRecordingProgressDialog::handleCompletion(bool success, const QString &error) {
     updateTimer_->stop();
     isComplete_ = true;
+    failed_ = !success;
 
     if (success) {
         statusLabel_->setText("Recording complete!");
@@ -94,20 +118,26 @@ void SRecordingProgressDialog::handleCompletion(bool success, const QString &err
 }
 
 void SRecordingProgressDialog::onStopClicked() {
-    if (recorder_ && !isComplete_) {
-        recorder_->stop();
-        handleCompletion(true, QString());
-        accept();
-    }
+    if (isComplete_) return;
+    // Through the APPLICATION, which stops both recorders as one undo step;
+    // the audio recorder's own stop() would leave a MIDI half running.
+    SApplication &app = SApplication::app();
+    if (app.recordingInProgress()) app.stopRecording();
+    const QString err = app.recordingError();
+    handleCompletion(err.isEmpty(), err);
+    accept();
 }
 
 void SRecordingProgressDialog::updateTimeDisplay() {
-    if (!recorder_) return;
+    const SApplication &app = SApplication::app();
 
-    // Poll progress on the GUI thread. The recorder is main-thread-only, so
-    // this is a plain read.
-    recordedDuration_ = recorder_->recordedSeconds();
-    durationLabel_->setText("Duration: " + formatTime(recordedDuration_));
+    // Poll progress on the GUI thread. The recorders are main-thread-only, so
+    // this is a plain read. Only while the take runs: once it has ended the
+    // recorders report 0, and the window keeps the length the take reached.
+    if (app.recordingInProgress()) {
+        recordedDuration_ = app.recordedSeconds();
+        durationLabel_->setText("Duration: " + formatTime(recordedDuration_));
+    }
 
     // Refresh the main window's UI every ~500ms to show growing recorded clip (every 5 updates @ 100ms)
     ++updateCount_;
@@ -119,8 +149,8 @@ void SRecordingProgressDialog::updateTimeDisplay() {
 
     // The take may end without this dialog (a punch-out, or the record button
     // pressed again). Follow it.
-    if (!isComplete_ && !recorder_->isActive()) {
-        const QString err = recorder_->errorMessage();
+    if (!isComplete_ && !app.recordingInProgress()) {
+        const QString err = app.recordingError();
         handleCompletion(err.isEmpty(), err);
     }
 }
@@ -128,6 +158,7 @@ void SRecordingProgressDialog::updateTimeDisplay() {
 void SRecordingProgressDialog::closeEvent(QCloseEvent *event) {
     // Closing the window STOPS the take (it is not modal any more, so refusing
     // to close would leave a window the user cannot get rid of).
-    if (!isComplete_ && recorder_ && recorder_->isActive()) recorder_->stop();
+    if (!isComplete_ && SApplication::app().recordingInProgress())
+        SApplication::app().stopRecording();
     event->accept();
 }
