@@ -17,6 +17,8 @@
     D  ...and so does the LIVE lane, which opens the device through the same
        twSpeaker::ensureDeviceOpen().
     E  On again: Play asks for the project rate again.
+    F  It belongs to the PROJECT: saved off, a fresh project after it asks
+       for the rate again, and the saved one, re-opened, asks for none.
 
   What it does NOT pin: the CoreAudio calls themselves (switching, giving the
   rate back on quit), which run on a Mac only. Their decisions are gated by
@@ -66,6 +68,25 @@
     <wait-playhead minAdvance="4800" timeoutMs="30000"/>
     <toggle-playback play="0"/>
     <assert-output-device requestedRate="48000" opens="5"/>
+
+    <!-- F: the property is the PROJECT's. Saved off, a fresh project after
+         it asks for the rate again, and the saved one, opened, asks for none. -->
+    <set-property key="deviceAtProjectRate" value="[false]"/>
+    <save-project path="../../build/test-output/device_rate_request/off.qxp"/>
+    <close-project/>
+    <assert-property key="deviceAtProjectRate" equals=""/>
+    <add-track index="-1"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="48000" opens="6"/>
+
+    <open-project path="../../build/test-output/device_rate_request/off.qxp"/>
+    <assert-property key="deviceAtProjectRate" equals="false"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="0" opens="7"/>
   </actions>
 
   <assertions>
