@@ -1304,6 +1304,18 @@ void SLiveMonitor::forgetLiveState()
     }
 }
 
+void SLiveMonitor::armedInSession( const SObject *track )
+{
+    const auto it = std::find_if( inertlyArmed_.begin(), inertlyArmed_.end(),
+                                  [track]( const STrack *t ) {
+                                      return static_cast<const SObject *>( t ) == track;
+                                  } );
+    if( it == inertlyArmed_.end() ) return;
+    TW_LOGI( "shell", "[LIVE] '%s' armed in this session: no longer inert",
+             ( *it )->getSName().toStdString().c_str() );
+    inertlyArmed_.erase( it );
+}
+
 void SLiveMonitor::projectChanged()
 {
     // Arms that arrived in a project file are INERT (design D9). The flag
@@ -1554,5 +1566,7 @@ QString SLiveMonitor::describe() const
                  .arg( (qlonglong) countInRemainingFrames() )
                  .arg( (qlonglong) countInTotal_ );
     if( !lastRefusal_.isEmpty() ) s += QStringLiteral( " refused='%1'" ).arg( lastRefusal_ );
+    // APPENDED (QBX-291): how many loaded arms are still inert (design D9).
+    s += QStringLiteral( " inert=%1" ).arg( inertlyArmed_.size() );
     return s;
 }

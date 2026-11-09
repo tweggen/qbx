@@ -405,6 +405,7 @@ public:
     // SAppContext: a track was armed / disarmed, or its input or monitor mode
     // moved. One plan rebuild, here, on the main thread.
     void liveLanesChanged() override;
+    void trackArmedInSession( const SObject *track ) override;
 
     // Test output directory for artifacts (screenshots, renders, etc.)
     void setTestOutputDir(const QString &path);

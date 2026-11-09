@@ -64,6 +64,11 @@ SApplyResult SArmTrackAction::apply( SProject *project )
 
     SAction *inverse = new SArmTrackAction( trackPath_, track->isArmedForRecording() );
     track->setArmedForRecording( armed_ );
+    // An arm OR a disarm made now ends the inertness a loaded arm starts with
+    // (design D9, QBX-291): a disarm too, because the button shows a loaded
+    // arm as armed, so the user's first click on it disarms and the second
+    // arms -- and that second click must make the track live.
+    SAppContext::get().trackArmedInSession( track );
     // The live set is {armed && monitorEffective}, plus {monitor == on} under
     // `mixer/monitorArming=any` (design D9, narrowed by QBX-260), so arming is
     // a plan-rebuild trigger even when nothing else moved -- and under the

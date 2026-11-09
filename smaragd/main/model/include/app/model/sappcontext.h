@@ -8,6 +8,7 @@
 
 class SProject;
 class SLink;
+class SObject;
 class tw303aEnvironment;
 
 namespace audio {
@@ -86,6 +87,14 @@ public:
     // the arm/disarm sequence (retire -> setLiveOwned -> rewire -> epoch ->
     // publish) lives in one place, where the pump and the speaker are.
     virtual void liveLanesChanged() {}
+
+    // A track was armed or DISARMED in this session, by the user or a script
+    // (QBX-291). An arm that came out of the project file is inert until this
+    // happens (design D9), so the shell needs to hear WHICH track it was;
+    // liveLanesChanged() says only that something moved. arm-track raises it
+    // before liveLanesChanged(), so the rebuild that follows already sees the
+    // track as armed in this session.
+    virtual void trackArmedInSession( const SObject * ) {}
 
     // Process-wide instance, set once by SApplication at startup.
     static void setInstance( SAppContext *ctx );
