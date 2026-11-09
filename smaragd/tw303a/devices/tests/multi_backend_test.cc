@@ -34,6 +34,7 @@
 #include "asio_channels.h"
 #include "asio_convert.h"
 #include "asio_id.h"
+#include "coreaudio_rate.h"
 
 #include <algorithm>
 #include <cmath>
@@ -345,6 +346,38 @@ static void testChannels()
           "the default is input 0 alone, matching DEFAULT_RECORDING_CHANNELS");
 }
 
+// QBX-293: whether CoreAudioBackend switches the device's nominal rate to the
+// project's. The CoreAudio calls around it run on a Mac only; this decision is
+// their only gate here.
+static void testCoreAudioRatePlan()
+{
+    using P = CoreAudioRatePlan;
+    const std::vector<CoreAudioRateRange> discrete = {
+        {44100.0, 44100.0}, {48000.0, 48000.0}, {96000.0, 96000.0}};
+    const std::vector<CoreAudioRateRange> span = {{8000.0, 192000.0}};
+
+    CHECK(planCoreAudioRate(44100, 48000, discrete, true) == P::Switch,
+          "44.1k device, 48k project, offered and settable -> switch");
+    CHECK(planCoreAudioRate(48000, 48000, discrete, true) == P::Keep,
+          "already at the project rate -> keep");
+    CHECK(planCoreAudioRate(48000, 48000, {}, false) == P::Keep,
+          "keep needs neither the list nor settability");
+    CHECK(planCoreAudioRate(44100, 0, discrete, true) == P::NoPreference,
+          "no wanted rate -> leave the device alone");
+    CHECK(planCoreAudioRate(44100, 88200, discrete, true) == P::NotOffered,
+          "a rate between the discrete ones is not offered");
+    CHECK(planCoreAudioRate(44100, 88200, span, true) == P::Switch,
+          "a rate inside a continuous range is offered");
+    CHECK(planCoreAudioRate(44100, 48000, discrete, false) == P::NotSettable,
+          "offered but not settable -> not settable");
+    CHECK(planCoreAudioRate(44100, 48000, {}, true) == P::NotOffered,
+          "an empty list offers nothing (a failed read must not switch blind)");
+    CHECK(coreAudioRateOffered(44100, {{44099.99, 44099.99}}),
+          "half a hertz of slack on a Float64 range");
+    CHECK(!coreAudioRateOffered(44100, {{44098.0, 44098.0}}),
+          "...and no more than that");
+}
+
 int main()
 {
     printf("=== multi_backend_test (proposal 35 Phases 2-3, cross-platform half) ===\n");
@@ -352,6 +385,7 @@ int main()
     testBufferSizes();
     testConverters();
     testChannels();
+    testCoreAudioRatePlan();
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
            failures == 1 ? "" : "s");
