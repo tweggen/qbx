@@ -8,7 +8,6 @@
 
 #include <QTimer>
 
-#include "app/model/sarmcensus.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
@@ -113,6 +112,36 @@ SStdMixer *SLiveMonitor::rootMixer() const
     return p ? dynamic_cast<SStdMixer *>( p->masterRoot() ) : nullptr;
 }
 
+std::vector<std::pair<QString, SStdMixer *> > SLiveMonitor::arrangementMixers() const
+{
+    std::vector<std::pair<QString, SStdMixer *> > out;
+    SProject *p = app_ ? app_->getCurrentProject() : nullptr;
+    if( !p ) return out;
+    QList<QString> names = p->arrangementNames();
+    std::sort( names.begin(), names.end() );
+    for( const QString &n : names )
+        if( SStdMixer *m = dynamic_cast<SStdMixer *>( p->arrangement( n ) ) )
+            out.emplace_back( n, m );
+    return out;
+}
+
+SLiveClosure SLiveMonitor::computeLiveClosure(
+    bool playing, bool recording, const std::vector<const STrack *> &inert ) const
+{
+    // THE MASTER FIRST, then every arrangement root (QBX-286). Each root is
+    // walked on its own, so a MIDI track's consumer, a folder's members and a
+    // skip reason are that root's - and an arrangement's members never meet
+    // the master's folders.
+    SLiveClosure out = sliveplan::computeClosure(
+        rootMixer(), playing, recording, inert, monitorArmingOption() );
+    for( const auto &a : arrangementMixers() )
+        sliveplan::mergeArrangement(
+            out, a.second, a.first,
+            sliveplan::computeClosure( a.second, playing, recording, inert,
+                                       monitorArmingOption() ) );
+    return out;
+}
+
 std::uint64_t SLiveMonitor::rootEpoch() const
 {
     SStdMixer *m = rootMixer();
@@ -131,6 +160,15 @@ void SLiveMonitor::applyExclusion( const SLiveClosure &affected )
     // freezes produce, and the pages already frozen still contain (or still
     // lack) the track (the mute precedent, sstdmixer.cpp).
     m->applyAudibility();
+    // ...and the same pass on every ARRANGEMENT root (QBX-286): an armed
+    // track there is nulled in its own mixer, so no freeze of the arrangement
+    // runs the processors the pump now owns. Its PLACED capture is not rebuilt
+    // while it is owned (QBX-283 Option A), so its clips go on sounding.
+    for( const auto &a : arrangementMixers() ) a.second->applyAudibility();
+    // ...including one that has just been UNREGISTERED with members still
+    // live: it is no longer listed, but its plugs must be given back.
+    for( const SLiveClosure::Arrangement &a : affected.arrangements )
+        if( a.mixer ) a.mixer->applyAudibility();
 
     // AND IT HAS TO BE PER MEMBER, not one call on the mixer. `SObject::
     // invalidateRenderPath()` walks from the project ROOT and stales every
@@ -166,6 +204,10 @@ void SLiveMonitor::retireClosureNodes( const SLiveClosure &closure )
         if( t->getRootComponent() )     comps.push_back( t->getRootComponent().get() );
     }
     sched->retireComponentNodes( comps );
+    // An arrangement's master lane is rendered by the pump as that
+    // arrangement's node (QBX-286), so its queued nodes go the same way.
+    for( const SLiveClosure::Arrangement &a : closure.arrangements )
+        retireMasterLaneNodes( a.mixer );
 }
 
 void SLiveMonitor::retireMasterLaneNodes( SStdMixer *mixer )
@@ -277,6 +319,10 @@ void SLiveMonitor::setClosureOwned( const SLiveClosure &closure, bool owned )
             proc->setLiveOwned( owned );
         }
     }
+    // An arrangement's MASTER LANE is its node in the plan (QBX-286), so its
+    // processors are the pump's exactly as long as one of its tracks is.
+    for( const SLiveClosure::Arrangement &a : closure.arrangements )
+        setMasterLaneOwned( a.mixer, owned );
     // ...and a RELEASE (a disarm, a render's suspension, monitor Auto on
     // Play) asks them AFTER the flip: the freed recapture what is there now.
     if( !owned && !closure.ordered.empty() ) SCut::recheckLiveHoldEverywhere();
@@ -728,7 +774,12 @@ void SLiveMonitor::publishPlan( const SLiveClosure &closure,
     // no plug and bumped nothing, so there is nothing for the page to be too
     // old for, and passing an epoch here would gate the click off until an
     // unrelated re-freeze happened to land.
-    if( closure.ordered.empty() ) { flipEpoch = 0; flipEpochPrime = 0; }
+    //
+    // The same holds for a lane whose members are ALL held by arrangements
+    // (QBX-286): the master's root page never contained them and never will,
+    // so there is no page to wait for. topLevel is master-only, so an empty
+    // one covers both.
+    if( closure.topLevel.empty() ) { flipEpoch = 0; flipEpochPrime = 0; }
 
     SLivePlanBuilder::Params p;
     p.mixer       = rootMixer();
@@ -916,9 +967,8 @@ bool SLiveMonitor::refreshPlan_()
 
     const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
                                                   : app_->isPlaying();
-    SLiveClosure want = sliveplan::computeClosure(
-        mixer, playing, app_->isRecordingActive(), inertlyArmed_,
-        monitorArmingOption() );
+    SLiveClosure want = computeLiveClosure( playing, app_->isRecordingActive(),
+                                            inertlyArmed_ );
     planSkips_ = want.skipped;
     // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9), where
     // the monitor half needs `mixer/monitorArming=any` since QBX-260 and is
@@ -969,6 +1019,18 @@ bool SLiveMonitor::refreshPlan_()
     SLiveClosure leaving;
     for( STrack *t : current_.ordered )
         if( !want.contains( t ) ) leaving.ordered.push_back( t );
+    // An arrangement whose LAST member leaves takes its master lane with it
+    // (QBX-286); one that keeps a member keeps the lane owned.
+    auto holdsMixer = []( const SLiveClosure &c, const SStdMixer *m ) {
+        for( const SLiveClosure::Arrangement &a : c.arrangements )
+            if( a.mixer == m ) return true;
+        return false;
+    };
+    for( const SLiveClosure::Arrangement &a : current_.arrangements )
+        if( !holdsMixer( want, a.mixer ) ) leaving.arrangements.push_back( a );
+    bool leavingMaster = false;
+    for( STrack *t : leaving.ordered )
+        if( !current_.isOutsideMaster( t ) ) leavingMaster = true;
 
     bool tailNow = false;
     if( !leaving.ordered.empty() ) {
@@ -1013,12 +1075,19 @@ bool SLiveMonitor::refreshPlan_()
         // hold a processor the freeze path is about to want - and holding it
         // is exactly what would count `liveOwnedRefusals` for no benefit.
         tailNow = !app_->isPlaying();
+        // ...and only for a member the root page will take back. A track held
+        // by an arrangement never left the master's page, so the epoch the
+        // tail waits for is already there and the ring would be cut at once
+        // - silencing every master member still live (QBX-286).
+        if( !leavingMaster ) tailNow = true;
     }
 
     // --- the ARM half ------------------------------------------------------
     SLiveClosure arriving;
     for( STrack *t : want.ordered )
         if( !current_.contains( t ) ) arriving.ordered.push_back( t );
+    for( const SLiveClosure::Arrangement &a : want.arrangements )
+        if( !holdsMixer( current_, a.mixer ) ) arriving.arrangements.push_back( a );
 
     // `current_` MUST be the new set before finishDisarm() runs: that function
     // computes what is really gone as "departing minus current", and closes the
@@ -1072,7 +1141,7 @@ bool SLiveMonitor::refreshPlan_()
         return true;
     }
 
-    if( !arriving.ordered.empty() ) {
+    if( !arriving.ordered.empty() || !arriving.arrangements.empty() ) {
         // 1. drain, 2. own, 3. wire + bump, 4. read the epoch.
         retireClosureNodes( arriving );
         setClosureOwned( arriving, true );
@@ -1339,9 +1408,9 @@ QString SLiveMonitor::skipReason( const STrack *track ) const
 
 // QBX-292: every armed track the live path leaves out, with its reason, ONE
 // [LIVE] line per track whose reason is new or changed (never one per
-// refresh). Three sources: the plan's (inert, monitor, no input, no
-// instrument), attachLiveEvents' (no processor, no port, no sink), and the
-// armed lanes the plan never walks because they are not under the master root.
+// refresh). Two sources: the plan's (inert, monitor, no input, no
+// instrument), attachLiveEvents' (no processor, no port, no sink). A third,
+// "it is in an arrangement", went with QBX-286: the plan walks every root now.
 void SLiveMonitor::reportSkips_()
 {
     std::map<const STrack *, QString> next;
@@ -1350,18 +1419,6 @@ void SLiveMonitor::reportSkips_()
     };
     for( const SLiveSkip &s : planSkips_ ) add( s.track, s.reason );
     for( const SLiveSkip &s : attachSkips_ ) add( s.track, s.reason );
-    if( SProject *p = app_ ? app_->getCurrentProject() : nullptr ) {
-        for( SObject *arr : p->arrangements() ) {
-            QList<SObject *> lanes;
-            sarm::detail::collectArmedLanes( arr, lanes );
-            for( SObject *lane : lanes )
-                add( dynamic_cast<STrack *>( lane ),
-                     QStringLiteral( "it is in the arrangement '%1', and a track "
-                                     "armed inside an arrangement is not "
-                                     "monitored yet (QBX-286)" )
-                         .arg( p->arrangementNameOf( arr ) ) );
-        }
-    }
     for( const auto &e : next ) {
         const auto old = skips_.find( e.first );
         if( old != skips_.end() && old->second == e.second ) continue;
@@ -1393,17 +1450,32 @@ void SLiveMonitor::projectChanged()
     // did -- but it does not make a track a monitoring source until the user
     // arms it in THIS session, which is what `arm-track` clears.
     inertlyArmed_.clear();
-    if( SStdMixer *mixer = rootMixer() ) {
+    if( SProject *p = app_ ? app_->getCurrentProject() : nullptr )
+        connect( p, &SProject::arrangementUnregistered, this,
+                 &SLiveMonitor::onArrangementUnregistered, Qt::UniqueConnection );
+    if( rootMixer() ) {
         // THE REAL POLICY, not a fixed one: this asks "which lanes would
         // monitor", and seeding the inert set from a DIFFERENT rule than the
         // one refresh() will apply is how a loaded project's arm would slip
         // past design D9 under one of the two policies and not the other.
-        const SLiveClosure all = sliveplan::computeClosure(
-            mixer, false, false, {}, monitorArmingOption() );
+        // Over EVERY root (QBX-286): an arm loaded inside an arrangement is
+        // just as inert.
+        const SLiveClosure all = computeLiveClosure( false, false, {} );
         for( STrack *t : all.sources )
             if( t->isArmedForRecording() ) inertlyArmed_.push_back( t );
     }
     refresh();
+}
+
+void SLiveMonitor::onArrangementUnregistered( const QString & )
+{
+    // The root is out of the dictionary already and still alive (its
+    // removeRef() comes after this signal, and a delete is deferred), so the
+    // recompute sees its members leave and the disarm path can still reach
+    // them. A REGISTRATION is deliberately not followed: a load registers
+    // arrangements before projectChanged() has seeded the inert set, and a
+    // refresh then would monitor an arm that came out of the file (design D9).
+    if( !current_.arrangements.empty() || !departing_.arrangements.empty() ) refresh();
 }
 
 // --- the re-rooted horizon demands (design D3) ------------------------------
@@ -1566,6 +1638,9 @@ std::vector<std::uintptr_t> SLiveMonitor::planSignature() const
     sig.push_back( 0xEEEEu );
     if( SStdMixer *mixer = rootMixer() )
         appendTrackSignature( sig, mixer->masterLane() );
+    // Each live arrangement's master lane is a node of the plan (QBX-286).
+    for( const SLiveClosure::Arrangement &a : current_.arrangements )
+        if( a.mixer ) appendTrackSignature( sig, a.mixer->masterLane() );
     // THE CLICK, so a TEMPO or TIME-SIGNATURE edit republishes (design section
     // 3's rebuild triggers). Asked rather than wired, exactly like the fader:
     // `set-tempo` re-derives every beats-timebase link in the project and would

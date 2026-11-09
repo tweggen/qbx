@@ -896,7 +896,9 @@ foreach(_liveinst live_instrument_play live_instrument_merge live_arm_inert_afte
                   sampler_q5_live_play sampler_q5_live_playing
                   sampler_q5_live_generation sampler_armed_bounce_waits
                   sampler_armed_routing_waits
-                  asset_capture_armed_holds asset_capture_armed_race)
+                  asset_capture_armed_holds asset_capture_armed_race
+                  live_arrangement_arm live_arrangement_with_master
+                  live_arrangement_no_feed live_arrangement_master_plays)
     if(TEST qxa.${_liveinst})
         set_tests_properties(qxa.${_liveinst} PROPERTIES
             RUN_SERIAL TRUE

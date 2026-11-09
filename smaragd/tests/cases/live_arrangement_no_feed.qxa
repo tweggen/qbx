@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-286: AN ARRANGEMENT'S LIVE TRACK IS FED ONLY WHAT IS PLAYED IN, NEVER
+  ITS OWN CLIPS.
+
+  An arrangement track's clips are in the ARRANGEMENT's domain and keep
+  sounding from its capture wherever it is placed (QBX-283 Option A). The pump
+  renders at the TRANSPORT's positions, so if it fed the track's sequenced
+  events it would play the clips a second time, at the wrong place. Its
+  inserts get the plan's transport with the feed OFF (twLiveTrackPlan::
+  sequenced = false).
+
+  The arrangement is placed NOWHERE, so whatever sounds can only come from the
+  pump. Monitor On keeps the track live while the transport PLAYS, which is
+  the state in which a master track's feed is ON:
+
+    1. playing, nothing played in: SILENCE. With the feed on, the held A4 of
+       the clip sounds from frame 0 at (100/127)/sqrt(2) = 0.556769.
+    2. a live C4 while playing: the lane is there and audible (0.556769 +-4 %),
+       so step 1's silence is not a lane that never rendered.
+-->
+<SActionScript version="1" name="live_arrangement_no_feed">
+
+  <setup project="new"/>
+
+  <actions>
+    <create-arrangement name="Arr"/>
+    <add-track arrangement="Arr" index="-1"/>
+    <insert-plugin trackPath="Arr:0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <!-- Four bars of one held A4, from the arrangement's frame 0. -->
+    <insert-midi-clip trackPath="Arr:0" timePos="0" duration="15360" name="Held"/>
+    <add-note clip="Arr:0,0" tick="0" dur="15360" key="69" velocity="100" channel="0"/>
+    <assert-midi-events clip="Arr:0,0" key="69" count="1"/>
+
+    <set-track-input trackPath="Arr:0" input="midi:capture:any"/>
+    <set-monitor-mode trackPath="Arr:0" mode="on"/>
+    <arm-track trackPath="Arr:0" armed="1"/>
+
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="48000" timeoutMs="30000"/>
+    <assert-input-meter trackPath="Arr:0" contains="live=on tracks=1 sources=1"/>
+    <dump-playback-capture filename="arr_feed_a.wav" minFrames="48000"/>
+    <!-- 1. Nothing played in, nothing heard. -->
+    <assert-audio-energy filename="arr_feed_a.wav" channel="0"
+                         startFrame="0" frameCount="-1"
+                         minRms="0" maxRms="0.0005"/>
+
+    <!-- 2. ...while a note that IS played in is heard. -->
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="arr_feed_b.wav" minFrames="96000"/>
+    <assert-audio-energy filename="arr_feed_b.wav" channel="0"
+                         anchorOnset="1" startFrame="8000" frameCount="20000"
+                         minRms="0.53450" maxRms="0.57904"/>
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+
+    <toggle-playback play="0"/>
+    <arm-track trackPath="Arr:0" armed="0"/>
+    <wait-ms ms="400"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

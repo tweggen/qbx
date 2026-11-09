@@ -89,7 +89,11 @@
     <create-arrangement name="Arr"/>
     <add-track arrangement="Arr" index="-1"/>
     <arm-track trackPath="Arr:0" armed="1"/>
-    <assert-log contains="is armed but not live: it is in the arrangement 'Arr'" level="info"/>
+    <!-- Since QBX-286 the plan walks the arrangement too, so its track gets
+         the plan's own reason - here, no input - instead of the old blanket
+         "it is in an arrangement". -->
+    <assert-track-head trackPath="Arr:0" contains="NOT MONITORED: it has no input selected"/>
+    <assert-log contains="it is in the arrangement" minCount="0" maxCount="0"/>
 
   </actions>
 

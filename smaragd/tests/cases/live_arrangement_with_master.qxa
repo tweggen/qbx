@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-286: A MASTER TRACK AND AN ARRANGEMENT TRACK ARE LIVE TOGETHER, IN ONE
+  PLAN, EACH THROUGH ITS OWN ROUTE.
+
+  The master lane carries a gain of 2.0, which makes the master NON-LINEAR: the
+  pump renders the master node itself (proposal 45 M3 Closure) and the RT pops
+  the ring only. The arrangement's live output joins AFTER that node, so the
+  master's chain is applied to the master track and not to the arrangement's
+  one (the author's answer of 2026-11-09, "straight out").
+
+  Two instruments, two keys, two channels: master track 0 plays G4 on channel
+  0, Arr:0 plays C4 on channel 1, both at velocity 40, so one sine has rms
+  (40/127)/sqrt(2) = 0.222710. Two sines 130 Hz apart are uncorrelated over the
+  20000-frame window, so their rms add in quadrature:
+
+      master track x 2.0, Arr:0 x 1     sqrt(0.445420^2 + 0.222710^2) = 0.497995
+      Arr:0 through the master too      sqrt(2) x 0.445420              = 0.629920
+      Arr:0 missing                     0.445420
+      the master track missing          0.222710
+
+  Velocity 40 keeps the peak sum (0.63 + 0.31) below full scale; an earlier
+  case read a clipped capture as an unexplained shortfall.
+-->
+<SActionScript version="1" name="live_arrangement_with_master">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <create-arrangement name="Arr"/>
+    <add-track arrangement="Arr" index="-1"/>
+
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-plugin trackPath="Arr:0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <set-track-input trackPath="0" input="midi:capture:0"/>
+    <set-track-input trackPath="Arr:0" input="midi:capture:1"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <arm-track trackPath="Arr:0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on tracks=2 sources=2"/>
+    <assert-log contains="is armed but not live" minCount="0" maxCount="0"/>
+    <wait-ms ms="600"/>
+
+    <midi-in-event kind="noteon" key="67" velocity="40" channel="0"/>
+    <midi-in-event kind="noteon" key="60" velocity="40" channel="1"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="arr_master_a.wav" minFrames="72000"/>
+
+    <assert-audio-energy filename="arr_master_a.wav" channel="0"
+                         anchorOnset="1" startFrame="8000" frameCount="20000"
+                         minRms="0.47807" maxRms="0.51791"/>
+
+    <midi-in-event kind="noteoff" key="67" channel="0"/>
+    <midi-in-event kind="noteoff" key="60" channel="1"/>
+
+    <!-- Disarming the arrangement's track leaves the master's live. -->
+    <arm-track trackPath="Arr:0" armed="0"/>
+    <wait-ms ms="400"/>
+    <assert-input-meter trackPath="0" contains="live=on tracks=1 sources=1"/>
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="400"/>
+    <assert-input-meter trackPath="0" contains="live=off tracks=0 sources=0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

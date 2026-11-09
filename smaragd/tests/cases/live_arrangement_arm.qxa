@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-286: A TRACK INSIDE AN ARRANGEMENT GOES LIVE WHEN ARMED, AND IS HEARD
+  STRAIGHT OUT.
+
+  THE DEFECT. SLiveMonitor walked only the master root, so an armed instrument
+  inside an arrangement reported `live=off tracks=0`, with no refusal, and a
+  live note played nothing.
+
+  THE ROUTE (the author's answer of 2026-11-09). The pump renders the live
+  input through the track's chain, the arrangement's folders and the
+  ARRANGEMENT's master lane, and adds it to the device output AFTER the
+  master's own chain. It does not depend on where the arrangement is placed,
+  so this one is placed nowhere.
+
+  THE CLOSED FORM tells the routes apart. `tw.test.clap.sine` plays one note as
+  (velocity/127) * sin(2 pi f t), so velocity 100 has rms
+  (100/127)/sqrt(2) = 0.556769. The arrangement's master lane carries a gain
+  of 0.5 and the MASTER lane one of 2.0:
+
+      straight out, through the arrangement's master lane   0.278385   (this)
+      ...and through the master's chain as well              0.556769
+      ...through the master's chain only                     1.113538
+      the arrangement's master lane skipped                  0.556769
+
+  The +-4 % band is live_instrument_play's: the 16-bit round trip plus the
+  chunk boundaries.
+
+  The windows are anchored on the onset (anchorOnset): capture frame 0 is the
+  device start, and the silence before the note is wall-clock.
+
+  RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (smaragd/CMakeLists.txt), because the
+  onset bound is a wall-clock latency bound.
+
+  NOT GATED: an arrangement that is PLACED in the master. Its existing clips go
+  on sounding from its last capture (QBX-283 Option A), and that is
+  asset_capture_armed_holds' subject, not this one's.
+-->
+<SActionScript version="1" name="live_arrangement_arm">
+
+  <setup project="new"/>
+
+  <actions>
+    <create-arrangement name="Arr"/>
+    <add-track arrangement="Arr" index="-1"/>
+
+    <insert-plugin trackPath="Arr:0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <assert-instrument-slot trackPath="Arr:0" present="1" format="clap"
+                            uid="tw.test.clap.sine" state="Active" hasFeed="1"/>
+
+    <!-- The arrangement's own master lane at 0.5, the master's at 2.0. -->
+    <insert-plugin trackPath="Arr:$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="Arr:$master" slotIndex="0" paramId="0" value="0.5"/>
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <set-track-input trackPath="Arr:0" input="midi:capture:any"/>
+
+    <!-- ARM, transport stopped, monitor Auto: the input is live. On main
+         this read `live=off tracks=0`. -->
+    <arm-track trackPath="Arr:0" armed="1"/>
+    <assert-input-meter trackPath="Arr:0" contains="live=on tracks=1 sources=1"/>
+    <!-- ...and nothing says it was left out. -->
+    <assert-log contains="is armed but not live" minCount="0" maxCount="0"/>
+    <wait-ms ms="600"/>
+
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="arr_live_a.wav" minFrames="72000"/>
+
+    <assert-audio-onset filename="arr_live_a.wav" afterMidiIn="1" channel="0"
+                        threshold="0.05" maxFrame="12288"/>
+    <assert-audio-frequency filename="arr_live_a.wav" channel="0"
+                            startFrame="0" frameCount="-1"
+                            minHz="256" maxHz="268"/>
+    <!-- 0.278385 +-4 %, a two-sided band: each wrong route lands outside. -->
+    <assert-audio-energy filename="arr_live_a.wav" channel="0"
+                         anchorOnset="1" startFrame="8000" frameCount="20000"
+                         minRms="0.26725" maxRms="0.28952"/>
+
+    <midi-in-event kind="noteoff" key="60" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="arr_live_b.wav" minFrames="130000"/>
+    <assert-audio-energy filename="arr_live_b.wav" channel="0"
+                         startFrame="125000" frameCount="4000"
+                         minRms="0" maxRms="0.0005"/>
+
+    <!-- DISARM releases it. -->
+    <arm-track trackPath="Arr:0" armed="0"/>
+    <wait-ms ms="400"/>
+    <assert-input-meter trackPath="Arr:0" contains="live=off tracks=0 sources=0"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>
