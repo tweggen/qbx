@@ -131,6 +131,14 @@ public:
     // offset into zero. Returns -1 only when there is no log at all.
     std::int64_t frameAtHostTime(std::int64_t hostTimeNs) const;
 
+    // What the speaker ASKED for (QBX-296): the preferredRate of the latest
+    // openDevice() (0 = no rate) and how many opens there were since this
+    // backend was made. A test seam for "which rate does qbx ask the device
+    // for", which the opened rate cannot answer: 0 leaves this device at
+    // whatever rate it had, which is usually the project's anyway.
+    std::uint32_t lastRequestedRate() const { return lastRequestedRate_.load(std::memory_order_relaxed); }
+    std::uint32_t openCount() const { return openCount_.load(std::memory_order_relaxed); }
+
     // The same arithmetic over a caller-supplied log, so it can be tested
     // against a synthetic one without a running pump. `nominalFramesPerSecond`
     // is used only when a single stamp leaves no slope to read.
@@ -152,6 +160,9 @@ private:
     mutable std::mutex captureMutex_;    // guards capture_ AND blockLog_
     CaptureBuffer     capture_;
     std::vector<BlockStamp> blockLog_;
+
+    std::atomic<std::uint32_t> lastRequestedRate_{ 0 };
+    std::atomic<std::uint32_t> openCount_{ 0 };
 
     // Real-time multiplier from SMARAGD_CAPTURE_SPEED, read once per instance.
     double            speed_ = 1.0;

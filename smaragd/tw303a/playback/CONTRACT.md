@@ -261,6 +261,13 @@ Invariants:
     project rate when it opens it (QBX-293, devices CONTRACT), so the refusal
     remains only for a device that does not offer the rate or will not let it
     be set. WASAPI shared mode still opens at the mix rate.
+    WHAT THE SPEAKER ASKS FOR (QBX-296). `ensureDeviceOpen(rate)` asks the
+    backend for `rate` only when `tw303aEnvironment::deviceAtProjectRate()`
+    (the per-project property `deviceAtProjectRate`, default on); off, it asks
+    for none (0), the device keeps its own rate, the frozen lane resamples and
+    this refusal applies. `probeOutputDevice()` ALWAYS asks for none: it only
+    checks that the device opens, and a rate there made every start of qbx set
+    the Mac's output to 48 kHz. Gate: `device_rate_request`.
 
 18a. THE PUMP PANS PER CHANNEL, and a PANNED MASTER is a lane Closure
     (proposal 49 D6, M2). The fader call passes the output channel and the

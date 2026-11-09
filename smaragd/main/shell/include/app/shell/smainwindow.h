@@ -892,6 +892,7 @@ protected slots:
     void toggleSnapToGrid();
     void toggleGrid();
     void toggleMetronome();
+    void toggleDeviceAtProjectRate( bool on );
     void toggleCycle();
     // Right-click on the transport toolbar's metronome button: "Click while
     // recording" (SOpt::ClickWhileRecording) and "Count in while recording"
@@ -1043,6 +1044,9 @@ private:
     QAction *actPlayFromCurrent_ = nullptr;
     QAction *actGotoEnd_ = nullptr;
     QAction *actSaveAs_ = nullptr;      // File->Save as...; disabled with no project
+    // File->"Set Audio Device to Project Rate", the per-project property
+    // SProjectProps::DeviceAtProjectRate (QBX-296); disabled with no project.
+    QAction *actDeviceAtProjectRate_ = nullptr;
     QToolBar *qTBTransport_;
     // Proposal 34: master level meter, right of the tempo box. Mono today (the
     // sink duplicates one bus); stereo comes for free when the mixer grows a

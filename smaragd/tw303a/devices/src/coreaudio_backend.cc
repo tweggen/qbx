@@ -160,6 +160,8 @@ CoreAudioBackend::~CoreAudioBackend()
         stopOutput();
     }
     closeDevice();
+    // qbx lets go of the device for good (QBX-296).
+    restoreRememberedRate_();
 }
 
 int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t preferredRate)
@@ -202,21 +204,32 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
 
     deviceId_ = device;
 
+    // GIVE A SWITCHED DEVICE ITS RATE BACK first (QBX-296), when this open is
+    // for another device or asks for no rate: a project that keeps the
+    // device's rate must find the device at the rate the user chose, not at
+    // the one the previous project left behind.
+    if (audio::coreAudioMustRestoreBeforeOpen(rateMemory_, device, preferredRate))
+        restoreRememberedRate_();
+
     // OPEN AT THE PROJECT RATE (QBX-293, the author's decision of 2026-11-09):
     // switch the device's nominal rate to the one asked for, as Logic, REAPER
     // and the ASIO path do. The live lane needs device rate == project rate
     // (playback CONTRACT inv. 18); playback alone would resample. When the
     // device cannot, everything below runs at the rate it really has, which
-    // is what this backend always did. The device is left at the new rate on
-    // close: whether to restore the old one is still the author's to decide
-    // (QBX-293).
+    // is what this backend always did. The device keeps the new rate across a
+    // close (twSpeaker closes at every Stop) and gets its first rate back when
+    // qbx lets go of it for good (QBX-296, restoreRememberedRate_()).
     {
         const uint32_t before = getDeviceNominalRate(device);
         const audio::CoreAudioRatePlan plan = audio::planCoreAudioRate(
             before, preferredRate, getDeviceOfferedRates(device),
             isDeviceNominalRateSettable(device));
         if (plan == audio::CoreAudioRatePlan::Switch) {
-            if (setDeviceNominalRate(device, preferredRate)) {
+            const bool took = setDeviceNominalRate(device, preferredRate);
+            // Remembered even when it did not take within the wait: the HAL
+            // may still get there, and the restore checks the rate it finds.
+            audio::coreAudioRememberSwitch(rateMemory_, device, before, preferredRate);
+            if (took) {
                 syslog(LOG_INFO, "CoreAudioBackend: switched device %u from %u Hz to the project rate %u Hz",
                        (unsigned)device, (unsigned)before, (unsigned)preferredRate);
             } else {
@@ -350,6 +363,28 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
            (unsigned)device, (unsigned)config_.sampleRate, (unsigned)config_.channels);
 
     return 0;
+}
+
+void CoreAudioBackend::restoreRememberedRate_()
+{
+    const AudioDeviceID device = static_cast<AudioDeviceID>(rateMemory_.device);
+    if (device != kAudioObjectUnknown) {
+        const uint32_t now = getDeviceNominalRate(device);
+        const uint32_t back = audio::coreAudioRestoreRate(rateMemory_, now);
+        if (back != 0) {
+            if (setDeviceNominalRate(device, back)) {
+                syslog(LOG_INFO, "CoreAudioBackend: gave device %u its rate back: %u Hz -> %u Hz",
+                       (unsigned)device, (unsigned)now, (unsigned)back);
+            } else {
+                syslog(LOG_WARNING, "CoreAudioBackend: device %u did not take its old rate %u Hz back; it runs at %u Hz",
+                       (unsigned)device, (unsigned)back, (unsigned)getDeviceNominalRate(device));
+            }
+        } else if (now != rateMemory_.original) {
+            syslog(LOG_INFO, "CoreAudioBackend: device %u left at %u Hz: its rate was changed outside qbx since qbx set %u Hz",
+                   (unsigned)device, (unsigned)now, (unsigned)rateMemory_.setTo);
+        }
+    }
+    rateMemory_ = CoreAudioRateMemory{};
 }
 
 int CoreAudioBackend::closeDevice()

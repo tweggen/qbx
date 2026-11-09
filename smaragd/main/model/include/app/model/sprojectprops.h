@@ -106,6 +106,21 @@ inline double autoFadeMsDefault() { return 0.0; }
 /// kill the click of a hard edge and short enough to be inaudible as a fade.
 inline double autoFadeMsSeed() { return 3.0; }
 
+// WHETHER THE AUDIO DEVICE IS OPENED AT THE PROJECT RATE (QBX-296, the
+// author's decision of 2026-11-09: per project, not per user). True: qbx asks
+// the output device for the project rate, and CoreAudio and ASIO SET it,
+// system-wide, giving it back when qbx quits. False: the device keeps the
+// rate the user chose for it, playback resamples, and live monitoring is
+// refused while the two differ.
+//
+// NOT seeded by defaults(), the RecordMode rule above: a project nobody set
+// it on writes no key, and reads deviceAtProjectRateDefault().
+inline constexpr char DeviceAtProjectRate[] = "deviceAtProjectRate";   // bool
+
+/// What a project that never set it means: open at the project rate, which
+/// is what every project did since QBX-293.
+inline bool deviceAtProjectRateDefault() { return true; }
+
 inline const char *trackDetailSectionKey( const QString &id )
 {
     if( id == QLatin1String( "plugins" ) )  return TrackDetailPluginsCollapsed;

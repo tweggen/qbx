@@ -596,13 +596,13 @@ bool twSpeaker::probeOutputDevice()
     if (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN)
         return true;
 
-    std::uint32_t graphRate = (std::uint32_t) env.getSRate();
-    if (!pInputPlugs_.empty() && pInputPlugs_[0] != nullptr)
-        graphRate = pInputPlugs_[0]->getFormat().sampleRate;
-
-    TWSPK_LOG( "probeOutputDevice: calling openDevice with rate=%u, "
-               "outputDeviceId=%s", graphRate, outputDeviceId_.c_str() );
-    if (backend_->openDevice(outputDeviceId_, graphRate) != 0) {
+    // NO RATE (QBX-296). The probe only asks "does this device open?", and a
+    // rate here is an instruction: CoreAudio and ASIO SET the device to it,
+    // system-wide. Asking for the project rate made every start of qbx put
+    // the Mac's output at 48 kHz, whatever the user had chosen.
+    TWSPK_LOG( "probeOutputDevice: calling openDevice with no rate, "
+               "outputDeviceId=%s", outputDeviceId_.c_str() );
+    if (backend_->openDevice(outputDeviceId_, 0) != 0) {
         TWSPK_LOG( "probeOutputDevice: openDevice FAILED for '%s'",
                    outputDeviceId_.c_str() );
         return false;
@@ -617,8 +617,12 @@ int twSpeaker::ensureDeviceOpen(std::uint32_t rate)
 {
     if (deviceState_.load(std::memory_order_acquire) == DeviceState::OPEN) return 0;
 
-    TWSPK_LOG( "calling openDevice with rate=%u", rate );
-    if (backend_->openDevice(outputDeviceId_, rate) != 0) {
+    // The project decides whether the device is asked for its rate at all
+    // (QBX-296). Asking for none leaves the device's rate alone; the frozen
+    // lane resamples and openLive() below refuses on the mismatch.
+    const std::uint32_t openRate = env.deviceAtProjectRate() ? rate : 0u;
+    TWSPK_LOG( "calling openDevice with rate=%u (project rate %u)", openRate, rate );
+    if (backend_->openDevice(outputDeviceId_, openRate) != 0) {
         TWSPK_LOG( "openDevice FAILED" );
         return -1;
     }

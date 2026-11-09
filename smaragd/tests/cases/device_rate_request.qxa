@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-296: WHICH SAMPLE RATE QBX ASKS THE OUTPUT DEVICE FOR.
+
+  On a Mac and on ASIO a requested rate is an instruction: the backend SETS
+  the device to it, for every application on that device (QBX-293). So this
+  case pins the REQUEST, through the capture backend's record of it
+  (assert-output-device). The rate the device then opens at cannot show it:
+  asked for no rate, the capture backend keeps whatever it had.
+
+    A  The startup probe asks for NO rate. It used to ask for the project's,
+       which put the Mac's output at 48 kHz at every start of qbx.
+    B  Play asks for the project rate: a project that never set
+       deviceAtProjectRate reads the default, on.
+    C  deviceAtProjectRate off (per project, the author's decision of
+       2026-11-09): Play asks for no rate...
+    D  ...and so does the LIVE lane, which opens the device through the same
+       twSpeaker::ensureDeviceOpen().
+    E  On again: Play asks for the project rate again.
+    F  It belongs to the PROJECT: saved off, a fresh project after it asks
+       for the rate again, and the saved one, re-opened, asks for none.
+
+  What it does NOT pin: the CoreAudio calls themselves (switching, giving the
+  rate back on quit), which run on a Mac only. Their decisions are gated by
+  multi_backend_test (testCoreAudioRatePlan, testCoreAudioRateMemory).
+-->
+<SActionScript version="1" name="device_rate_request">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+
+    <!-- A: the startup probe. -->
+    <probe-audio-output/>
+    <assert-output-device requestedRate="0" opens="1"/>
+
+    <!-- B: Play, with the property never set. -->
+    <assert-property key="deviceAtProjectRate" equals=""/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="48000" opens="2"/>
+
+    <!-- C: off. -->
+    <set-property key="deviceAtProjectRate" value="[false]"/>
+    <assert-property key="deviceAtProjectRate" equals="false"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="0" opens="3"/>
+
+    <!-- D: the live lane, still off. -->
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-output-device requestedRate="0" opens="4"/>
+    <arm-track trackPath="0" armed="0"/>
+    <wait-ms ms="400"/>
+
+    <!-- E: on again. -->
+    <set-property key="deviceAtProjectRate" value="[true]"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="48000" opens="5"/>
+
+    <!-- F: the property is the PROJECT's. Saved off, a fresh project after
+         it asks for the rate again, and the saved one, opened, asks for none. -->
+    <set-property key="deviceAtProjectRate" value="[false]"/>
+    <save-project path="../../build/test-output/device_rate_request/off.qxp"/>
+    <close-project/>
+    <assert-property key="deviceAtProjectRate" equals=""/>
+    <add-track index="-1"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="48000" opens="6"/>
+
+    <open-project path="../../build/test-output/device_rate_request/off.qxp"/>
+    <assert-property key="deviceAtProjectRate" equals="false"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4800" timeoutMs="30000"/>
+    <toggle-playback play="0"/>
+    <assert-output-device requestedRate="0" opens="7"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>
