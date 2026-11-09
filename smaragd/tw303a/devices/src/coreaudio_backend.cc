@@ -3,14 +3,19 @@
 #include "tw/core/twconvert.h"
 #include "tw/core/twsyslog.h"
 
+#include "coreaudio_rate.h"
+
 // Include CoreAudio headers
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -30,6 +35,73 @@ uint32_t getDeviceNominalRate(AudioDeviceID device)
         return static_cast<uint32_t>(rate);
     }
     return 44100;  // fallback
+}
+
+// Helper: the nominal rates a device OFFERS, as ranges (QBX-293). Empty when
+// the property cannot be read, which planCoreAudioRate treats as "not
+// offered": a failed read must not lead to a blind switch.
+std::vector<audio::CoreAudioRateRange> getDeviceOfferedRates(AudioDeviceID device)
+{
+    std::vector<audio::CoreAudioRateRange> out;
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyAvailableNominalSampleRates,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &addr, 0, nullptr, &size) != noErr
+        || size < sizeof(AudioValueRange)) {
+        return out;
+    }
+    std::vector<AudioValueRange> ranges(size / sizeof(AudioValueRange));
+    if (AudioObjectGetPropertyData(device, &addr, 0, nullptr, &size, ranges.data()) != noErr) {
+        return out;
+    }
+    ranges.resize(size / sizeof(AudioValueRange));
+    for (const AudioValueRange &r : ranges) {
+        out.push_back({static_cast<double>(r.mMinimum), static_cast<double>(r.mMaximum)});
+    }
+    return out;
+}
+
+// Helper: is the device's nominal rate settable?
+bool isDeviceNominalRateSettable(AudioDeviceID device)
+{
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyNominalSampleRate,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    Boolean settable = false;
+    if (AudioObjectIsPropertySettable(device, &addr, &settable) != noErr) return false;
+    return settable != 0;
+}
+
+// Helper: switch the device to `rate` and wait for it to take (QBX-293). The
+// set is ASYNCHRONOUS: the HAL reports the new rate once the hardware has
+// changed clock, which on a USB interface takes tens of milliseconds. Bounded:
+// a device that never follows leaves the caller at the rate it really runs at.
+// Called on the main thread from openDevice(), never from the render callback.
+bool setDeviceNominalRate(AudioDeviceID device, uint32_t rate)
+{
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyNominalSampleRate,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    Float64 wanted = static_cast<Float64>(rate);
+    OSStatus err = AudioObjectSetPropertyData(device, &addr, 0, nullptr,
+                                              sizeof(wanted), &wanted);
+    if (err != noErr) {
+        syslog(LOG_WARNING, "CoreAudioBackend: setting the device rate to %u Hz failed: %d",
+               (unsigned)rate, (int)err);
+        return false;
+    }
+    for (int i = 0; i < 100; ++i) {   // up to ~1 s
+        if (getDeviceNominalRate(device) == rate) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return getDeviceNominalRate(device) == rate;
 }
 
 // Helper: get a device's friendly name.
@@ -129,6 +201,36 @@ int CoreAudioBackend::openDevice(const std::string &deviceId, std::uint32_t pref
     }
 
     deviceId_ = device;
+
+    // OPEN AT THE PROJECT RATE (QBX-293, the author's decision of 2026-11-09):
+    // switch the device's nominal rate to the one asked for, as Logic, REAPER
+    // and the ASIO path do. The live lane needs device rate == project rate
+    // (playback CONTRACT inv. 18); playback alone would resample. When the
+    // device cannot, everything below runs at the rate it really has, which
+    // is what this backend always did. The device is left at the new rate on
+    // close: whether to restore the old one is still the author's to decide
+    // (QBX-293).
+    {
+        const uint32_t before = getDeviceNominalRate(device);
+        const audio::CoreAudioRatePlan plan = audio::planCoreAudioRate(
+            before, preferredRate, getDeviceOfferedRates(device),
+            isDeviceNominalRateSettable(device));
+        if (plan == audio::CoreAudioRatePlan::Switch) {
+            if (setDeviceNominalRate(device, preferredRate)) {
+                syslog(LOG_INFO, "CoreAudioBackend: switched device %u from %u Hz to the project rate %u Hz",
+                       (unsigned)device, (unsigned)before, (unsigned)preferredRate);
+            } else {
+                syslog(LOG_WARNING, "CoreAudioBackend: device %u did not follow the switch to %u Hz; it runs at %u Hz",
+                       (unsigned)device, (unsigned)preferredRate,
+                       (unsigned)getDeviceNominalRate(device));
+            }
+        } else if (plan == audio::CoreAudioRatePlan::NotOffered
+                   || plan == audio::CoreAudioRatePlan::NotSettable) {
+            syslog(LOG_WARNING, "CoreAudioBackend: device %u stays at %u Hz, not the project rate %u Hz: %s",
+                   (unsigned)device, (unsigned)before, (unsigned)preferredRate,
+                   audio::coreAudioRatePlanName(plan));
+        }
+    }
 
     // Find the DefaultOutput audio unit (standard macOS speaker output).
     AudioComponentDescription desc = {

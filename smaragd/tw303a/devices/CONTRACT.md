@@ -327,6 +327,24 @@ Invariants:
     `getConfig().bufferFrames` does not, which is the visible shape of the
     no-live-renegotiation debt.
 
+36. **CoreAudio OPENS THE DEVICE AT THE PROJECT RATE** (QBX-293, the author's
+    decision of 2026-11-09). `openDevice(id, preferredRate)` sets the device's
+    `kAudioDevicePropertyNominalSampleRate` to `preferredRate` when the device
+    OFFERS it (`kAudioDevicePropertyAvailableNominalSampleRates`) and the
+    property is settable. It then waits, bounded at about 1 s, for the HAL to
+    report the new rate, because the set is asynchronous. The decision is
+    `planCoreAudioRate()` in the SDK-free `devices/src/coreaudio_rate.h`, gated
+    by `multi_backend_test`; the CoreAudio calls around it have no headless
+    gate and are checked by hand on a Mac. When the rate is not offered, not
+    settable, or the switch does not take, one log line says why, and the
+    backend runs at the device's real rate as before: playback resamples, and
+    the live lane refuses (playback CONTRACT inv. 18). The change is
+    SYSTEM-WIDE (other apps on the device follow it), and the device is left
+    at the new rate on close; restoring the old rate is undecided.
+    Pre-existing and unchanged: the unit is the `DefaultOutput` AudioUnit, so
+    a NON-default device id has its rate read and switched while the default
+    device plays.
+
 How to test: WASAPI is the only regularly exercised backend (manual GUI
 playback); Null backend keeps headless/CI paths honest. devices/tools/
 asio_probe (Windows, needs the drop-in ASIO SDK — proposal 35) triages an

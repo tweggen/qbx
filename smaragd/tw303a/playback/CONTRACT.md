@@ -250,7 +250,11 @@ Invariants:
     nowhere to put one, because a resampler makes an entry's frame count
     fractional while an entry has to carry a position. KNOWN DEBT — the
     resolution path is a device-frame-stamped ring, or opening the device at the
-    project rate (ASIO, proposal 35).
+    project rate (ASIO, proposal 35). The author chose the second (2026-11-09):
+    on macOS the CoreAudio backend now switches the device's nominal rate to the
+    project rate when it opens it (QBX-293, devices CONTRACT), so the refusal
+    remains only for a device that does not offer the rate or will not let it
+    be set. WASAPI shared mode still opens at the mix rate.
 
 18a. THE PUMP PANS PER CHANNEL, and a PANNED MASTER is a lane Closure
     (proposal 49 D6, M2). The fader call passes the output channel and the
