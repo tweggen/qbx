@@ -132,6 +132,9 @@ void SApplication::setCurrentProject( SProject *cp )
     if( cp && t3Env_ ) {
         t3Env_->setSRate( cp->getSRate() );
         t3Env_->setCandidateRates( cp->candidateRates() );
+        t3Env_->setDeviceAtProjectRate(
+            cp->prop( SProjectProps::DeviceAtProjectRate,
+                      SProjectProps::deviceAtProjectRateDefault() ).toBool() );
     }
     // Stage 5: the playback readahead consumes the project's page scheduler
     // (demands instead of pulling freezes). Null (no project / workers=0)
@@ -201,8 +204,13 @@ void SApplication::setCurrentProject( SProject *cp )
 }
 
 void SApplication::onProjectPropertyChangedForLive( const QString &key,
-                                                     const QVariant & )
+                                                     const QVariant &value )
 {
+    // QBX-296: takes effect at the next device open. The device closes at
+    // every Stop unless the live lane holds it, so nothing is re-opened here:
+    // that would cut off a performer who is being monitored.
+    if( key == QLatin1String( SProjectProps::DeviceAtProjectRate ) && t3Env_ )
+        t3Env_->setDeviceAtProjectRate( value.toBool() );
     if( key == QLatin1String( SProjectProps::Metronome ) )
         liveLanesChanged();
     // THE PLAYBACK AUTO-FADE IS A PLAN-REBUILD TRIGGER TOO (plan 53 P5).

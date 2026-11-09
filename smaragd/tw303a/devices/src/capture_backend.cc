@@ -67,6 +67,8 @@ int CaptureBackend::openDevice(const std::string & /*deviceName*/,
     // resampler stays a passthrough and a captured frame count is a PROJECT
     // frame count. A test that had to undo a 44.1k/48k resampling before
     // decoding a position would be measuring the resampler, not the playback.
+    lastRequestedRate_.store(preferredRate, std::memory_order_relaxed);
+    openCount_.fetch_add(1, std::memory_order_relaxed);
     if (preferredRate != 0) config_.sampleRate = preferredRate;
 
     config_.outputLatencyFrames = config_.bufferFrames;

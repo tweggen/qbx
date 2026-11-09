@@ -38,6 +38,10 @@ private:
     // The standard "magnet" rates the negotiator builds its candidate domain D
     // from (proposal 04 §3a). Configurable and persisted with the project.
     std::vector<std::uint32_t> candidateRates_;
+    // Whether the output device is opened AT the project rate (QBX-296): a
+    // per-project choice, pushed here from the project like the rate itself.
+    // Atomic because twSpeaker reads it on whichever thread opens the device.
+    std::atomic<bool> deviceAtProjectRate_{ true };
 protected:
 public:
     tw303aEnvironment();
@@ -62,6 +66,13 @@ public:
 
     const std::vector<std::uint32_t> &candidateRates() const { return candidateRates_; }
     void setCandidateRates( std::vector<std::uint32_t> rates );
+
+    // True (the default): the speaker asks the device for the project rate,
+    // and a backend that can set it does (CoreAudio, ASIO). False: it asks
+    // for none, the device keeps its own rate, playback resamples and the
+    // live lane refuses (playback CONTRACT inv. 18).
+    bool deviceAtProjectRate() const { return deviceAtProjectRate_.load( std::memory_order_relaxed ); }
+    void setDeviceAtProjectRate( bool on ) { deviceAtProjectRate_.store( on, std::memory_order_relaxed ); }
 
     // Content epochs are PER COMPONENT (proposal 15: scoped invalidation) —
     // see twComponent::contentEpochNow()/bumpContentEpoch(). An edit bumps

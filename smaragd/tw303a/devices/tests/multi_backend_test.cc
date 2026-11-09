@@ -378,6 +378,43 @@ static void testCoreAudioRatePlan()
           "...and no more than that");
 }
 
+// QBX-296: when CoreAudioBackend gives a device its rate back. The setter and
+// the reads around it run on a Mac only; the decisions are these.
+static void testCoreAudioRateMemory()
+{
+    CoreAudioRateMemory m;
+    CHECK(!coreAudioMustRestoreBeforeOpen(m, 7, 0),
+          "nothing remembered -> nothing to restore, even for a no-rate open");
+    CHECK(coreAudioRestoreRate(m, 48000) == 0, "nothing remembered -> restore nothing");
+
+    coreAudioRememberSwitch(m, 7, 44100, 48000);
+    CHECK(m.device == 7 && m.original == 44100 && m.setTo == 48000,
+          "a switch remembers the device, its rate before, and the rate set");
+    CHECK(!coreAudioMustRestoreBeforeOpen(m, 7, 48000),
+          "re-opening the same device at a rate (every Play) keeps the switch");
+    CHECK(coreAudioMustRestoreBeforeOpen(m, 7, 0),
+          "an open asking for no rate gives the device its rate back first");
+    CHECK(coreAudioMustRestoreBeforeOpen(m, 9, 48000),
+          "opening another device gives the remembered one its rate back");
+    CHECK(coreAudioRestoreRate(m, 48000) == 44100,
+          "still at the rate qbx set -> back to the original");
+    CHECK(coreAudioRestoreRate(m, 96000) == 0,
+          "changed outside qbx since -> left alone");
+
+    coreAudioRememberSwitch(m, 7, 48000, 96000);
+    CHECK(m.original == 44100 && m.setTo == 96000,
+          "a second switch on the same device keeps the FIRST original");
+    CHECK(coreAudioRestoreRate(m, 96000) == 44100, "...and restores to it");
+
+    coreAudioRememberSwitch(m, 7, 96000, 44100);
+    CHECK(coreAudioRestoreRate(m, 44100) == 0,
+          "switched back to the original by a project -> nothing to do");
+
+    coreAudioRememberSwitch(m, 9, 44100, 48000);
+    CHECK(m.device == 9 && m.original == 44100,
+          "a switch on another device starts a new memory");
+}
+
 int main()
 {
     printf("=== multi_backend_test (proposal 35 Phases 2-3, cross-platform half) ===\n");
@@ -386,6 +423,7 @@ int main()
     testConverters();
     testChannels();
     testCoreAudioRatePlan();
+    testCoreAudioRateMemory();
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
            failures == 1 ? "" : "s");

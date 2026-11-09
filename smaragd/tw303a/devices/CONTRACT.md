@@ -339,8 +339,19 @@ Invariants:
     settable, or the switch does not take, one log line says why, and the
     backend runs at the device's real rate as before: playback resamples, and
     the live lane refuses (playback CONTRACT inv. 18). The change is
-    SYSTEM-WIDE (other apps on the device follow it), and the device is left
-    at the new rate on close; restoring the old rate is undecided.
+    SYSTEM-WIDE (other apps on the device follow it).
+    GIVING IT BACK (QBX-296). The backend remembers the rate the device had
+    before its FIRST switch (`CoreAudioRateMemory`) and sets it back when qbx
+    lets go of the device for good: in the destructor (qbx quits), before
+    opening ANOTHER device, and before an open that asks for no rate (a
+    project with `deviceAtProjectRate` off). Not at every close: twSpeaker
+    closes the device at every Stop, and a switch costs up to a second at the
+    next Play. A second switch keeps the first original; a device whose rate
+    was changed outside qbx since qbx set it is left alone. The decisions are
+    `coreAudioRememberSwitch` / `coreAudioMustRestoreBeforeOpen` /
+    `coreAudioRestoreRate` in `coreaudio_rate.h`, gated by
+    `multi_backend_test`; the CoreAudio calls are a Mac hand check, and a
+    crash leaves the device at the switched rate.
     Pre-existing and unchanged: the unit is the `DefaultOutput` AudioUnit, so
     a NON-default device id has its rate read and switched while the default
     device plays.

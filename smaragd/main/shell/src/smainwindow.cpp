@@ -62,6 +62,7 @@
 #include "app/model/splacements.h"
 #include "app/model/ssolorules.h"
 #include "app/actions/scompositeaction.h"
+#include "app/actions/ssetpropertyaction.h"
 #include "app/objects/track/sliveinputactions.h"
 #include "app/objects/track/ssettracksoloaction.h"
 #include "app/model/sobjectpath.h"
@@ -2235,6 +2236,18 @@ SMainWindow::SMainWindow()
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "&Render...", this, SLOT( onRenderTriggered() ) );
     qFileMenu_->addSeparator();
+    // Per project (QBX-296). The text carries the rate: syncPaletteToProject.
+    actDeviceAtProjectRate_ = qFileMenu_->addAction( "Set Audio &Device to Project Rate" );
+    actDeviceAtProjectRate_->setCheckable( true );
+    actDeviceAtProjectRate_->setChecked( SProjectProps::deviceAtProjectRateDefault() );
+    actDeviceAtProjectRate_->setToolTip(
+        "On: the output device is switched to this project's sample rate, for "
+        "every application on it, and gets its own rate back when the program "
+        "quits. Off: the device keeps its own rate; playback is resampled and "
+        "live monitoring is unavailable while the two rates differ." );
+    QObject::connect( actDeviceAtProjectRate_, SIGNAL( triggered(bool) ),
+                      this, SLOT( toggleDeviceAtProjectRate(bool) ) );
+    qFileMenu_->addSeparator();
     qFileMenu_->addAction( "&Close", Qt::CTRL | Qt::Key_W, this, SLOT( fileClose() ) );
     qFileMenu_->addSeparator();
     qFileMenu_->addAction( "E&xit", Qt::CTRL | Qt::Key_Q, this, SLOT( fileExit() ) );
@@ -3512,8 +3525,22 @@ void SMainWindow::syncPaletteToProject( SProject *project )
     // "Save as..." and the tempo box only make sense with a project.
     if( actSaveAs_ ) actSaveAs_->setEnabled( en );
     if( tempoSpin_ ) tempoSpin_->setEnabled( en );
+    if( actDeviceAtProjectRate_ ) actDeviceAtProjectRate_->setEnabled( en );
 
     if( !project ) return;
+
+    if( actDeviceAtProjectRate_ ) {
+        auto label = [this]( int rate ) {
+            actDeviceAtProjectRate_->setText(
+                QStringLiteral( "Set Audio &Device to Project Rate (%1 Hz)" ).arg( rate ) );
+        };
+        label( project->getSRate() );
+        // A load sets the rate after the project became current.
+        QObject::connect( project, &SProject::sampleRateChanged, this, label );
+        actDeviceAtProjectRate_->setChecked(
+            project->prop( SProjectProps::DeviceAtProjectRate,
+                           SProjectProps::deviceAtProjectRateDefault() ).toBool() );
+    }
 
     // setChecked does not emit triggered(), so this won't re-submit actions.
     actSnapToGrid_->setChecked( project->prop( SProjectProps::SnapToGrid, true ).toBool() );
@@ -3544,6 +3571,8 @@ void SMainWindow::onProjectPropertyChanged( const QString &key, const QVariant &
     else if( key == SProjectProps::GridVisible ) actGrid_->setChecked( value.toBool() );
     else if( key == SProjectProps::Metronome )   actMetronome_->setChecked( value.toBool() );
     else if( key == SProjectProps::Cycle )       actCycle_->setChecked( value.toBool() );
+    else if( key == SProjectProps::DeviceAtProjectRate && actDeviceAtProjectRate_ )
+        actDeviceAtProjectRate_->setChecked( value.toBool() );
 
     // Cycle toggle or a change to the range markers updates the live loop region.
     if( key == SProjectProps::Cycle || key == SProjectProps::RangeValid
@@ -3578,6 +3607,13 @@ void SMainWindow::syncCyclePlayback()
 void SMainWindow::toggleSnapToGrid()
 {
     SApplication::app().submitAction( new SSnapToGridAction( SToggleSettingAction::Toggle ) );
+}
+
+void SMainWindow::toggleDeviceAtProjectRate( bool on )
+{
+    SApplication::app().submitAction(
+        new SSetPropertyAction( QString::fromLatin1( SProjectProps::DeviceAtProjectRate ),
+                                QVariant( on ) ) );
 }
 
 void SMainWindow::toggleGrid()

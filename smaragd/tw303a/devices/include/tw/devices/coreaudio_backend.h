@@ -4,12 +4,21 @@
 #include "tw/devices/audio_backend.h"
 
 #include <atomic>
+#include <cstdint>
 #include <vector>
 
 namespace audio {
 
 // Opaque type declarations (defined only in the .cc when CoreAudio headers are included)
 typedef void *AudioUnit;
+
+// The rate a device had before qbx first switched it (QBX-296). The decisions
+// about it are the pure functions in devices/src/coreaudio_rate.h.
+struct CoreAudioRateMemory {
+    std::uint32_t device   = 0;   // 0: nothing remembered
+    std::uint32_t original = 0;   // the rate before qbx's first switch
+    std::uint32_t setTo    = 0;   // the rate qbx last set
+};
 
 class CoreAudioBackend : public AudioBackend {
 public:
@@ -54,6 +63,11 @@ private:
     std::vector<float>   floatScratch_;
 
     std::atomic<bool>    running_{false};
+
+    // Gives a switched device its rate back (QBX-296); called from
+    // openDevice() and the destructor, never from the render callback.
+    void restoreRememberedRate_();
+    CoreAudioRateMemory  rateMemory_;
 };
 
 }  // namespace audio

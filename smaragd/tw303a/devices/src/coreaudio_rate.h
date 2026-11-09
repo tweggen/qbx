@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "tw/devices/coreaudio_backend.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -59,6 +61,50 @@ inline CoreAudioRatePlan planCoreAudioRate(std::uint32_t current, std::uint32_t 
     if (!coreAudioRateOffered(wanted, offered)) return CoreAudioRatePlan::NotOffered;
     if (!settable) return CoreAudioRatePlan::NotSettable;
     return CoreAudioRatePlan::Switch;
+}
+
+// GIVING THE RATE BACK (QBX-296, the author's question from QBX-293). The
+// backend remembers the rate a device had before qbx FIRST switched it, and
+// sets it back when qbx lets go of that device for good: when the backend is
+// destroyed (qbx quits), when it opens another device, or when an open asks
+// for no rate (a project that keeps the device's rate, or the startup probe).
+// NOT on every close: twSpeaker closes the device at every Stop, and a switch
+// costs up to a second of waiting for the HAL at the next Play.
+//
+// A second switch on the same device keeps the FIRST original, so 44.1k ->
+// 48k -> 96k gives back 44.1k. The rate is restored only if the device is
+// still at the one qbx set: a rate somebody else chose since then is theirs.
+// CoreAudioRateMemory itself is declared in tw/devices/coreaudio_backend.h,
+// because the backend holds one by value.
+
+inline void coreAudioRememberSwitch(CoreAudioRateMemory &m, std::uint32_t device,
+                                    std::uint32_t before, std::uint32_t wanted)
+{
+    if (m.device != device) {
+        m.device   = device;
+        m.original = before;
+    }
+    m.setTo = wanted;
+}
+
+// Must the remembered device be given its rate back before opening `device`
+// at `wanted`? Yes when it is another device, or when no rate is wanted.
+inline bool coreAudioMustRestoreBeforeOpen(const CoreAudioRateMemory &m,
+                                           std::uint32_t device, std::uint32_t wanted)
+{
+    if (m.device == 0) return false;
+    return m.device != device || wanted == 0;
+}
+
+// The rate to set the remembered device back to, given the rate it has NOW;
+// 0 means leave it alone.
+inline std::uint32_t coreAudioRestoreRate(const CoreAudioRateMemory &m,
+                                          std::uint32_t current)
+{
+    if (m.device == 0 || m.original == 0) return 0;
+    if (current != m.setTo) return 0;       // somebody else chose since
+    if (current == m.original) return 0;    // already back
+    return m.original;
 }
 
 inline const char *coreAudioRatePlanName(CoreAudioRatePlan p)
