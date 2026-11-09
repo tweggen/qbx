@@ -258,6 +258,10 @@ private slots:
     void finishDisarm();
     void pumpDemands();
     void pumpEdits();
+    // QBX-286: an arrangement that stops being registered takes its live
+    // members with it. Emitted before the root's removeRef(), so they are
+    // still alive for the disarm.
+    void onArrangementUnregistered( const QString &name );
 
 private:
     // One live event source per CONSUMING track (proposal 21 L2). Keyed by the
@@ -274,6 +278,13 @@ private:
     };
 
     SStdMixer *rootMixer() const;
+    // The live set over EVERY root: the master's closure, then each
+    // arrangement's, in name order (QBX-286). The one spelling refresh() and
+    // projectChanged() both use, so the inert seed and the plan agree.
+    SLiveClosure computeLiveClosure( bool playing, bool recording,
+                                     const std::vector<const STrack *> &inert ) const;
+    // Every registered arrangement root that is a mixer, in name order.
+    std::vector<std::pair<QString, SStdMixer *> > arrangementMixers() const;
     void applyExclusion( const SLiveClosure &affected );  // flags -> wiring
     void publishPlan( const SLiveClosure &closure, std::uint64_t flipEpoch,
                       std::uint64_t flipEpochPrime );

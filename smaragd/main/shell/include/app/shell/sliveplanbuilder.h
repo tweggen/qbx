@@ -92,6 +92,28 @@ struct SLiveClosure {
     /// "in the closure ⇒ null the plug".
     std::vector<STrack *> topLevel;
 
+    /**
+     * THE ARRANGEMENT HALF (QBX-286). An armed track inside an arrangement is
+     * heard STRAIGHT OUT (the author's answer of 2026-11-09): through its own
+     * chain, the arrangement's folders and the ARRANGEMENT's master lane, and
+     * then onto the device output after the master's chain - wherever, and
+     * whether, the arrangement is placed.
+     *
+     * Its members are in `ordered`/`sources`/`midiFeeds` like any other, so
+     * every ownership, retire and exclusion loop covers them unchanged; this
+     * says which root holds them. `topLevel` above stays MASTER-only, because
+     * it is what the master's exclusion and its epoch gate are about.
+     */
+    struct Arrangement {
+        SStdMixer            *mixer = nullptr;
+        QString               name;
+        std::vector<STrack *> topLevel;   // its direct children in the closure
+    };
+    std::vector<Arrangement> arrangements;
+    /// Every member held by an arrangement root rather than the master.
+    std::vector<STrack *> outsideMaster;
+    bool isOutsideMaster( const STrack *t ) const;
+
     /// No lane at all. The metronome counts: it is the one member of the live
     /// set that is not a track.
     bool empty() const { return ordered.empty() && !metronome; }
@@ -153,6 +175,16 @@ enum class MonitorArming {
 SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
                              const std::vector<const STrack *> &inertlyArmed,
                              MonitorArming arming );
+
+/**
+ * Add an ARRANGEMENT's closure to the master's (QBX-286). `part` is
+ * computeClosure() run on the arrangement's own mixer, so its consumers, its
+ * folders and its skips are that root's; its members are appended after
+ * `into`'s, which keeps every root's deepest-first order intact. An
+ * arrangement with no member contributes only its skips.
+ */
+void mergeArrangement( SLiveClosure &into, SStdMixer *mixer, const QString &name,
+                       const SLiveClosure &part );
 
 /**
  * Should the click be in the plan right now (proposal 21 L5, extended by the

@@ -207,9 +207,15 @@ bool LiveGraphPump::renderOneBlock()
         // block after every rebuild. One bounded lock per processor, on a plan
         // swap, never inside a block.
         if( held_ )
-            for( const twLiveTrackPlan &t : held_->tracks )
+            for( const twLiveTrackPlan &t : held_->tracks ) {
+                audio::twLiveTransport tx = held_->transport;
+                if( !t.sequenced ) {   // QBX-286: an arrangement's track
+                    tx.feedEnabled      = false;
+                    tx.holdAutomationAt = 0;
+                }
                 for( const std::shared_ptr<audio::twPluginSlotProcessor> &s : t.inserts )
-                    if( s ) s->setLiveTransport( held_->transport );
+                    if( s ) s->setLiveTransport( tx );
+            }
         // POSITION STATE SURVIVES A SWAP. A plan is rebuilt for a fader move or
         // a device change as readily as for an arm, and forcing a reposition on
         // every rebuild would click for no reason. The FIRST adoption still

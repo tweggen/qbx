@@ -20,6 +20,12 @@ bool SLiveClosure::contains( const STrack *t ) const
     return std::find( ordered.begin(), ordered.end(), t ) != ordered.end();
 }
 
+bool SLiveClosure::isOutsideMaster( const STrack *t ) const
+{
+    return std::find( outsideMaster.begin(), outsideMaster.end(), t )
+           != outsideMaster.end();
+}
+
 namespace sliveplan {
 
 twlive::twMasterChainState masterChainStateOf( const SStdMixer *mixer )
@@ -244,6 +250,23 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
     return out;
 }
 
+void mergeArrangement( SLiveClosure &into, SStdMixer *mixer, const QString &name,
+                       const SLiveClosure &part )
+{
+    into.skipped.insert( into.skipped.end(), part.skipped.begin(), part.skipped.end() );
+    if( !mixer || part.ordered.empty() ) return;
+    into.ordered.insert( into.ordered.end(), part.ordered.begin(), part.ordered.end() );
+    into.sources.insert( into.sources.end(), part.sources.begin(), part.sources.end() );
+    into.midiFeeds.insert( into.midiFeeds.end(), part.midiFeeds.begin(), part.midiFeeds.end() );
+    into.outsideMaster.insert( into.outsideMaster.end(),
+                               part.ordered.begin(), part.ordered.end() );
+    SLiveClosure::Arrangement a;
+    a.mixer    = mixer;
+    a.name     = name;
+    a.topLevel = part.topLevel;
+    into.arrangements.push_back( a );
+}
+
 }  // namespace sliveplan
 
 namespace {
@@ -261,6 +284,16 @@ void collectInserts( STrack *t, twLiveTrackPlan &out )
         if( !slot ) continue;
         out.inserts.push_back( slot->getProcessor() );
     }
+}
+
+// QBX-286: an arrangement-held node has no position in the transport's domain,
+// so its fader is taken at its value and its automation curves are dropped -
+// the same reason its inserts get no sequenced feed (twLiveTrackPlan::sequenced).
+void holdGainStatic( twGainStage::Envelope &e )
+{
+    e.vol.reset();
+    e.mute.reset();
+    e.panCu.reset();
 }
 
 }  // namespace
@@ -310,6 +343,11 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
         twlive::checkMasterShape( masterMix.get(), masterRoot.get(), params.width,
                                   sliveplan::masterChainStateOf( params.mixer ) );
     plan->masterLinear = shape.linear();
+    // QBX-286: with no MASTER member nothing leaves the master's frozen sum, so
+    // the split is exact whatever the master's shape and the RT keeps adding
+    // the ring to the root page - which already carries the master's chain.
+    if( closure.topLevel.empty() && !closure.arrangements.empty() )
+        plan->masterLinear = true;
 
     std::map<const STrack *, int> indexOf;
     SObject   *root    = params.mixer;
@@ -325,6 +363,11 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
             tp.gain = t->gainStageComponent()->envelope();
         if( auto r = std::dynamic_pointer_cast<twRewire>( t->getRootComponent() ) )
             tp.channelMap = r->channelMap();
+        const bool outside = closure.isOutsideMaster( t );
+        if( outside ) {
+            tp.sequenced = false;
+            holdGainStatic( tp.gain );
+        }
 
         // ONLY an AUDIO source gets an input. An instrument track driven live
         // from MIDI is design section 3 case (ii): slot 0 is a generator and
@@ -346,7 +389,10 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
             auto it = indexOf.find( child );
             if( it != indexOf.end() ) {
                 tp.liveChildren.push_back( it->second );
-            } else if( ssolo::isLaneAudible( root, child, anySolo ) ) {
+            } else if( !outside && ssolo::isLaneAudible( root, child, anySolo ) ) {
+                // An arrangement's unarmed children are NOT summed here: they
+                // sound from its capture, and their pages are in the
+                // arrangement's domain, not the transport's (QBX-286).
                 tp.frozenInputs.push_back( child->getRootComponent() );
             }
         }
@@ -377,62 +423,96 @@ SLivePlanBuilder::build( const SLiveClosure &closure, const Params &params,
         plan->tracks.push_back( std::move( m ) );
     }
 
+    int masterOut = -1;
     if( closure.topLevel.empty() ) {
-        // METRONOME ONLY: the click IS the output. A topLevel that is empty
-        // while the closure is NOT cannot happen - the walk stops at the root
-        // mixer, so every member has an ancestor that is a direct child of it -
-        // but front() on an empty vector is not a diagnosis, it is a crash, so
-        // the case is handled rather than assumed away.
-        if( metroIndex < 0 ) return nullptr;
-        plan->outputTrack = metroIndex;
-        if( !plan->finalize() ) return nullptr;
-        return plan;
-    }
-    const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear
-                         || metroIndex >= 0;
-    if( !needSum ) {
-        plan->outputTrack = indexOf[closure.topLevel.front()];
+        // NO MASTER MEMBER: the master half is the click, if there is one.
+        // Since QBX-286 that is not only the metronome-only lane: a closure
+        // whose members are all held by ARRANGEMENT roots has an empty
+        // (master-only) topLevel too, and its output is the nodes below.
+        masterOut = metroIndex;
     } else {
-        twLiveTrackPlan master;
-        master.name     = plan->masterLinear ? "live sum" : "master";
-        master.channels = params.width < 1 ? 1 : params.width;
-        for( STrack *t : closure.topLevel ) master.liveChildren.push_back( indexOf[t] );
-        if( metroIndex >= 0 ) master.liveChildren.push_back( metroIndex );
-        if( !plan->masterLinear ) {
-            for( SLink *lk : params.mixer->childLinks() ) {
-                if( !lk ) continue;
-                STrack *t = dynamic_cast<STrack *>( &lk->getSObject() );
-                if( !t || closure.contains( t ) ) continue;
-                if( ssolo::isLaneAudible( root, t, anySolo ) )
-                    master.frozenInputs.push_back( t->getRootComponent() );
-            }
-            if( masterRoot ) master.channelMap = masterRoot->channelMap();
+        const bool needSum = closure.topLevel.size() > 1 || !plan->masterLinear
+                             || metroIndex >= 0;
+        if( !needSum ) {
+            masterOut = indexOf[closure.topLevel.front()];
+        } else {
+            twLiveTrackPlan master;
+            master.name     = plan->masterLinear ? "live sum" : "master";
+            master.channels = params.width < 1 ? 1 : params.width;
+            for( STrack *t : closure.topLevel ) master.liveChildren.push_back( indexOf[t] );
+            if( metroIndex >= 0 ) master.liveChildren.push_back( metroIndex );
+            if( !plan->masterLinear ) {
+                for( SLink *lk : params.mixer->childLinks() ) {
+                    if( !lk ) continue;
+                    STrack *t = dynamic_cast<STrack *>( &lk->getSObject() );
+                    if( !t || closure.contains( t ) ) continue;
+                    if( ssolo::isLaneAudible( root, t, anySolo ) )
+                        master.frozenInputs.push_back( t->getRootComponent() );
+                }
+                if( masterRoot ) master.channelMap = masterRoot->channelMap();
 
-            // AC3.2 -- THE MASTER NODE CARRIES THE MASTER LANE'S OWN CHAIN.
-            // Absent until M3, and its absence is the whole reason Closure
-            // could not be wired: the node summed the closure and the frozen
-            // siblings and then applied NOTHING, so the pump's output was the
-            // arrangement WITHOUT the master processing the frozen root page
-            // had already had. The two halves would not have matched even with
-            // the doubling fixed.
-            //
-            // Read through the same helpers an ordinary track uses, so a
-            // master insert behaves exactly as a track insert does -- including
-            // the null-processor rule that keeps a chain's shape while a plugin
-            // is missing.
-            if( STrack *lane = params.mixer->masterLane() ) {
-                collectInserts( lane, master );
-                if( lane->gainStageComponent() )
-                    master.gain = lane->gainStageComponent()->envelope();
-            }
+                // AC3.2 -- THE MASTER NODE CARRIES THE MASTER LANE'S OWN CHAIN.
+                // Absent until M3, and its absence is the whole reason Closure
+                // could not be wired: the node summed the closure and the frozen
+                // siblings and then applied NOTHING, so the pump's output was the
+                // arrangement WITHOUT the master processing the frozen root page
+                // had already had. The two halves would not have matched even with
+                // the doubling fixed.
+                //
+                // Read through the same helpers an ordinary track uses, so a
+                // master insert behaves exactly as a track insert does -- including
+                // the null-processor rule that keeps a chain's shape while a plugin
+                // is missing.
+                if( STrack *lane = params.mixer->masterLane() ) {
+                    collectInserts( lane, master );
+                    if( lane->gainStageComponent() )
+                        master.gain = lane->gainStageComponent()->envelope();
+                }
 
-            TW_LOGW( "shell",
-                     "[LIVE] master is not a linear identity (%s): the pump "
-                     "renders it and the RT pops the ring only",
-                     shape.reason );
+                TW_LOGW( "shell",
+                         "[LIVE] master is not a linear identity (%s): the pump "
+                         "renders it and the RT pops the ring only",
+                         shape.reason );
+            }
+            masterOut = (int) plan->tracks.size();
+            plan->tracks.push_back( std::move( master ) );
         }
+    }
+
+    // THE ARRANGEMENTS (QBX-286), straight out: one node per arrangement root,
+    // shaped like the master node -- its members as liveChildren, its OWN
+    // master lane's inserts, fader and channel map -- and summed AFTER the
+    // master's half, so the master's chain is never applied to them.
+    std::vector<int> outs;
+    if( masterOut >= 0 ) outs.push_back( masterOut );
+    for( const SLiveClosure::Arrangement &a : closure.arrangements ) {
+        if( !a.mixer || a.topLevel.empty() ) continue;
+        twLiveTrackPlan node;
+        node.name      = "arrangement " + a.name.toStdString();
+        node.channels  = params.width < 1 ? 1 : params.width;
+        node.sequenced = false;
+        for( STrack *t : a.topLevel ) node.liveChildren.push_back( indexOf[t] );
+        if( STrack *lane = a.mixer->masterLane() ) {
+            collectInserts( lane, node );
+            if( lane->gainStageComponent() )
+                node.gain = lane->gainStageComponent()->envelope();
+            holdGainStatic( node.gain );
+        }
+        if( const std::shared_ptr<twRewire> r = a.mixer->masterRewireComponent() )
+            node.channelMap = r->channelMap();
+        outs.push_back( (int) plan->tracks.size() );
+        plan->tracks.push_back( std::move( node ) );
+    }
+    if( outs.empty() ) return nullptr;
+    if( outs.size() == 1 ) {
+        plan->outputTrack = outs.front();
+    } else {
+        twLiveTrackPlan sum;
+        sum.name         = "live output";
+        sum.channels     = params.width < 1 ? 1 : params.width;
+        sum.liveChildren = outs;
         plan->outputTrack = (int) plan->tracks.size();
-        plan->tracks.push_back( std::move( master ) );
+        plan->tracks.push_back( std::move( sum ) );
     }
 
     if( !plan->finalize() ) return nullptr;

@@ -97,6 +97,14 @@ struct twLiveTrackPlan {
     // A folder's LIVE children: indices into twLivePlan::tracks, all strictly
     // less than this track's own index (the vector is in topological order).
     std::vector<int> liveChildren;
+
+    // FALSE for a track that has no position in the transport's domain: one
+    // held by an ARRANGEMENT root (QBX-286). Its clips keep sounding from the
+    // arrangement's capture, so the pump hands its inserts the plan's
+    // transport with the sequenced feed OFF and the automation held at 0 -
+    // feeding them at master positions would play them a second time, at the
+    // wrong place.
+    bool sequenced = true;
 };
 
 class twLivePlan {
