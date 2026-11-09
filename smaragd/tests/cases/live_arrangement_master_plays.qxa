@@ -15,6 +15,7 @@
   Master track 0 plays a held A4 at velocity 40 through the master's gain of
   2.0: (40/127)/sqrt(2) x 2 = 0.445420. Arr:0 is armed and monitored, and
   nothing is played into it, so the closed form is the master's alone.
+  MEASURED: 0.445281.
 -->
 <SActionScript version="1" name="live_arrangement_master_plays">
 

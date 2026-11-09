@@ -32,9 +32,8 @@
   RUN_SERIAL at SMARAGD_CAPTURE_SPEED=1 (smaragd/CMakeLists.txt), because the
   onset bound is a wall-clock latency bound.
 
-  NOT GATED: an arrangement that is PLACED in the master. Its existing clips go
-  on sounding from its last capture (QBX-283 Option A), and that is
-  asset_capture_armed_holds' subject, not this one's.
+  MEASURED: 0.278399 against the closed form 0.278385; onset lag 4886 frames.
+  A PLACED arrangement is live_arrangement_placed's subject.
 -->
 <SActionScript version="1" name="live_arrangement_arm">
 

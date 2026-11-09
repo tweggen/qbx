@@ -214,9 +214,10 @@ Phase 6 splits it into narrow context interfaces.
     monitor Off; monitor Auto while the transport plays; no instrument in
     slot 0 and no folder taking its events), `attachLiveEvents` records the
     three only it can know (no processor on the slot; its MIDI input does not
-    open; no free consumer slot), and `refresh()` adds the armed lanes the
-    plan never walks because they are not under the master root (QBX-286).
-    `reportSkips_()` merges the three, logs ONE
+    open; no free consumer slot). A third source, "it is in an arrangement",
+    went with QBX-286: the plan walks every arrangement root (inv. 71), so an
+    arrangement's armed track gets the plan's own reason like any other.
+    `reportSkips_()` merges the two, logs ONE
     `[LIVE] '<track>' is armed but not live: <reason>` line per track whose
     reason is NEW OR CHANGED (never one per refresh), and raises
     `skipsChanged()`; `skipReason(track)` answers the arm button's tooltip
@@ -2470,3 +2471,81 @@ above holds one flag over — and the mechanism is shared rather than copied.
 - NOT GATED: the colour and the tooltip text, for inv. 70's reasons. RECORDING
   is deliberately not this badge: that is a transport state the transport bar
   owns, while this is the SET of lanes a pass would capture into.
+
+## inv. 71 — a track armed inside an ARRANGEMENT goes live, and is heard STRAIGHT OUT (QBX-286)
+
+Until QBX-286 the live monitor walked the master root only, so an armed
+instrument inside an arrangement reported `live=off tracks=0` with no refusal
+and played nothing. Not intended (the author, 2026-11-07); proposal 21 gave no
+reason for it. Where such a track should be HEARD is the author's answer of
+2026-11-09: **straight out** — through its own chain, the arrangement's
+folders and the ARRANGEMENT's master lane, then onto the device output after
+the master's chain, wherever and whether the arrangement is placed. Rejected:
+routing it through a placement's host track (positions map through slip, loop
+and warp, N placements need a choice, and a stopped transport hears nothing),
+and refusing visibly.
+
+- **ONE CLOSURE OVER EVERY ROOT.** `SLiveMonitor::computeLiveClosure` runs
+  `sliveplan::computeClosure` on the master and then on each registered
+  arrangement mixer (name order), merged by `sliveplan::mergeArrangement`.
+  Each root is walked on its own, so a MIDI consumer, a folder's members and a
+  skip reason are that root's. The members go into `ordered`/`sources`/
+  `midiFeeds` like any other, so every retire, ownership and exclusion loop
+  covers them unchanged; `SLiveClosure::arrangements` says which root holds
+  them, and `topLevel` stays MASTER-only. `refresh()` and `projectChanged()`
+  both use it, so an arm loaded inside an arrangement is as inert as one on
+  the master (design D9).
+- **THE PLAN.** One node per arrangement, shaped like the master node: its
+  members as `liveChildren`, the arrangement's master-lane inserts, fader and
+  channel map. The nodes are summed AFTER the master's half ("live output"),
+  so the master's chain is never applied to them. An arrangement's folders
+  sum NO frozen inputs: its unarmed tracks sound from its capture, and their
+  pages are in the arrangement's domain.
+- **NO SEQUENCED FEED** (`twLiveTrackPlan::sequenced = false`). The pump
+  hands such a track's inserts the plan's transport with `feedEnabled` off
+  and the automation held at 0, and its fader curves are dropped for its
+  static value: it has no position in the transport's domain, and its clips
+  keep sounding from the arrangement's last capture (QBX-283 Option A).
+- **NO MASTER MEMBER, NO SPLIT TO PROTECT.** With every member held by an
+  arrangement nothing leaves the master's frozen sum, so the plan stays
+  LINEAR whatever the master's shape (the RT adds the ring to a root page
+  that already has the master's chain), `publishPlan` passes no epoch gate,
+  and a disarm that takes only arrangement members has no tail (the epoch it
+  would wait for is already there, so the tail would cut the ring and
+  silence any master member still live).
+- **THE ARRANGEMENT'S OWN MIXER.** `applyExclusion` runs `applyAudibility()`
+  on every arrangement mixer (and on one just unregistered with members still
+  live), so no freeze of the arrangement runs a processor the pump owns; its
+  master lane is owned, retired and signed into `planSignature()` like the
+  master's under a closure. `SProject::arrangementUnregistered` triggers a
+  `refresh()` while an arrangement is live (the root is out of the dictionary
+  and still alive at that point); a REGISTRATION does not, because a load
+  registers arrangements before `projectChanged()` seeds the inert set.
+- Gates: `live_arrangement_arm` (unplaced; arrangement master lane 0.5, master
+  lane 2.0: 0.278399 against the closed form 0.278385, every wrong route
+  outside the band; released on disarm), `live_arrangement_with_master` (a
+  master track and an arrangement track in one plan under a non-linear
+  master: 0.497717 against 0.497995), `live_arrangement_no_feed` (a held clip
+  in the arrangement is NOT played by the pump; a live note is) and
+  `live_arrangement_master_plays` (the master's own material keeps playing
+  under a master insert: 0.445281 against 0.445420) and
+  `live_arrangement_placed` (placed in the master and armed while playing: its
+  clip sounds ONCE, from the capture, 0.222748 against 0.222710, with no
+  live-owned refusal). All five fail on main at their first `live=on`
+  assertion.
+- SABOTAGES, nine. Biting: no arrangement walk (all five, plus
+  `live_skip_reasons`); the arrangement node without its master lane (`_arm`);
+  the pump feeding arrangement tracks (`_no_feed`, `_placed`); no linear
+  override (`_master_plays`); and the REJECTED design, the arrangement node
+  through the master's chain as well (`_arm`, `_with_master`). NOT biting, and
+  so NOT GATED: the no-tail rule for an arrangement-only disarm (it matters only
+  while PLAYING with a master member still live, and no case measures that
+  ring); the epoch gate on an arrangement-only plan (the master's epoch does not
+  move for an arrangement's exclusion in any reachable case, so the gate passes
+  either way); and the arrangement mixer's exclusion and master-lane ownership,
+  even sabotaged TOGETHER, because QBX-283's capture hold already keeps every
+  freeze away from a live arrangement. They stay as the guard that the pump is
+  the only renderer of those processors.
+- NOT GATED either: the master-shape refusal (`masterShapeRefusesMonitoring`)
+  still applies to an arrangement-only lane, which is conservative; recording
+  into an arrangement is QBX-247 and unchanged.

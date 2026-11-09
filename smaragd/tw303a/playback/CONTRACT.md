@@ -163,6 +163,12 @@ Invariants:
     `AudioEngine::servedContentEpoch()` publishes the epoch: it is the page the
     RT is already holding, never a second lookup. `twlive::mixRing` survives as
     the one-entry primitive with the strict position claim, used by tests.
+    A plan track with `sequenced == false` (QBX-286: one held by an
+    ARRANGEMENT root, whose clips keep sounding from its capture) has its
+    inserts handed the plan's transport with `feedEnabled = false` and
+    `holdAutomationAt = 0`, applied in the same once-per-adoption loop: it has
+    no position in the transport's domain, so a feed would play its clips a
+    second time at the wrong place (live_arrangement_no_feed).
 
 14. THE LIVE CLOCK IS ENGINE-OWNED (twliveclock.h). A seqlock stamped by the
     render callback beside publishPosition() with

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-286: AN ARRANGEMENT THAT IS PLACED IN THE MASTER, WITH ONE OF ITS TRACKS
+  ARMED WHILE THE TRANSPORT PLAYS.
+
+  The arrangement Arr holds one instrument track with a held A4 at velocity 40,
+  windowed by an asset over its first 8 s and placed on master lane 0. Arming
+  Arr:0 (monitor On) while it plays must:
+
+    - keep the clip sounding ONCE, from the arrangement's capture (QBX-283
+      Option A): (40/127)/sqrt(2) = 0.222710. Twice - the pump feeding the
+      clip on top - is about 0.445, and nothing is 0;
+    - count no live-owned refusal: nothing else renders a processor the pump
+      owns. The arrangement's master lane carries a unity gain insert so that
+      there is one to own.
+
+  WHAT THIS DOES NOT PIN: the arrangement mixer's exclusion and its master
+  lane's ownership. Sabotaged even together they pass here, because QBX-283's
+  capture hold already keeps every freeze away from a live arrangement; they
+  are the second guard (shell CONTRACT inv. 71).
+
+  The window is anchored on the clip's onset and starts 2.5 s in, well after
+  the arm (made 1 s in). MEASURED: 0.222748.
+-->
+<SActionScript version="1" name="live_arrangement_placed">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <create-arrangement name="Arr"/>
+    <add-track arrangement="Arr" index="-1"/>
+    <insert-plugin trackPath="Arr:0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <insert-midi-clip trackPath="Arr:0" timePos="0" duration="15360" name="Held"/>
+    <add-note clip="Arr:0,0" tick="0" dur="15360" key="69" velocity="40" channel="0"/>
+    <insert-plugin trackPath="Arr:$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="Arr:$master" slotIndex="0" paramId="0" value="1.0"/>
+
+    <create-asset container="Arr:" startOffset="0" duration="384000" assetName="ArrAsset"/>
+    <place-asset assetName="ArrAsset" trackPath="0" timePos="0"/>
+
+    <set-track-input trackPath="Arr:0" input="midi:capture:any"/>
+    <set-monitor-mode trackPath="Arr:0" mode="on"/>
+
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="48000" timeoutMs="30000"/>
+    <arm-track trackPath="Arr:0" armed="1"/>
+    <assert-input-meter trackPath="Arr:0" contains="live=on tracks=1 sources=1"/>
+    <wait-playhead minAdvance="144000" timeoutMs="30000"/>
+    <dump-playback-capture filename="arr_placed.wav" minFrames="192000"/>
+    <!-- 0.222710 +-4 % -->
+    <assert-audio-energy filename="arr_placed.wav" channel="0"
+                         anchorOnset="1" startFrame="120000" frameCount="20000"
+                         minRms="0.21380" maxRms="0.23162"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+
+    <toggle-playback play="0"/>
+    <arm-track trackPath="Arr:0" armed="0"/>
+    <wait-ms ms="400"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

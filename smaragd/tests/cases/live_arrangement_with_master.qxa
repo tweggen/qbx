@@ -21,6 +21,8 @@
 
   Velocity 40 keeps the peak sum (0.63 + 0.31) below full scale; an earlier
   case read a clipped capture as an unexplained shortfall.
+
+  MEASURED: 0.497717 against the closed form 0.497995.
 -->
 <SActionScript version="1" name="live_arrangement_with_master">
 
