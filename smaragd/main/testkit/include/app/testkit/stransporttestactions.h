@@ -259,7 +259,9 @@ public:
     bool readXml(const QDomElement &elem, int version) override;
 
 private:
-    QString action_;
+    // "stop" so a default-built verb round-trips; a script that names no
+    // action is still REJECTED on read.
+    QString action_ = QStringLiteral("stop");
 };
 
 class SAssertRecordingDialogAction : public SAction {
