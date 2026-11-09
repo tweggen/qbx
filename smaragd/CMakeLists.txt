@@ -855,6 +855,9 @@ endif()
 # same note), played along to a running transport, and a generation installed
 # under a sounding live voice. Wall-clock in the same sense: same properties.
 #
+# QBX-291 adds live_arm_inert_after_open: an arm loaded with the project is inert
+# until armed in the session, then the note is heard (the same onset bound).
+#
 # All six PLAY a live instrument in real time and assert what the capture
 # backend was handed, so they are wall-clock tests in exactly the sense the
 # section above describes: RUN_SERIAL, with SMARAGD_CAPTURE_SPEED=1 spelled out
@@ -882,7 +885,7 @@ if(TEST qxa.midi_count_in_catch)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
 endif()
 
-foreach(_liveinst live_instrument_play live_instrument_merge
+foreach(_liveinst live_instrument_play live_instrument_merge live_arm_inert_after_open
                   live_instrument_disarm_playback live_instrument_ownership
                   live_instrument_thru live_instrument_keyboard
                   sampler_q5_live_play sampler_q5_live_playing

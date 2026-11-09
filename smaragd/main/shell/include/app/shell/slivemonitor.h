@@ -143,6 +143,13 @@ public:
     /// A project was loaded: every track that arrived armed is INERT until the
     /// user arms it in this session (design D9).
     void projectChanged();
+    /// The track was armed or disarmed in THIS session (arm-track): it is no
+    /// longer inert (design D9, QBX-291). Nothing else ever took a track off
+    /// the inert list, so a project saved with an armed track could not be
+    /// monitored on that track for the rest of the session.
+    void armedInSession( const SObject *track );
+    /// How many tracks are inert right now (describe(), the gate).
+    int inertCount() const { return (int) inertlyArmed_.size(); }
 
     // --- the metronome and the count-in (proposal 21 L5) -------------------
 

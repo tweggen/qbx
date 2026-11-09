@@ -1404,6 +1404,11 @@ void SApplication::keyboardNoteOff( int key, int channel )
         kb->noteOff( key, channel );
 }
 
+void SApplication::trackArmedInSession( const SObject *track )
+{
+    if( liveMonitor_ ) liveMonitor_->armedInSession( track );
+}
+
 void SApplication::liveLanesChanged()
 {
     if( liveMonitor_ ) liveMonitor_->refresh();

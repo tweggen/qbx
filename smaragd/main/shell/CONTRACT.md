@@ -188,6 +188,25 @@ Phase 6 splits it into narrow context interfaces.
     `planSignature()` cannot see it and the `pumpEdits()` tick would never
     republish. Gate: `monitor_needs_arm`.
 
+11b. **A LOADED ARM IS INERT UNTIL IT IS ARMED OR DISARMED IN THIS SESSION**
+    (design D9; QBX-291). `projectChanged()` puts every track that arrives
+    armed, by the real policy, on `inertlyArmed_`: loading a project opens no
+    input and takes no lane live. `arm-track` raises
+    `SAppContext::trackArmedInSession(track)` BEFORE `liveLanesChanged()`, and
+    `SLiveMonitor::armedInSession()` takes the track off the list (one
+    `[LIVE] '<name>' armed in this session: no longer inert` line). A DISARM
+    counts too, because the button shows a loaded arm as armed, so its first
+    click disarms and its second must make the track live; and an
+    `arm-track armed="1"` on the still-armed track counts, with no flag
+    change. Before QBX-291 nothing took a track off the list, so such a track
+    could not be monitored for the rest of the session while a MIDI take on it
+    still recorded (the recorder does not consult the list). `describe()`
+    appends ` inert=<n>`. The testkit's `load-project` never runs the project
+    switch and so never fills the list; `open-project` does
+    (`SMainWindow::openProjectFile`'s sequence). Gate:
+    `live_arm_inert_after_open` (three sabotages: no session report, no second
+    `setCurrentProject` in the seam, only a flag CHANGE counting).
+
 12. **`SLiveMonitor` is a sibling of `SMidiOutPump` and `SAutomationRecorder`,
     and it OWNS THE ARM/DISARM ORDERING.** Constructed with the app, destroyed
     FIRST in `~SApplication` (it joins a `std::thread` — the pump — and closes

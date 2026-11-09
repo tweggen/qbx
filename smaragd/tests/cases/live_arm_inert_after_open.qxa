@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-291: AN ARM THAT CAME OUT OF THE PROJECT FILE IS INERT UNTIL THE USER
+  ARMS IN THIS SESSION, AND THEN IT IS LIVE (design D9, proposal 21; QBX-260).
+
+  The defect: SLiveMonitor::projectChanged() put every track that arrived
+  armed on its inert list, and NOTHING ever took one off it - arm-track only
+  set the flag - so a project saved with an armed instrument track could not
+  be monitored on that track for the rest of the session, however often the
+  user toggled Arm. The MIDI recorder does not consult the list, so a take on
+  the track still recorded and played back (the author, macOS, 2026-11-09).
+
+  WHY open-project AND NOT load-project. load-project loads INTO the running
+  project and never runs SApplication's project switch, so the inert list is
+  never filled in a test-case run and no case could see either half of D9.
+  open-project follows SMainWindow::openProjectFile (an empty project made
+  current, the load, setCurrentProject() again).
+
+  Three sections, the live monitor read through assert-input-meter's
+  describe() (live=, midi=, inert=):
+    1. Open a project saved with the track armed: armed, NOT live, inert=1
+       (the half D9 promises: a load opens no input).
+    2. The button's sequence: its first click on a loaded arm DISARMS (the
+       button shows it armed), the second ARMS. Live, inert=0.
+    3. Open again, and arm-track armed="1" on the still-armed track (a
+       script's spelling, no flag change): live as well.
+  Then a note is played on the input and heard: the onset against
+  live_instrument_play's 12288-frame bound.
+-->
+<SActionScript version="1" name="live_arm_inert_after_open">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <arm-track trackPath="0" armed="1"/>
+    <!-- Armed in THIS session: live at once. -->
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <assert-input-meter trackPath="0" contains=" inert=0"/>
+    <save-project path="../../build/test-output/live_arm_inert_after_open/armed.qxp"/>
+
+    <!-- =============================== 1. the loaded arm is inert -->
+    <open-project path="../../build/test-output/live_arm_inert_after_open/armed.qxp"/>
+    <assert-instrument-slot trackPath="0" present="1" format="clap"
+                            uid="tw.test.clap.sine" state="Active"/>
+    <assert-input-meter trackPath="0" contains="live=off"/>
+    <assert-input-meter trackPath="0" contains=" inert=1"/>
+
+    <!-- =============================== 2. disarm, then arm: live -->
+    <arm-track trackPath="0" armed="0"/>
+    <assert-input-meter trackPath="0" contains="live=off"/>
+    <assert-input-meter trackPath="0" contains=" inert=0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <assert-input-meter trackPath="0" contains=" midi=1"/>
+    <assert-input-meter trackPath="0" contains=" inert=0"/>
+
+    <!-- =============================== 3. open again; arm the armed track -->
+    <open-project path="../../build/test-output/live_arm_inert_after_open/armed.qxp"/>
+    <assert-input-meter trackPath="0" contains="live=off"/>
+    <assert-input-meter trackPath="0" contains=" inert=1"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <assert-input-meter trackPath="0" contains=" midi=1"/>
+    <assert-input-meter trackPath="0" contains=" inert=0"/>
+
+    <!-- ........................................ and the note is heard -->
+    <wait-ms ms="600"/>
+    <midi-in-event kind="noteon" key="60" velocity="100" channel="0"/>
+    <wait-ms ms="1500"/>
+    <dump-playback-capture filename="inert_open.wav" minFrames="72000"/>
+    <assert-audio-onset filename="inert_open.wav" afterMidiIn="1" channel="0"
+                        threshold="0.05" maxFrame="12288"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+</SActionScript>
