@@ -269,6 +269,26 @@ public:
     /// gesture, so it is one step.
     void stopRecording();
 
+    /// --- the recording as ONE thing, for the record dialog (QBX-290) -----
+    ///
+    /// The dialog used to watch the AUDIO recorder alone, so a MIDI-only take
+    /// (the audio half refused with "no armed tracks" while the MIDI half
+    /// recorded) was reported as a failed recording at its first poll. These
+    /// answer for the PRESS instead, whichever recorders took part.
+    ///
+    /// In progress: a take is running, or its count-in / pre-roll is.
+    bool recordingInProgress() const
+        { return isRecordingActive() || recordPreambleActive(); }
+    /// How long the take has run: the audio recorder's captured length when
+    /// it has a half in the take, otherwise the wall-clock time since the
+    /// MIDI half began (a MIDI recorder holds no growing content to measure,
+    /// and a cycle wraps the locator, so the playhead cannot stand in).
+    double recordedSeconds() const;
+    /// The error of a recorder that TOOK PART in the last take, or empty. A
+    /// recorder that refused to start (nothing armed for it) is not an error
+    /// of the take: both refusing is startRecording() returning false.
+    QString recordingError() const;
+
     /// --- the per-press recording macro (plan 53 §5.4) -------------------
     ///
     /// Opened LAZILY, which is the whole point. A Qt macro that closes with no
@@ -659,6 +679,11 @@ private:
     // the end, and it is a flag rather than a re-derivation because the armed
     // set is cleared by the commit before the stop finishes.
     bool midiOwnsTransport_ = false;
+    // Which recorders started for the current (or last) take, and when the
+    // MIDI half began: recordedSeconds() / recordingError() (QBX-290).
+    bool audioInTake_ = false;
+    bool midiInTake_  = false;
+    QElapsedTimer midiTakeClock_;
     // The per-press recording macro (QBX-165); see beginRecordCommit().
     int  recordCommitDepth_ = 0;
     bool recordMacroOpen_   = false;

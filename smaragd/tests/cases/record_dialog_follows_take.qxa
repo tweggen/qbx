@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-290: the recording dialog follows the RECORDING, not the audio recorder.
+
+  THE DEFECT. A take with only MIDI tracks armed starts the MIDI recorder and
+  is refused by the audio one ("no armed tracks"), which is right: one press
+  drives both and either may sit out. The dialog watched the audio recorder
+  alone, so its first poll saw it inactive with an error and showed "Recording
+  failed: no armed tracks" while the MIDI take recorded on.
+
+  THE PATH UNDER TEST is the real button: press-record triggers the record
+  QAction (SMainWindow::onRecordTriggered), which shows the dialog; the dialog
+  is read through its describe() seam (state, status line, duration line).
+  wait-ms pumps the event loop, so the dialog's own 100 ms poll runs; nothing
+  forces it.
+
+  Sections:
+    A  MIDI ONLY. Recording, not failed, and the duration moves. The dialog's
+       Stop commits the take (one undo removes it) and reports complete.
+    B  MIXED (audio + MIDI armed), the SAME window for a second take: it must
+       be back to recording (it was left "complete" by A, its poll stopped).
+       The record button pressed again ends the take, and the dialog follows
+       a stop it did not make.
+    C  record-stop from a script while the dialog is open: the dialog follows
+       it to complete as well.
+
+  NOT GATED: a take that really ends with an error ("failed" with its reason).
+  No headless backend fails a running take.
+
+  Env on the CTest entry (the audio recording foreach): RUN_SERIAL,
+  SMARAGD_CAPTURE_SPEED=1, the position-encoded file input.
+-->
+<SActionScript version="1" name="record_dialog_follows_take">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- Track 0 audio, track 1 MIDI. Monitoring off: this is about the take. -->
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <set-monitor-mode trackPath="1" mode="off"/>
+    <set-track-input trackPath="0" input="audio:qxa-record-input:1"/>
+    <set-track-input trackPath="1" input="midi:capture:any"/>
+    <set-locator position="0"/>
+
+    <assert-recording-dialog contains="dialog=none"/>
+
+    <!-- —— A: MIDI only ——————————————————————————————— -->
+    <arm-track trackPath="1" armed="1"/>
+    <press-record/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="24000"/>
+    <wait-ms ms="1200"/>
+    <assert-recording-dialog contains="open=1|state=recording|status=Recording in progress...|"
+                             absent="failed"/>
+    <!-- The duration comes from the MIDI half (on main it read the audio
+         recorder's, which never started: 00:00.000). -->
+    <assert-recording-dialog absent="duration=Duration: 00:00.000"/>
+
+    <recording-dialog action="stop"/>
+    <assert-recording-dialog contains="|state=complete|status=Recording complete!|"/>
+    <assert-midi-recorded trackPath="1" clips="1" notes="4"/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+    <undo count="1"/>
+    <assert-midi-recorded trackPath="1" clips="0"/>
+
+    <!-- —— B: mixed, the same window again ——————————————————— -->
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <press-record/>
+    <midi-in-replay filePath="../midi_perf4.txt" startFrame="24000"/>
+    <wait-ms ms="1200"/>
+    <assert-recording-dialog contains="open=1|state=recording|status=Recording in progress...|"/>
+    <assert-recording-dialog absent="duration=Duration: 00:00.000"/>
+
+    <!-- The button again ends the take; the dialog's poll follows the stop. -->
+    <press-record/>
+    <wait-ms ms="400"/>
+    <assert-recording-dialog contains="open=0|state=complete|status=Recording complete!|"/>
+    <!-- ...and it keeps the length the take reached: the recorders report 0
+         once it has ended, and a poll after the end must not show that. -->
+    <assert-recording-dialog absent="duration=Duration: 00:00.000"/>
+    <assert-recorded-clip trackPath="0" clips="1"/>
+    <assert-midi-recorded trackPath="1" clips="1"/>
+    <undo count="1"/>
+    <assert-recorded-clip trackPath="0" clips="0"/>
+    <assert-midi-recorded trackPath="1" clips="0"/>
+
+    <!-- —— C: a script's stop, MIDI only ———————————————————— -->
+    <arm-track trackPath="0" armed="0"/>
+    <set-locator position="0"/>
+    <press-record/>
+    <wait-ms ms="400"/>
+    <assert-recording-dialog contains="|state=recording|"/>
+    <record-stop/>
+    <wait-ms ms="400"/>
+    <assert-recording-dialog contains="|state=complete|status=Recording complete!|"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

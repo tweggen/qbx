@@ -1911,6 +1911,7 @@ void SMainWindow::warnOnEndpointRateMismatch()
                  "endpoint rate mismatch: input '%s' = %u Hz, output '%s' = %u Hz",
                  inName.toUtf8().constData(), (unsigned) inRate,
                  outName.toUtf8().constData(), (unsigned) outRate );
+        if( SApplication::app().isTestCaseMode() ) return;   // a modal headless hangs
         QMessageBox::warning( this, "Input and output rates differ",
             QString( "The recording input and the playback output are set to "
                      "DIFFERENT sample rates in the operating system:\n\n"
@@ -1933,7 +1934,10 @@ void SMainWindow::warnOnEndpointRateMismatch()
 
 void SMainWindow::onRecordTriggered()
 {
-    if( !currentProject_ ) return;
+    // The APP's project, which is what every step below records into: a
+    // --test-case run never binds one into this window (adoptCurrentProject),
+    // and the button must still work there for press-record (QBX-290).
+    if( !SApplication::app().getCurrentProject() ) return;
 
     // A COUNT-IN or PRE-ROLL in flight is not yet a take (proposal 21 L5), so
     // isRecordingActive() is false - but a second press must still mean "stop",
@@ -1960,6 +1964,15 @@ void SMainWindow::onRecordTriggered()
     warnOnEndpointRateMismatch();
 
     if( !SApplication::app().startRecording() ) {
+        // A modal headless is a HANG, not a refusal (a scripted press-record
+        // with nothing armed must come back).
+        if( SApplication::app().isTestCaseMode() ) {
+            TW_LOGW( "ui.shell", "Cannot Record: %s",
+                     SApplication::app().audioRecorder()
+                         ? SApplication::app().audioRecorder()->errorMessage().toUtf8().constData()
+                         : "recording could not start" );
+            return;
+        }
         QMessageBox::information(
             this, "Cannot Record",
             SApplication::app().audioRecorder()
@@ -1976,12 +1989,38 @@ void SMainWindow::onRecordTriggered()
     // stop that happens anywhere else (a punch-out, the record button again).
     if( !recordingProgressDialog_ ) {
         recordingProgressDialog_ =
-            new SRecordingProgressDialog( SApplication::app().audioRecorder(), this );
+            new SRecordingProgressDialog( this );
         QObject::connect( recordingProgressDialog_, &QDialog::finished,
                           this, &SMainWindow::onRecordingFinished );
     }
+    // ONE window for every take: without this the second press showed the
+    // first take's "complete" with its poll stopped (QBX-290).
+    recordingProgressDialog_->beginTake();
     recordingProgressDialog_->show();
     recordingProgressDialog_->raise();
+}
+
+// The record BUTTON, for the `press-record` testkit verb: through the QAction,
+// so a disabled button refuses as it does under a hand.
+bool SMainWindow::pressRecord()
+{
+    if( !actRecord_ || !actRecord_->isEnabled() ) return false;
+    actRecord_->trigger();
+    return true;
+}
+
+QString SMainWindow::describeRecordingDialog() const
+{
+    return recordingProgressDialog_ ? recordingProgressDialog_->describe()
+                                    : QStringLiteral( "dialog=none" );
+}
+
+bool SMainWindow::recordingDialogGesture( const QString &gesture )
+{
+    if( !recordingProgressDialog_ ) return false;
+    if( gesture == QLatin1String( "stop" ) )  { recordingProgressDialog_->pressStop(); return true; }
+    if( gesture == QLatin1String( "close" ) ) { recordingProgressDialog_->close();     return true; }
+    return false;
 }
 
 // The take ended (from the dialog, the record button, or a punch-out). The
