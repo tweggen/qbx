@@ -40,6 +40,9 @@
     <assert-sampler-editor trackPath="0" slotIndex="0" open="1" flag="1"/>
     <plugin-generic-editor trackPath="0" slotIndex="0" action="assert" expectOpen="0"/>
     <assert-plugin-editor-kind trackPath="0" slotIndex="0" expect="app"/>
+    <!-- QBX-289: a TOOL window, so on macOS it floats above a full-screen
+         main window instead of being buried by a click in it. -->
+    <assert-sampler-editor trackPath="0" slotIndex="0" contains="|windowType=tool"/>
     <assert-sampler-editor trackPath="0" slotIndex="0"
                            contains="sizes=key:896x144,pad:392x432,map:808x416,zone:760x400|fixedAll=1"/>
     <!-- A new instance with no program object: the default view, Key. -->
