@@ -217,7 +217,10 @@ Invariants:
    is `SSMVMixerControl::describeHead()`, a `describeMeter()` sibling that
    re-applies the density rules for the current size first (Qt delivers no
    resizeEvent to a widget that was never shown) and reports `fitW`/`fitH`,
-   which is "hiding beats clipping" made assertable.
+   which is "hiding beats clipping" made assertable. Since QBX-292 it ends
+   with `|armTip=`, the arm button's tooltip from the same function the button
+   uses (`armTooltipText_()`); the tooltip names why an armed track is not
+   live (`SLiveMonitor::skipReason`), refreshed on `SLiveMonitor::skipsChanged`.
 15. **The snap spec's grid DIVISION reads the tempo map** (proposal 37 P4).
    `SSnapSpec::setGridDivision("1/16")` is parsed by
    `SQuantizeNotesAction::gridTicks()` — the ONE parser, shared with

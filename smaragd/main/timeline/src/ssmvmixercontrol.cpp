@@ -964,6 +964,11 @@ SSMVMixerControl::SSMVMixerControl(
                       this, &SSMVMixerControl::onMeterTick );
     QObject::connect( &SApplication::app(), &SApplication::meterReset,
                       qMeter_, &SLevelMeter::resetMeter );
+    // QBX-292: the tooltip names why an armed track is not live, and that
+    // reason moves with the transport and the arm, not with this head.
+    if( SLiveMonitor *mon = SApplication::app().liveMonitor() )
+        QObject::connect( mon, &SLiveMonitor::skipsChanged,
+                          this, &SSMVMixerControl::refreshArmTooltip_ );
 
     QObject::connect( qVolume_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( sliderValueChanged( int ) ) );
@@ -1283,6 +1288,13 @@ void SSMVMixerControl::setMonitorMode_( STrack::MonitorMode mode )
 // happen, so it is said here as well as logged.
 void SSMVMixerControl::refreshArmTooltip_()
 {
+    qArm_->setToolTip( armTooltipText_() );
+}
+
+// The arm button's tooltip, and describeHead()'s `armTip=` field, from ONE
+// function: the seam reports what the button shows.
+QString SSMVMixerControl::armTooltipText_() const
+{
     QString tip = QStringLiteral(
         "Arm for Recording / Monitoring\n"
         "(Right-click for input, channels and monitor mode)" );
@@ -1311,8 +1323,13 @@ void SSMVMixerControl::refreshArmTooltip_()
         if( mon->rateRefusals() > 0 )
             tip += QStringLiteral( "\nMONITORING OFF: the audio device will not "
                                    "run at the project rate" );
+        // QBX-292: an armed track the live path leaves out says why, the
+        // same reason the [LIVE] log line gives.
+        const QString why = mon->skipReason( &tk_ );
+        if( !why.isEmpty() )
+            tip += QStringLiteral( "\nNOT MONITORED: %1" ).arg( why );
     }
-    qArm_->setToolTip( tip );
+    return tip;
 }
 
 void SSMVMixerControl::setRecordingChannels( uint32_t channels )
@@ -1633,7 +1650,11 @@ QString SSMVMixerControl::describeHead()
         .arg( ( qPan_ && qPan_->isEnabled() ) ? 1 : 0 )
         // QBX-114: the FADER's enabled state, appended last for the same
         // AC4.1 reason `pan` was. 0 on the conductor, which carries no audio.
-        .arg( ( qVolume_ && qVolume_->isEnabled() ) ? 1 : 0 );
+        .arg( ( qVolume_ && qVolume_->isEnabled() ) ? 1 : 0 )
+        // QBX-292: the arm button's tooltip, its lines joined by " / ".
+        // Appended LAST, for the same reason.
+        + QStringLiteral( "|armTip=" )
+        + armTooltipText_().replace( QLatin1Char( '\n' ), QStringLiteral( " / " ) );
 }
 
 QString SSMVMixerControl::describeMeter()

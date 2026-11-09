@@ -8,6 +8,7 @@
 
 #include <QTimer>
 
+#include "app/model/sarmcensus.h"
 #include "app/model/slink.h"
 #include "app/model/sproject.h"
 #include "app/model/sprojectprops.h"
@@ -483,19 +484,31 @@ void SLiveMonitor::attachLiveEvents( const SLiveClosure &closure )
         SPluginSlot *slot = feed.consumer ? feed.consumer->instrumentSlot() : nullptr;
         const std::shared_ptr<audio::twPluginSlotProcessor> proc =
             slot ? slot->getProcessor() : nullptr;
-        if( !proc ) continue;
+        if( !proc ) {
+            attachSkips_.push_back( { feed.armed, QStringLiteral(
+                "its instrument is not running (slot 0 has no active processor)" ) } );
+            continue;
+        }
 
         MidiLive live;
         live.feed   = feed;
         live.fanout = hub->fanoutFor( feed.port );
-        if( !live.fanout ) continue;
+        if( !live.fanout ) {
+            attachSkips_.push_back( { feed.armed, QStringLiteral(
+                "its MIDI input '%1' is not open" ).arg( feed.port ) } );
+            continue;
+        }
 
         const std::uint16_t mask =
             ( feed.channel < 0 ) ? (std::uint16_t) 0xFFFF
                                  : (std::uint16_t)( 1u << feed.channel );
         live.sink = live.fanout->acquire(
             mask, feed.consumer->getSName().toStdString().c_str() );
-        if( !live.sink ) continue;
+        if( !live.sink ) {
+            attachSkips_.push_back( { feed.armed, QStringLiteral(
+                "its MIDI input '%1' has no free consumer slot" ).arg( feed.port ) } );
+            continue;
+        }
 
         live.source = std::make_shared<audio::twLiveEventSource>( live.sink, rate );
         live.source->setClock( eventClock_ );
@@ -879,7 +892,16 @@ bool SLiveMonitor::masterShapeRefusesMonitoring()
 
 void SLiveMonitor::refresh()
 {
-    if( !app_ || suspendedForRender_ ) return;
+    planSkips_.clear();
+    attachSkips_.clear();
+    if( refreshPlan_() ) reportSkips_();
+}
+
+// The plan half of refresh(). False when no plan was computed (no app, a
+// render in flight, no mixer): the reasons last reported then stand.
+bool SLiveMonitor::refreshPlan_()
+{
+    if( !app_ || suspendedForRender_ ) return false;
     SStdMixer *mixer = rootMixer();
     if( !mixer ) {
         // NO MIXER MEANS NO PROJECT, and whatever the live state still names
@@ -889,7 +911,7 @@ void SLiveMonitor::refresh()
         // A bare `return` was the File -> Close SIGSEGV: the pump and the
         // demand tick lived on and read the dead tracks 40 ms later.
         forgetLiveState();
-        return;
+        return false;
     }
 
     const bool playing = ( pendingPlaying_ >= 0 ) ? ( pendingPlaying_ != 0 )
@@ -897,6 +919,7 @@ void SLiveMonitor::refresh()
     SLiveClosure want = sliveplan::computeClosure(
         mixer, playing, app_->isRecordingActive(), inertlyArmed_,
         monitorArmingOption() );
+    planSkips_ = want.skipped;
     // A LIVE LANE EXISTS IFF armed u monitor u metronome (design D9), where
     // the monitor half needs `mixer/monitorArming=any` since QBX-260 and is
     // empty on the default. The metronome owns no track, so it joins as a
@@ -934,12 +957,12 @@ void SLiveMonitor::refresh()
             // armed.
             if( masterShapeRefusesMonitoring() ) {
                 tearDownLiveForRefusal();
-                return;
+                return true;
             }
             attachLiveEvents( current_ );
             publishPlan( current_, rootEpoch(), 0 );
         }
-        return;
+        return true;
     }
 
     // --- the DISARM half, first: members that are leaving ------------------
@@ -1032,7 +1055,7 @@ void SLiveMonitor::refresh()
                 liveOpened_ = false;
             }
         }
-        return;
+        return true;
     }
 
     // THE MASTER-SHAPE PRECONDITION, asked on this route AND on the `sameSet`
@@ -1046,7 +1069,7 @@ void SLiveMonitor::refresh()
         // renders.
         detachLiveEvents( current_ );
         current_ = SLiveClosure();
-        return;
+        return true;
     }
 
     if( !arriving.ordered.empty() ) {
@@ -1100,7 +1123,7 @@ void SLiveMonitor::refresh()
             setClosureOwned( current_, false );
             applyExclusion( current_ );
             current_ = SLiveClosure();
-            return;
+            return true;
         }
     }
 
@@ -1112,6 +1135,7 @@ void SLiveMonitor::refresh()
     pumpDemands();
     // Meters keep ticking while a live lane is ON, at a standing playhead.
     app_->startMetering();
+    return true;
 }
 
 void SLiveMonitor::finishDisarm()
@@ -1281,6 +1305,9 @@ void SLiveMonitor::forgetLiveState()
     departing_ = SLiveClosure();
     suspended_ = SLiveClosure();
     inertlyArmed_.clear();
+    skips_.clear();
+    planSkips_.clear();
+    attachSkips_.clear();
     sources_.clear();
     metronome_.reset();
     publishedSignature_.clear();
@@ -1302,6 +1329,49 @@ void SLiveMonitor::forgetLiveState()
             spk->closeLive();
         liveOpened_ = false;
     }
+}
+
+QString SLiveMonitor::skipReason( const STrack *track ) const
+{
+    const auto it = skips_.find( track );
+    return it == skips_.end() ? QString() : it->second;
+}
+
+// QBX-292: every armed track the live path leaves out, with its reason, ONE
+// [LIVE] line per track whose reason is new or changed (never one per
+// refresh). Three sources: the plan's (inert, monitor, no input, no
+// instrument), attachLiveEvents' (no processor, no port, no sink), and the
+// armed lanes the plan never walks because they are not under the master root.
+void SLiveMonitor::reportSkips_()
+{
+    std::map<const STrack *, QString> next;
+    auto add = [&next]( const STrack *t, const QString &reason ) {
+        if( t && next.find( t ) == next.end() ) next.emplace( t, reason );
+    };
+    for( const SLiveSkip &s : planSkips_ ) add( s.track, s.reason );
+    for( const SLiveSkip &s : attachSkips_ ) add( s.track, s.reason );
+    if( SProject *p = app_ ? app_->getCurrentProject() : nullptr ) {
+        for( SObject *arr : p->arrangements() ) {
+            QList<SObject *> lanes;
+            sarm::detail::collectArmedLanes( arr, lanes );
+            for( SObject *lane : lanes )
+                add( dynamic_cast<STrack *>( lane ),
+                     QStringLiteral( "it is in the arrangement '%1', and a track "
+                                     "armed inside an arrangement is not "
+                                     "monitored yet (QBX-286)" )
+                         .arg( p->arrangementNameOf( arr ) ) );
+        }
+    }
+    for( const auto &e : next ) {
+        const auto old = skips_.find( e.first );
+        if( old != skips_.end() && old->second == e.second ) continue;
+        TW_LOGI( "shell", "[LIVE] '%s' is armed but not live: %s",
+                 e.first->getSName().toStdString().c_str(),
+                 e.second.toStdString().c_str() );
+    }
+    const bool changed = ( next != skips_ );
+    skips_.swap( next );
+    if( changed ) emit skipsChanged();
 }
 
 void SLiveMonitor::armedInSession( const SObject *track )

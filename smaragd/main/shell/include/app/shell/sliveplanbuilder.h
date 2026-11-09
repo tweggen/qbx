@@ -54,6 +54,14 @@ struct SLiveMidiFeed {
     bool operator!=( const SLiveMidiFeed &o ) const { return !( *this == o ); }
 };
 
+/// An ARMED track that is NOT a live source, and why (QBX-292). Before this
+/// every such skip was silent, and a user whose armed instrument played
+/// nothing had no way to tell which of five conditions it was.
+struct SLiveSkip {
+    STrack *track = nullptr;
+    QString reason;
+};
+
 struct SLiveClosure {
     /**
      * THE METRONOME (proposal 21 L5, design D1). It is not a track and owns no
@@ -75,6 +83,10 @@ struct SLiveClosure {
     /// The MIDI half of `sources` (proposal 21 L2). A feed's `consumer` is in
     /// `sources`; its `armed` track may not be a member at all.
     std::vector<SLiveMidiFeed> midiFeeds;
+    /// The armed tracks this plan leaves out, each with its reason (QBX-292).
+    /// Diagnostics only: NOT part of any set comparison, so a reason changing
+    /// never republishes a plan.
+    std::vector<SLiveSkip> skipped;
     /// The members that are direct children of the root mixer — the TOPMOST
     /// ones by construction, which is why the mixer's exclusion rule is simply
     /// "in the closure ⇒ null the plug".

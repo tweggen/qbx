@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -150,6 +151,15 @@ public:
     void armedInSession( const SObject *track );
     /// How many tracks are inert right now (describe(), the gate).
     int inertCount() const { return (int) inertlyArmed_.size(); }
+    /// Why an ARMED track is not live right now, "" when it is live or not
+    /// armed (QBX-292). The arm button's tooltip reads it.
+    QString skipReason( const STrack *track ) const;
+
+signals:
+    /// The set of armed-but-not-live tracks, or a reason, changed.
+    void skipsChanged();
+
+public:
 
     // --- the metronome and the count-in (proposal 21 L5) -------------------
 
@@ -435,6 +445,17 @@ private:
     QTimer *disarmTimer_ = nullptr;
     QTimer *demandTimer_ = nullptr;
     std::vector<std::shared_ptr<void> >  demands_;   // one handle per frozen root
+
+    // QBX-292: why each ARMED track is not live. planSkips_ is the plan's
+    // half (sliveplan::computeClosure), attachSkips_ the half only
+    // attachLiveEvents can know (no processor, no port, no sink); refresh()
+    // merges them with the armed lanes outside the master root into skips_
+    // and logs one [LIVE] line per track whose reason is new or changed.
+    std::vector<SLiveSkip> planSkips_;
+    std::vector<SLiveSkip> attachSkips_;
+    std::map<const STrack *, QString> skips_;
+    bool refreshPlan_();
+    void reportSkips_();
 
     // Tracks whose ArmedForRecording came out of a file (design D9).
     std::vector<const STrack *> inertlyArmed_;

@@ -857,6 +857,8 @@ endif()
 #
 # QBX-291 adds live_arm_inert_after_open: an arm loaded with the project is inert
 # until armed in the session, then the note is heard (the same onset bound).
+# QBX-292 adds live_skip_reasons: every armed track the live path leaves out logs
+# one [LIVE] reason and shows it on the arm button (it plays the transport).
 #
 # All six PLAY a live instrument in real time and assert what the capture
 # backend was handed, so they are wall-clock tests in exactly the sense the
@@ -885,7 +887,7 @@ if(TEST qxa.midi_count_in_catch)
         ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;SMARAGD_CAPTURE_SPEED=1")
 endif()
 
-foreach(_liveinst live_instrument_play live_instrument_merge live_arm_inert_after_open
+foreach(_liveinst live_instrument_play live_instrument_merge live_arm_inert_after_open live_skip_reasons
                   live_instrument_disarm_playback live_instrument_ownership
                   live_instrument_thru live_instrument_keyboard
                   sampler_q5_live_play sampler_q5_live_playing
