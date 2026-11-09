@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-292: AN ARMED TRACK THAT THE LIVE PATH LEAVES OUT SAYS WHY.
+
+  Before this, every skip was silent: an armed instrument that played nothing
+  live gave the log no line and the arm button no hint, and finding the cause
+  of the author's silent NassauDigital track (QBX-291's inert arm) took
+  several round trips. Now each armed track that is not live gets ONE
+  [LIVE] line naming it and the reason, when the reason is new or changes
+  (never one per refresh), and the arm button's tooltip carries the same
+  reason as "NOT MONITORED: <reason>" (read through assert-track-head's
+  armTip=, which is the tooltip's own text).
+
+  One section per reason that can be built headless, in this order, each
+  asserting the log line right after the action that causes it (assert-log's
+  window is the previous action) and the tooltip:
+    A. armed with no input
+    B. a MIDI input and no instrument
+    C. the instrument arrives, re-arm: live, and no reason left
+    D. monitor Off
+    E. monitor Auto while the transport plays; a refresh that changes
+       nothing logs nothing; Stop: live again
+    F. a project opened with the track armed: inert (QBX-291), then armed
+       again: live
+    G. a track armed inside an arrangement (QBX-286). LAST, because after it
+       the arranger shows that root and trackPath="0" would resolve there.
+  NOT HERE: the three reasons only attachLiveEvents can know (its MIDI input
+  does not open, no free consumer slot, the instrument has no processor). No
+  headless MIDI backend refuses to open a port (capture and null always
+  succeed), so none of them can be built in a test-case run.
+-->
+<SActionScript version="1" name="live_skip_reasons">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ========================================= A. armed, no input -->
+    <add-track index="-1"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log contains="is armed but not live: it has no input selected" level="info"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED: it has no input selected"/>
+
+    <!-- ===================================== B. MIDI in, no instrument -->
+    <set-track-input trackPath="0" input="midi:capture:any"/>
+    <assert-log contains="is armed but not live: no instrument would play its notes" level="info"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED: no instrument would play its notes"/>
+
+    <!-- ============================== C. the instrument; re-arm: live -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.sine"
+                   name="Smaragd Test Sine" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="0" nOut="2"
+                   isInstrument="true"/>
+    <arm-track trackPath="0" armed="0"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log contains="is armed but not live" minCount="0" maxCount="0"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <assert-track-head trackPath="0" absent="NOT MONITORED"/>
+
+    <!-- ============================================== D. monitor Off -->
+    <set-monitor-mode trackPath="0" mode="off"/>
+    <assert-log contains="is armed but not live: its monitor is Off" level="info"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED: its monitor is Off"/>
+
+    <!-- ========================== E. Auto while playing; no repeat -->
+    <set-monitor-mode trackPath="0" mode="auto"/>
+    <assert-track-head trackPath="0" absent="NOT MONITORED"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED: its monitor is Auto"/>
+    <!-- A refresh that changes nothing (an arm of the armed track) logs
+         nothing. -->
+    <arm-track trackPath="0" armed="1"/>
+    <assert-log contains="is armed but not live" minCount="0" maxCount="0"/>
+    <toggle-playback play="0"/>
+    <wait-ms ms="200"/>
+    <assert-track-head trackPath="0" absent="NOT MONITORED"/>
+
+    <!-- ============================ F. opened armed: inert, then armed -->
+    <save-project path="../../build/test-output/live_skip_reasons/armed.qxp"/>
+    <open-project path="../../build/test-output/live_skip_reasons/armed.qxp"/>
+    <assert-log contains="is armed but not live: it was armed by loading the project" level="info"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED: it was armed by loading the project"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-input-meter trackPath="0" contains="live=on"/>
+    <assert-track-head trackPath="0" absent="NOT MONITORED"/>
+    <!-- ===================================== G. armed in an arrangement (LAST: the arranger then shows Arr) -->
+    <create-arrangement name="Arr"/>
+    <add-track arrangement="Arr" index="-1"/>
+    <arm-track trackPath="Arr:0" armed="1"/>
+    <assert-log contains="is armed but not live: it is in the arrangement 'Arr'" level="info"/>
+
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+</SActionScript>

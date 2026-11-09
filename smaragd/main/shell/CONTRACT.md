@@ -207,6 +207,26 @@ Phase 6 splits it into narrow context interfaces.
     `live_arm_inert_after_open` (three sabotages: no session report, no second
     `setCurrentProject` in the seam, only a flag CHANGE counting).
 
+11c. **AN ARMED TRACK THE LIVE PATH LEAVES OUT SAYS WHY** (QBX-292). Every
+    skip used to be silent, so an armed instrument that played nothing live
+    gave the log no line. Now `sliveplan::computeClosure` records each armed
+    track it leaves out in `SLiveClosure::skipped` (no input; inert, D9;
+    monitor Off; monitor Auto while the transport plays; no instrument in
+    slot 0 and no folder taking its events), `attachLiveEvents` records the
+    three only it can know (no processor on the slot; its MIDI input does not
+    open; no free consumer slot), and `refresh()` adds the armed lanes the
+    plan never walks because they are not under the master root (QBX-286).
+    `reportSkips_()` merges the three, logs ONE
+    `[LIVE] '<track>' is armed but not live: <reason>` line per track whose
+    reason is NEW OR CHANGED (never one per refresh), and raises
+    `skipsChanged()`; `skipReason(track)` answers the arm button's tooltip
+    (`NOT MONITORED: <reason>`), which every head refreshes on that signal.
+    `skipped` is diagnostics only and takes part in no set comparison, so a
+    reason changing never republishes a plan. Gate: `live_skip_reasons`
+    (eight sabotages). Not gated: the three attach-time reasons (no headless
+    MIDI backend refuses a port: capture and null both always open) and the
+    head's refresh on `skipsChanged()` (the seam builds a fresh head).
+
 12. **`SLiveMonitor` is a sibling of `SMidiOutPump` and `SAutomationRecorder`,
     and it OWNS THE ARM/DISARM ORDERING.** Constructed with the app, destroyed
     FIRST in `~SApplication` (it joins a `std::thread` — the pump — and closes

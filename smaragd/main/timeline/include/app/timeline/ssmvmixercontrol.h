@@ -122,6 +122,7 @@ protected slots:
     void setTrackInputSpec_( const QString &spec );
     void setMonitorMode_( STrack::MonitorMode mode );
     void refreshArmTooltip_();
+    QString armTooltipText_() const;
 
     // Track selection highlight (the primary moved / the set changed).
     void onSelectedTrackChanged( STrack *track );

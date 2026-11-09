@@ -120,6 +120,22 @@ STrack *midiConsumerIn( const TreeInfo &info, STrack *t )
     return nullptr;
 }
 
+// The reason an ARMED track with an input is not in the live set (QBX-292).
+// `inert` first: a loaded arm is left out whatever its monitor says.
+QString skipReasonFor( const STrack *t, bool inert, bool playing )
+{
+    if( inert )
+        return QStringLiteral( "it was armed by loading the project; arm it "
+                               "again to monitor it (design D9)" );
+    if( t->getMonitorMode() == STrack::MonitorMode::Off )
+        return QStringLiteral( "its monitor is Off" );
+    if( playing )
+        return QStringLiteral( "its monitor is Auto, which plays the track's "
+                               "own material while the transport plays (it "
+                               "monitors when stopped or recording)" );
+    return QStringLiteral( "its monitor does not monitor now" );
+}
+
 }  // namespace
 
 STrack *midiConsumerFor( SObject *rootMixer, STrack *t )
@@ -153,7 +169,11 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
     for( STrack *t : info.all ) {
         const bool audio = sliveplan::isAudioInput( t );
         const bool midi  = sliveplan::isMidiInput( t );
-        if( !audio && !midi ) continue;
+        if( !audio && !midi ) {
+            if( t->isArmedForRecording() )
+                out.skipped.push_back( { t, QStringLiteral( "it has no input selected" ) } );
+            continue;
+        }
         const bool inert =
             std::find( inertlyArmed.begin(), inertlyArmed.end(),
                        (const STrack *) t ) != inertlyArmed.end();
@@ -167,7 +187,13 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
         const bool want  = ( armed && t->monitorEffective( playing, recording ) )
                            || ( arming == MonitorArming::Any
                                 && t->getMonitorMode() == STrack::MonitorMode::On );
-        if( !want ) continue;
+        if( !want ) {
+            // WHY an armed track is left out (QBX-292). Unarmed tracks are not
+            // expected to be live, so they carry no reason.
+            if( t->isArmedForRecording() )
+                out.skipped.push_back( { t, skipReasonFor( t, inert, playing ) } );
+            continue;
+        }
         if( audio ) {
             out.sources.push_back( t );
             continue;
@@ -177,6 +203,9 @@ SLiveClosure computeClosure( SObject *rootMixer, bool playing, bool recording,
             // Nothing would sound these notes. Excluding the track from the
             // frozen sum would silence its clips for no gain (design D3), so
             // it is simply not a live source.
+            out.skipped.push_back( { t, QStringLiteral(
+                "no instrument would play its notes: slot 0 holds no "
+                "instrument and no folder above takes its events" ) } );
             continue;
         }
         SLiveMidiFeed feed;
