@@ -21,7 +21,10 @@
     E. monitor Auto while the transport plays; a refresh that changes
        nothing logs nothing; Stop: live again
     F. a project opened with the track armed: inert (QBX-291), then armed
-       again: live
+       again: live. Right after the open, no head of the OLD project is
+       still listening for skipsChanged (QBX-300): they read their track
+       through a reference, and the open freed it. A filled heap turns that
+       read into a crash: qxa.poisoned_heap.live_skip_reasons.
     G. a track armed inside an arrangement (QBX-286). LAST, because after it
        the arranger shows that root and trackPath="0" would resolve there.
   NOT HERE: the three reasons only attachLiveEvents can know (its MIDI input
@@ -81,6 +84,12 @@
     <save-project path="../../build/test-output/live_skip_reasons/armed.qxp"/>
     <open-project path="../../build/test-output/live_skip_reasons/armed.qxp"/>
     <assert-log contains="is armed but not live: it was armed by loading the project" level="info"/>
+    <!-- QBX-300: the old project's heads left skipsChanged when their
+         tracks died. Before the fix the old master view's heads were still
+         wired, and the emit below read the freed track through them; the
+         open deletes the old project and nothing has shown the new one yet,
+         so the only right count is 0. -->
+    <assert-log level="debug" contains="[LIVE] skipsChanged reaches 0 listener(s)" minCount="1"/>
     <assert-track-head trackPath="0" contains="NOT MONITORED: it was armed by loading the project"/>
     <arm-track trackPath="0" armed="1"/>
     <assert-input-meter trackPath="0" contains="live=on"/>

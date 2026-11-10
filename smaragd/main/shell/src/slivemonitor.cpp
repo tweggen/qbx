@@ -1428,7 +1428,17 @@ void SLiveMonitor::reportSkips_()
     }
     const bool changed = ( next != skips_ );
     skips_.swap( next );
-    if( changed ) emit skipsChanged();
+    if( changed ) {
+        // QBX-300: WHO this reaches, counted and never dereferenced. Every
+        // listener is an arranger head, which reads its track through a
+        // reference; a head whose track has died must have left already. Read
+        // by live_skip_reasons right after open-project, where this emit runs
+        // after the old project is deleted and before anything shows the new
+        // one, so the only right count there is 0.
+        TW_LOGD( "shell", "[LIVE] skipsChanged reaches %d listener(s)",
+                 receivers( SIGNAL( skipsChanged() ) ) );
+        emit skipsChanged();
+    }
 }
 
 void SLiveMonitor::armedInSession( const SObject *track )
