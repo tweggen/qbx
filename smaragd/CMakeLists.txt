@@ -177,6 +177,39 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
+# --- the POISONED-HEAP variants (QBX-288) -----------------------------------
+#
+# A member the code reads before it writes passes every ordinary run, because a
+# fresh glibc heap is zero, and fails the moment the chunk is reused or the
+# allocator fills it: ENABLE_ASAN (which fills new blocks with 0xbe) turned
+# these four cases red with no sanitizer report, because STimeGridSpec's two
+# members were read by SMVActualView's constructor before SStdMixerView's had
+# set them. glibc's malloc.perturb=65 fills every new block with ~65 = 0xbe,
+# the same byte, in the NORMAL build; tcache_count=0 is needed with it, since
+# glibc's tcache fast path returns a block without perturbing it. Linux only:
+# the tunable is glibc's, and macOS's MallocPreScribble byte (0xaa) happens to
+# make this particular read round to an empty range, so it would gate nothing.
+# Under ENABLE_ASAN the tunable is inert (ASan owns malloc) and ASan's own fill
+# poisons instead. Cases are listed by hand: each is one whose assertion sees
+# what an uninitialised read paints or reports.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    foreach(_name transport_readout transport_readout_width_is_stable
+                  folder_sum_preview take_comp_backdrop)
+        if(TEST qxa.${_name})
+            add_test(NAME qxa.poisoned_heap.${_name}
+                COMMAND $<TARGET_FILE:smaragd>
+                        --test-case ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/${_name}.qxa
+                        --test-output-dir ${CMAKE_BINARY_DIR}/test-output/poisoned_heap.${_name}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
+            )
+            set_tests_properties(qxa.poisoned_heap.${_name} PROPERTIES
+                ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;GLIBC_TUNABLES=glibc.malloc.perturb=65:glibc.malloc.tcache_count=0"
+                TIMEOUT 600
+            )
+        endif()
+    endforeach()
+endif()
+
 # --- the cross-process determinism gate (proposal 37 P3c, AC1 + AC2c) --------
 #
 # The render-vs-render byte gate is a FRESH-PROCESS property (design F4), and a
@@ -331,8 +364,11 @@ endif()
 # They are NOT wall-clock tests: every verb waits for the panel to go idle
 # rather than sleeping, so RUN_SERIAL here is about the shared INI and nothing
 # else.
+# arrangement_arranger_gestures (QBX-243) drives media-browser-drag onto an
+# arrangement lane, so it owns and restores the same four keys.
 foreach(_media media_browser_browse media_browser_search
-                media_browser_drag_local media_browser_drag_belowlast)
+                media_browser_drag_local media_browser_drag_belowlast
+                arrangement_arranger_gestures)
     if(TEST qxa.${_media})
         set_tests_properties(qxa.${_media} PROPERTIES RUN_SERIAL TRUE)
     endif()

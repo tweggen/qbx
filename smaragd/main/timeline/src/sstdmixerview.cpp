@@ -801,8 +801,12 @@ void SStdMixerView::insertSampleFile_( STrack *track, const QString &filePath )
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *root = splacements::rootContainer( project );
+    // THIS VIEW'S OWN ROOT (QBX-243), never the master: in an arrangement tab
+    // the track lives in that arrangement, pathOf() against the master answers
+    // {} for it and the item did nothing at all. model_ is the root this view
+    // edits, and submitFor( this ) stamps the same root on the action, so the
+    // path and its root cannot come from two different trees.
+    SObject *root = model_;
     if( !root ) return;
 
     // pathOf() returns {} for "the root itself" as well as "not found", but a
@@ -818,7 +822,7 @@ void SStdMixerView::insertSampleFile_( STrack *track, const QString &filePath )
     // and not what QBX-209 is about, so the new case PINS the raw offset --
     // whoever changes it next will see the assertion and be making a decision
     // rather than a side effect.
-    stimeline::submitActive( new SAddSampleAction(
+    stimeline::submitFor( this, new SAddSampleAction(
         trackPath, filePath, qContent_->getLastClickOffset() ) );
 }
 
@@ -868,8 +872,8 @@ void SStdMixerView::ctAddLink()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *root = splacements::rootContainer( project );
+    // This view's own root, as insertSampleFile_ (QBX-243).
+    SObject *root = model_;
     if( !root ) return;
 
     // pathOf() returns {} for "the root itself" as well as "not found", but a
@@ -887,7 +891,7 @@ void SStdMixerView::ctAddLink()
     // command has always done. The reach is the OBJECT's duration rather than
     // the window's, also as before -- changing it is a behaviour change and not
     // what QBX-217 is about, so the new case pins the position it produces.
-    stimeline::submitActive( new SLinkClipAction(
+    stimeline::submitFor( this, new SLinkClipAction(
         clipPath, trackPath,
         oldLink->getStartTime() + oldLink->getSObject().getDuration() ) );
 }
@@ -909,8 +913,10 @@ void SStdMixerView::ctRemoveSample()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *root = splacements::rootContainer( project );
+    // This view's own root, as insertSampleFile_ (QBX-243). Delete on a clip
+    // in an arrangement tab used to resolve against the master, find nothing
+    // and return here: the primary clip-deletion gesture was dead there.
+    SObject *root = model_;
     if( !root ) return;
 
     // The lane as an index-path from the root mixer, so a track nested inside a
@@ -963,7 +969,7 @@ void SStdMixerView::ctRemoveSample()
     }
 
     // Submit the removal action (proper undo/redo support)
-    stimeline::submitActive(
+    stimeline::submitFor( this,
         new SRemoveSampleAction(trackPath, clipIdx, filePath, timePos)
     );
 }
@@ -994,8 +1000,8 @@ void SStdMixerView::ctNewMidiClip()
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return;
 
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *root = splacements::rootContainer( project );
+    // This view's own root, as insertSampleFile_ (QBX-243).
+    SObject *root = model_;
     if( !root ) return;
 
     // pathOf() returns {} for "the root itself" as well as "not found", but a
@@ -1007,7 +1013,7 @@ void SStdMixerView::ctNewMidiClip()
     const offset_t at = alignTime( qContent_->getLastClickOffset() );
     const qint64 twoBars = 2 * (qint64) project->tempoMap().barTicks();
 
-    stimeline::submitActive(
+    stimeline::submitFor( this,
         new SInsertMidiClipAction( trackPath, at, twoBars, QString() ) );
 }
 
@@ -1029,7 +1035,10 @@ void SStdMixerView::ctSplitSample()
     offset_t splitTime = qContent_ ? qContent_->localLocatorPos()
                                    : app.getGlobalLocatorPos();
 
-    QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    // THIS VIEW'S selection, as paths from THIS VIEW'S root (QBX-243). The
+    // bare getCurrentSelectionPaths() converts against the master, so in an
+    // arrangement tab every selected clip dropped out of it.
+    QList<QList<int>> paths = app.getCurrentSelectionPathsFor( rootName() );
     if( paths.isEmpty() ) {
         STrack *track = qContent_->getLastClickTrack();
         SLink  *link  = qContent_->getLastClickSLink();
@@ -1051,8 +1060,10 @@ void SStdMixerView::ctSplitSample()
     // margin on each side matches SSplitClipAction::apply's own guard against
     // a zero/negligible-length remainder, so a clip that passes here is one
     // the action will actually accept.
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = splacements::rootContainer( project );
+    //
+    // Resolved in THIS view's root, the tree the paths above are relative to
+    // (QBX-243); against the master no target resolved in an arrangement tab.
+    SObject *mixer = model_;
     SCompositeAction *composite = new SCompositeAction;
     int nTargets = 0;
     for( const QList<int> &p : paths ) {
@@ -1070,7 +1081,7 @@ void SStdMixerView::ctSplitSample()
         return;
     }
     qContent_->resetLastClickSLink();   // any split link may be replaced
-    stimeline::submitActive( composite );
+    stimeline::submitFor( this, composite );
     qContent_->update();
 }
 
@@ -1129,9 +1140,10 @@ bool SStdMixerView::takeIsolateOffered( const QList<int> &clipPath,
                                         int takeRow ) const
 {
     if( clipPath.isEmpty() || takeRow < 0 ) return false;
-    SProject *project = SApplication::app().getCurrentProject();
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = project ? splacements::rootContainer( project ) : nullptr;
+    // The column is addressed from THIS view's root (QBX-243): the take-lane
+    // menu and isolateTakeGesture() both hand a path in the tree this view
+    // edits, and resolving it in the master offered nothing in an arrangement.
+    SObject *mixer = model_;
     SLink *link = mixer ? splacements::placementAt( mixer, clipPath ) : nullptr;
     STakeStack *stack = link ? stakes::columnOfLink( link ) : nullptr;
     if( !stack || takeRow >= stack->nTakes() ) return false;
@@ -1155,7 +1167,7 @@ bool SStdMixerView::isolateTakeGesture( const QList<int> &clipPath,
                  qPrintable( strackpath::pathToString( clipPath ) ) );
         return false;
     }
-    stimeline::submitActive(
+    stimeline::submitFor( this,
         new SSelectTakeAction( clipPath, takeRow, /*broadcast*/ true,
                                /*newest*/ false, /*whole*/ true ) );
     TW_LOGI( "ui.timeline", "isolate-take: take %d of %s now sounds alone",
@@ -1169,8 +1181,9 @@ int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return 0;
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = splacements::rootContainer( project );
+    // THIS view's root (QBX-243): the columns, the preview and the sweep are
+    // all about the tree this view edits, never the master's.
+    SObject *mixer = model_;
     if( !mixer ) return 0;
 
     // ---- WHICH COLUMNS, and what to call that in the dialog --------------
@@ -1207,7 +1220,8 @@ int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
         // not be turned into a project-wide sweep by accident, which is why
         // the emptiness of `paths` and the emptiness of `columns` are
         // different answers below.
-        const QList<QList<int>> paths = app.getCurrentSelectionPaths();
+        const QList<QList<int>> paths =
+            app.getCurrentSelectionPathsFor( rootName() );
         for( const QList<int> &p : paths ) {
             SLink *lk = splacements::placementAt( mixer, p );
             if( !lk || lk->getSObject().isLane() ) continue;
@@ -1239,7 +1253,7 @@ int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
     // does, and the sweep recomputes its plan when it runs -- the preview is
     // the question, not the contract.
     const scleanuptakes::Plan preview =
-        scleanuptakes::plan( project, QString(),
+        scleanuptakes::plan( project, rootName(),
                              QStringLiteral( "project" ), clips, false );
 
     SCleanupTakesDialog::Summary summary;
@@ -1302,7 +1316,7 @@ int SStdMixerView::cleanupTakesGesture( CleanupScope scope,
     // submitActive() returns.
     SCleanupTakesAction::Report report;
     act->reportTo( &report );
-    stimeline::submitActive( act );
+    stimeline::submitFor( this, act );
     act = nullptr;
     const int removed = report.removedTakes;
     TW_LOGI( "ui.timeline",
@@ -1428,8 +1442,9 @@ void SStdMixerView::nudgeClipPitch( double cents )
     };
 
     // Targets: the selection, or — when nothing is selected — the clip the
-    // user last clicked (what S / Delete already act on).
-    QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    // user last clicked (what S / Delete already act on). THIS view's
+    // selection, relative to THIS view's root (QBX-243), as ctSplitSample.
+    QList<QList<int>> paths = app.getCurrentSelectionPathsFor( rootName() );
     if( paths.isEmpty() ) {
         STrack *track = qContent_->getLastClickTrack();
         SLink  *link  = qContent_->getLastClickSLink();
@@ -1446,8 +1461,7 @@ void SStdMixerView::nudgeClipPitch( double cents )
 
     // Each clip gets its own ABSOLUTE target, so a nudge over a mixed
     // selection preserves the intervals between the clips.
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = model_;
     SCompositeAction *composite = new SCompositeAction;
     double lastCents = 0.0;
     int nTargets = 0;
@@ -1476,7 +1490,7 @@ void SStdMixerView::nudgeClipPitch( double cents )
         return;
     }
 
-    stimeline::submitActive( composite );
+    stimeline::submitFor( this, composite );
 
     QString msg = ( nTargets == 1 )
         ? QString( "Clip pitch: %1%2 cents (%3%4 st)" )
@@ -3089,9 +3103,14 @@ void SMVActualView::drawTakeLane( QPainter &p, const STrackRow &row,
     // and they agree by calling one function rather than by both being grey.
     int colorIndex = row.track->colorIndex();
     if( colorIndex < 0 ) {
-        SProject *proj = SAppContext::get().getCurrentProject();
-        // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-        SObject *croot = proj ? proj->masterRoot() : nullptr;
+        // THE ROOT THIS VIEW EDITS, which is the root holding every row's
+        // track (QBX-243). The auto index is the lane's position WITHIN its
+        // root: against the master an arrangement lane is not found at all,
+        // the miss answers 0, and every take lane in an arrangement tab was
+        // painted the first lane's colour -- while the composite lane above
+        // and assert-take-lane's classifier (sClipBodyOf, rootHolding) index
+        // it correctly.
+        SObject *croot = smv_.getModel();
         colorIndex = croot
             ? sclipcolors::autoIndexForLane( *croot, *row.track ) : 0;
     }
@@ -5216,6 +5235,17 @@ void SStdMixerView::onArrangementChangedRows()
     qContent_->update();
 }
 
+QAction *SStdMixerView::pitchActionFor( int cents ) const
+{
+    switch( cents ) {
+    case  100: return actPitchUp_;
+    case -100: return actPitchDown_;
+    case   10: return actPitchUpFine_;
+    case  -10: return actPitchDownFine_;
+    default:   return nullptr;
+    }
+}
+
 QString SStdMixerView::rootName() const
 {
     if( !model_ ) return QString();
@@ -6917,9 +6947,10 @@ void SMVActualView::dropEvent(QDropEvent *e)
         return;
     }
 
-    // Resolve the track's path from the root mixer.
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *root = splacements::rootContainer(project);
+    // Resolve the track's path from THIS VIEW'S root (QBX-243): a drop onto
+    // an arrangement tab's lane resolved against the master, found nothing and
+    // was refused below. The submits stamp the same root (submitFor).
+    SObject *root = smv_.getModel();
     if (!root || !root->isPathContainer()) {
         return;
     }
@@ -6959,7 +6990,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
             update();
             return;
         }
-        stimeline::submitActive(new SPlaceAssetAction(assetName, trackPath, timePos));
+        stimeline::submitFor(&smv_, new SPlaceAssetAction(assetName, trackPath, timePos));
     } else if (payload.startsWith(QStringLiteral("file:"))) {
         QString filePath = payload.mid(5);
         // For file drops, use SAddSampleAction (same as Insert Sample dialog).
@@ -6967,7 +6998,7 @@ void SMVActualView::dropEvent(QDropEvent *e)
         // drop onto a track nested in a folder lands too. This was
         // mixer->indexOfChildObject(), which only sees top-level children and
         // made a drop onto a grouped lane a silent no-op.
-        stimeline::submitActive(new SAddSampleAction(trackPath, filePath, timePos));
+        stimeline::submitFor(&smv_, new SAddSampleAction(trackPath, filePath, timePos));
     } else if (payload.startsWith(QStringLiteral("media:"))) {
         // A REMOTE row out of the media browser (proposal 38 §B.5). Everything
         // under this line is app/media's: get a local path, then submit the

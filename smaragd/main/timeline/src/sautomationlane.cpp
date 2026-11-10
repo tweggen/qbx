@@ -684,12 +684,12 @@ bool SAutomationLaneUi::tkDrag( const QList<int> &ownerPath, const QString &targ
         QList<int> trackPath = ownerPath;
         if( trackPath.isEmpty() ) return false;
         trackPath.removeLast();
-        SLink *link = splacements::placementAt(
-            // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-            splacements::rootContainer( proj ), ownerPath );
+        // In THIS view's root, the tree `ownerPath` is relative to and the one
+        // resolveOwner() above was asked about (QBX-243). Against the master a
+        // clip in an arrangement tab resolved to nothing and the drag refused.
+        SLink *link = splacements::placementAt( mixer, ownerPath );
         STrack *track = dynamic_cast<STrack *>(
-            // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-            splacements::laneAt( splacements::rootContainer( proj ), trackPath ) );
+            splacements::laneAt( mixer, trackPath ) );
         if( !link || !track ) return false;
         rowIdx = view_.rowIndexOfTrack( track );
         base = link->getStartTime();

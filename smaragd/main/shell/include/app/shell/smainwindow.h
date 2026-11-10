@@ -260,6 +260,17 @@ public:
     // locator, or (selection empty) the last-clicked clip.
     bool splitSelectionGesture();
 
+    // TEST ENTRY POINT (QBX-243): the arranger's clip-transpose keys ("+",
+    // "-", Shift for 10 cents), by TRIGGERING the active arranger's own
+    // QAction for that step -- the object the key sequence is bound to -- so
+    // the slot, the target resolution and the submit are production code.
+    // `cents` must be one of +100, -100, +10, -10; anything else is refused.
+    bool nudgeClipPitchGesture( int cents );
+
+    // TEST SEAM (QBX-243): SClipPropertiesPanel::describe() on the dock's own
+    // panel, refreshed first. Empty when there is no panel.
+    QString describeClipProperties();
+
     /**
      * TEST ENTRY POINT and the MENU's own route: the clean-up sweep's gesture
      * (plan 53 §6.3, QBX-195).
