@@ -189,6 +189,13 @@ SApplyResult SCleanupTakesAction::apply( SProject *project )
     }
 
     SCompositeAction *macro = new SCompositeAction;
+    // THE PLAN'S ROOT, on the macro (QBX-243). The plan's paths are relative to
+    // pathRoot_, and SCompositeAction::apply hands its own root to every child
+    // that has none -- so without this line each `remove-take` resolved its
+    // path in the MASTER. Measured from an arrangement tab: the sweep reported
+    // "removed 1 take(s)", the first child failed on the master's clip of the
+    // same index, the whole macro rolled back and the gesture was refused.
+    macro->setPathRoot( pathRoot_ );
     for( const auto &col : p.perColumn ) {
         // HIGHEST INDEX FIRST, so each removal leaves the lower indices -- and
         // therefore every index still queued -- meaning what it meant when the

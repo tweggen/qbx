@@ -4308,6 +4308,28 @@ bool SMainWindow::splitSelectionGesture()
     return true;
 }
 
+bool SMainWindow::nudgeClipPitchGesture( int cents )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    QAction *a = v->pitchActionFor( cents );
+    if( !a ) {
+        TW_LOGW( "ui.shell", "nudge-clip-pitch: no transpose key for %d cents "
+                 "(the keys are +100, -100, +10 and -10)", cents );
+        return false;
+    }
+    // trigger() emits whatever the enabled state (QBX-209 S4's lesson), so a
+    // disabled key is refused here as the shortcut map would refuse it.
+    if( !a->isEnabled() ) return false;
+    a->trigger();
+    return true;
+}
+
+QString SMainWindow::describeClipProperties()
+{
+    return clipPropsPanel_ ? clipPropsPanel_->describe() : QString();
+}
+
 // Build the REAL head off screen at the given lane geometry. Parentless and
 // never shown, so no native window appears (a qxa run on Windows uses the real
 // platform plugin). resize() runs the real updateLayout()/applyDensity(), which

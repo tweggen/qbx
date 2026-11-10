@@ -1,6 +1,8 @@
 #ifndef SCLICKLANEACTION_H
 #define SCLICKLANEACTION_H
 
+#include <QStringList>
+
 #include "app/actions/saction.h"
 #include "tw/core/twtypes.h"
 #include <QString>
@@ -247,6 +249,43 @@ public:
     SApplyResult apply( SProject *project ) override;
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
+};
+
+// nudge-clip-pitch (QBX-243) — the arranger's clip-transpose KEYS ("+", "-",
+// Shift for 10 cents), run by triggering the active arranger's own QAction for
+// that step, the object the key sequence is bound to. `cents` = "100" (one of
+// 100, -100, 10, -10; anything else is REFUSED). Transposes every selected clip
+// of the ACTIVE tab's root, or the last-clicked clip when nothing is selected,
+// as ONE undo step (the gesture's own composite of `set-pitch`). Not undoable
+// itself.
+class SNudgeClipPitchAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "nudge-clip-pitch" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override
+        { return { QStringLiteral( "cents" ) }; }
+private:
+    int cents_ = 100;
+};
+
+// assert-clip-properties (QBX-243) — `contains` / `absent` against the clip
+// properties dock's SClipPropertiesPanel::describe(), refreshed first:
+//   page=<none|audio|midi>|clips=<n>|midiClips=<n>|name=<text>|midiName=<text>
+//   |autoFade=<status line>|pitch=<cents>
+// read off the panel's own widgets. Read-only.
+class SAssertClipPropertiesAction : public SAction {
+public:
+    QString name() const override { return QStringLiteral( "assert-clip-properties" ); }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override
+        { return { QStringLiteral( "contains" ), QStringLiteral( "absent" ) }; }
+private:
+    QString contains_;
+    QString absent_;
 };
 
 #endif  // SCLICKLANEACTION_H

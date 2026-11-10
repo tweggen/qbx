@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-243: THE ARRANGER'S OWN GESTURES, AND THE DOCKS THAT ACT THROUGH IT, WORK
+  INSIDE AN ARRANGEMENT TAB.
+
+  Fifteen sites resolved splacements::rootContainer( project ), which is the
+  MASTER unconditionally, while the view they serve edits an arrangement. The
+  measured shape of the defect (QBX-231's precedent) is a DEAD CONTROL, not a
+  wrong edit: the path of an arrangement track resolves to nothing against the
+  master and the handler returns. No crash and no log line. Every section below
+  drives one gesture with the Drums tab ACTIVE and asserts its EFFECT inside
+  Drums, through the same seam a user's click reaches.
+
+  THE SHAPE, and why each part is there.
+
+    master   0  MasterLane, one clip at 300000 (NOT at 0, on purpose)
+             1  the Drums placement lane extract-arrangement leaves behind
+    Drums    0  the extracted lane, one clip at 0 (192000 frames)
+             1  a take column: the user's clip plus one partial recorded take
+             2  empty, the lane the clip gestures build on
+
+  The master's clip is at 300000 so that a BARE path resolved in the wrong
+  tree finds a real clip that does NOT contain the split position. That is the
+  silent half of the class (check_root_resolution.py's header): index 0,0
+  exists in every root, so a split whose extent check read the master would
+  quietly decline rather than fail to resolve.
+
+  Drums is PLACED in the master (extract-arrangement, placeAt 0, window range)
+  only for section 6: "split at the playhead" in a tab splits at THAT tab's
+  derived position (proposal 09 §15), and an unplaced arrangement rests at 0,
+  where nothing can be split.
+
+  WHAT EACH SECTION GATES (the sabotage record is in the PR for QBX-243):
+
+    1  insertSampleFile_       arranger-menu insert-sample
+    2  ctAddLink               arranger-menu add-link
+    3  ctRemoveSample          arranger-menu "Remove sample" (the Delete key)
+    4  ctNewMidiClip           arranger-menu new-midi-clip
+    5  collectMidiClips        assert-clip-properties over a MIDI clip
+    6  ctSplitSample           split-selection at the tab's own playhead
+    7  collectClips and refreshAutoFadeStatus
+                               assert-clip-properties over the split's tail,
+                               whose start is a SEAMLESS join
+    8  nudgeClipPitch          nudge-clip-pitch, read back through the dock
+    9  dropEvent               media-browser-drag onto a Drums lane
+   10  drawTakeLane            assert-take-lane on Drums:1, whose auto colour
+                               index is 1 IN DRUMS and is not found at all in
+                               the master (a miss answers 0)
+   11  takeIsolateOffered      isolate-take-gesture
+   12  cleanupTakesGesture     cleanup-takes-gesture over the Drums selection
+   13  SAutomationLaneUi::tkDrag
+                               drag-automation-point on a Drums clip envelope
+
+  Section 10 is the only DISPLAY site. It is gated on pixels because a colour
+  is only visible there: assert-take-lane classifies the lane on the body
+  colour sClipBodyOf() derives from the root HOLDING the track, so a take lane
+  painted with the master's answer has no body pixel the classifier knows.
+-->
+<SActionScript version="1" name="arrangement_arranger_gestures">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="300000"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <assert-arrangements names="Drums" trackCounts="3"/>
+
+    <!-- Drums:1, the take column for sections 10 to 12. Take 1 covers only the
+         column's second half, so it is a take the column can ISOLATE; its
+         name is a recorded take's stamp, so the sweep may remove it. -->
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-take clip="Drums:1,0" filePath="../test_sawtooth.wav" startOffset="0"
+              index="-1" activate="0" at="96000" length="96000"/>
+    <set-clip-name clip="Drums:1,0" take="1" name="Take 1 · 12:00"
+                   broadcast="0"/>
+    <assert-take-column clip="Drums:1,0" shape="direct" takes="2"
+                        activeTake="0"/>
+
+    <open-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+
+    <!-- ===== 1. INSERT SAMPLE places on the Drums lane ================= -->
+    <queue-sample-file path="../test_sawtooth.wav"/>
+    <arranger-menu trackPath="2" at="0" item="insert-sample"/>
+    <assert-clip-window clip="Drums:2,0" startTime="0" duration="192000"/>
+
+    <!-- ===== 2. ADD LINK places a second placement after it ============ -->
+    <arranger-menu trackPath="2" at="1000" clip="0" item="add-link"/>
+    <assert-clip-window clip="Drums:2,1" startTime="192000" duration="192000"/>
+
+    <!-- ===== 3. REMOVE SAMPLE takes that placement away ================= -->
+    <arranger-menu trackPath="2" at="200000" clip="1" item="Remove sample"/>
+    <assert-clip-window clip="Drums:2,1" expectReject="true"/>
+    <assert-clip-window clip="Drums:2,0" startTime="0" duration="192000"/>
+
+    <!-- ===== 4. NEW MIDI CLIP, two bars at the (bar-aligned) click ======= -->
+    <arranger-menu trackPath="2" at="384000" item="new-midi-clip"/>
+    <assert-clip-window clip="Drums:2,1" startTime="384000" duration="192000"/>
+
+    <!-- ===== 5. THE DOCK'S MIDI PAGE sees that clip ===================== -->
+    <set-selection paths="Drums:2,1"/>
+    <assert-clip-properties contains="page=midi|clips=0|midiClips=1|"/>
+
+    <!-- ===== 6. SPLIT at the Drums tab's own playhead ===================
+         The master locator at 96000 is Drums frame 96000 (placed at 0). -->
+    <set-property key="autoFadeMs" value="[3.0]"/>
+    <set-locator position="96000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="96000"/>
+    <set-selection paths="Drums:0,0"/>
+    <split-selection/>
+    <assert-clip-window clip="Drums:0,0" startTime="0" duration="96000"/>
+    <assert-clip-window clip="Drums:0,1" startTime="96000" duration="96000"/>
+
+    <!-- ===== 7. THE DOCK'S AUDIO PAGE sees the tail, and its seam =======
+         The tail's start is the split's own join: same content, same
+         scaling, source positions meeting exactly, so it is EXEMPT from the
+         auto-fade, and the status line says so. Read in the wrong root, the
+         lane path names the MASTER's lane 0, whose seams know nothing of
+         this clip. -->
+    <set-clip-name clip="Drums:0,1" name="DrumTail"/>
+    <set-selection paths="Drums:0,1"/>
+    <assert-clip-properties contains="page=audio|clips=1|midiClips=0|name=DrumTail|"/>
+    <assert-clip-properties contains="start exempt: seamless join"/>
+
+    <!-- ===== 8. TRANSPOSE ("+") the selected Drums clip ================ -->
+    <set-selection paths="Drums:2,0"/>
+    <assert-clip-properties contains="|pitch=0"/>
+    <nudge-clip-pitch cents="100"/>
+    <assert-clip-properties contains="clips=1|"/>
+    <assert-clip-properties contains="|pitch=100"/>
+
+    <!-- ===== 9. A MEDIA-BROWSER DROP onto a Drums lane ================== -->
+    <media-browser-filter categories="audio"/>
+    <set-option key="media/lastPath/local" value="../media/lib"/>
+    <media-browser-source sourceId="local"/>
+    <media-browser-drag name="kick.wav" trackPath="2" timePos="576000"/>
+    <assert-clip-window clip="Drums:2,2" startTime="576000" duration="192000"/>
+    <set-option key="media/lastSourceId" value="local"/>
+    <set-option key="media/lastPath/local" value=""/>
+    <set-option key="media/categoryMask" value="1"/>
+    <set-option key="media/searchRecursive" value="false"/>
+
+    <!-- ===== 10. THE TAKE LANE is painted in Drums:1's OWN colour =======
+         Row 1 of the Drums view is Drums:1's lane. -->
+    <clear-selection/>
+    <set-lane-view toggleTakesRow="1"/>
+    <grid-disable/>
+    <assert-take-lane trackPath="1" takeRow="0"
+                      grabWidth="900" grabHeight="600"
+                      minWaveMeanPct="1"/>
+
+    <!-- ===== 11. HEAR ONE TAKE ALONE, on the Drums column =============== -->
+    <isolate-take-gesture clip="1,0" take="1"/>
+    <assert-take-column clip="Drums:1,0" comp="" activeTake="1"/>
+    <assert-take-column clip="Drums:1,0" takeAtPos="95999" expectTake="-1"/>
+    <undo count="1"/>
+    <assert-take-column clip="Drums:1,0" activeTake="0"/>
+
+    <!-- ===== 12. CLEAN UP TAKES over the Drums selection ================ -->
+    <set-selection paths="Drums:1,0"/>
+    <cleanup-takes-gesture scope="selection" answer="yes" expectRemoved="1"/>
+    <assert-take-column clip="Drums:1,0" shape="none"/>
+    <undo count="1"/>
+    <assert-take-column clip="Drums:1,0" shape="direct" takes="2"/>
+
+    <!-- ===== 13. A CLIP-ENVELOPE DRAG on a Drums clip ==================== -->
+    <set-lane-view trackHeight="200" clipEnvelopes="1"/>
+    <drag-automation-point owner="2,0" target="cut:Gain"
+                           time="48000" value="0.5"/>
+    <assert-automation-value owner="Drums:2,0" target="cut:Gain"
+                             time="48000" value="0.5" tolerance="0.02"
+                             pointCount="1"/>
+    <set-lane-view clipEnvelopes="0"/>
+
+    <!-- ===== THE MASTER WAS NOT TOUCHED by any of it ==================== -->
+    <assert-clip-window clip="0,0" startTime="300000" duration="192000"/>
+    <assert-clip-window clip="0,1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+    <assert-track-count root="Drums" equals="3"/>
+  </assertions>
+
+</SActionScript>
