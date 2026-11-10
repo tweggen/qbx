@@ -178,7 +178,18 @@ void SViewTabs::onRootDestroyed( QObject *obj )
 {
     // QPointer has already nulled the entry, so match on the raw pointer value
     // -- obj is mid-destruction and must not be dereferenced.
-    for( int i = entries_.size() - 1; i >= 1; --i ) {
+    //
+    // THE MASTER TOO (QBX-300). "Never the master" is the rule for a CLOSE the
+    // user asks for (onTabCloseRequested); a master root that DIES takes its
+    // view with it like any other. Stopping at index 1 left tab 0 holding an
+    // SStdMixerView of a freed SStdMixer: SMainWindow::closeProject() detaches
+    // the whole shell first, so a window that closes its own project never saw
+    // it, but open-project and close-project delete the project under a shell
+    // the window keeps, and ensureArranger_() went on answering that view --
+    // describeTrackHead's v->rootName() read the freed mixer. With the entry
+    // gone, masterEditor() is null and ensureArranger_() installs the next
+    // project's editor, which is what a window opening a project does.
+    for( int i = entries_.size() - 1; i >= 0; --i ) {
         if( entries_.at( i ).root.isNull()
             || entries_.at( i ).root.data() == static_cast<SObject *>( obj ) ) {
             QWidget *editor = entries_.at( i ).editor;

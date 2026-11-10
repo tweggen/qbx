@@ -177,7 +177,7 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
-# --- the POISONED-HEAP variants (QBX-288) -----------------------------------
+# --- the POISONED-HEAP variants (QBX-288, QBX-300) -------------------------
 #
 # A member the code reads before it writes passes every ordinary run, because a
 # fresh glibc heap is zero, and fails the moment the chunk is reused or the
@@ -191,10 +191,15 @@ endforeach()
 # make this particular read round to an empty range, so it would gate nothing.
 # Under ENABLE_ASAN the tunable is inert (ASan owns malloc) and ASan's own fill
 # poisons instead. Cases are listed by hand: each is one whose assertion sees
-# what an uninitialised read paints or reports.
+# what an uninitialised read paints or reports, or a read of FREED memory
+# turns into a crash (the perturb fills freed blocks too):
+#   live_skip_reasons  QBX-300: open-project deleted the old project under the
+#                      window's master view; that view's heads stayed wired to
+#                      SLiveMonitor::skipsChanged and read the freed STrack.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     foreach(_name transport_readout transport_readout_width_is_stable
-                  folder_sum_preview take_comp_backdrop)
+                  folder_sum_preview take_comp_backdrop
+                  live_skip_reasons)
         if(TEST qxa.${_name})
             add_test(NAME qxa.poisoned_heap.${_name}
                 COMMAND $<TARGET_FILE:smaragd>
@@ -205,6 +210,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             set_tests_properties(qxa.poisoned_heap.${_name} PROPERTIES
                 ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;GLIBC_TUNABLES=glibc.malloc.perturb=65:glibc.malloc.tcache_count=0"
                 TIMEOUT 600
+            )
+            # The variant runs the SAME script, so any path the script spells
+            # itself (live_skip_reasons saves and reopens
+            # build/test-output/live_skip_reasons/armed.qxp) is shared with the
+            # plain case: under ctest -j the two must not overlap.
+            set_tests_properties(qxa.${_name} qxa.poisoned_heap.${_name} PROPERTIES
+                RESOURCE_LOCK qxa_script_${_name}
             )
         endif()
     endforeach()

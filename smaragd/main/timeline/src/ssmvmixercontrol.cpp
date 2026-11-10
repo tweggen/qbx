@@ -960,15 +960,27 @@ SSMVMixerControl::SSMVMixerControl(
     // Metering: one app-wide tick drives every meter (proposal 34). Connecting
     // per head is deliberate — heads are deleteLater()'d on every
     // refreshTrackTree(), so the connections drop themselves.
-    QObject::connect( &SApplication::app(), &SApplication::meterTick,
-                      this, &SSMVMixerControl::onMeterTick );
-    QObject::connect( &SApplication::app(), &SApplication::meterReset,
-                      qMeter_, &SLevelMeter::resetMeter );
+    outlivingConnections_ << QObject::connect(
+        &SApplication::app(), &SApplication::meterTick,
+        this, &SSMVMixerControl::onMeterTick );
+    outlivingConnections_ << QObject::connect(
+        &SApplication::app(), &SApplication::meterReset,
+        qMeter_, &SLevelMeter::resetMeter );
     // QBX-292: the tooltip names why an armed track is not live, and that
     // reason moves with the transport and the arm, not with this head.
     if( SLiveMonitor *mon = SApplication::app().liveMonitor() )
-        QObject::connect( mon, &SLiveMonitor::skipsChanged,
-                          this, &SSMVMixerControl::refreshArmTooltip_ );
+        outlivingConnections_ << QObject::connect(
+            mon, &SLiveMonitor::skipsChanged,
+            this, &SSMVMixerControl::refreshArmTooltip_ );
+    // QBX-300: and those three go when the TRACK goes, not when this head
+    // does (see outlivingConnections_). Measured before this: open-project
+    // deleted the old project, the next setCurrentProject's reportSkips_()
+    // emitted skipsChanged, and a head of the old master view read the freed
+    // STrack in armTooltipText_ (ASan: freed by ~SProject, allocated by
+    // SAddTrackAction::apply). The handler reads nothing of the track: when
+    // destroyed() is emitted, ~STrack has already run.
+    QObject::connect( &tk_, &QObject::destroyed,
+                      this, &SSMVMixerControl::onTrackDestroyed_ );
 
     QObject::connect( qVolume_, SIGNAL( valueChanged( int ) ),
                       this, SLOT( sliderValueChanged( int ) ) );
@@ -1279,6 +1291,13 @@ void SSMVMixerControl::setMonitorMode_( STrack::MonitorMode mode )
     }
     if( macro ) stack->endMacro();
     refreshArmTooltip_();
+}
+
+void SSMVMixerControl::onTrackDestroyed_()
+{
+    for( const QMetaObject::Connection &c : outlivingConnections_ )
+        QObject::disconnect( c );
+    outlivingConnections_.clear();
 }
 
 // The tooltip is where the live state is ANNOUNCED, including the one failure a

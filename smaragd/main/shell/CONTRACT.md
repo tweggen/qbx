@@ -2582,3 +2582,34 @@ and refusing visibly.
 - NOT GATED either: the master-shape refusal (`masterShapeRefusesMonitoring`)
   still applies to an arrangement-only lane, which is conservative; recording
   into an arrangement is QBX-247 and unchanged.
+
+## inv. 72 — a view does not outlive the model it shows, and a RETIRED view hears nothing (QBX-300)
+
+**A root that dies takes its tab with it, the master's included.**
+`SViewTabs::onRootDestroyed` used to stop at index 1, reading "the master is
+never closed" (a rule for the user's close button) as "the master editor never
+goes". `closeProject()` detaches the whole shell before it deletes the project,
+so the window's own close never met it; `open-project` and `close-project`
+delete the project under a shell the window keeps, and `ensureArranger_()`
+went on answering an `SStdMixerView` of the freed mixer.
+
+**A head cuts its connections from senders that outlive the project when its
+TRACK is destroyed** (`SSMVMixerControl::outlivingConnections_`: the meter
+tick, the meter reset, `SLiveMonitor::skipsChanged`). Heads and views are
+retired with `deleteLater()` and the project is deleted synchronously (a
+`--test-case` run may not deliver the deferred delete for the rest of the run
+at all). So between a project's delete and the retired head's
+own, the head holds a reference to a freed `STrack`; the next app-wide signal
+read it (`armTooltipText_`, from `reportSkips_()` in the next
+`setCurrentProject`).
+
+- GATED: `live_skip_reasons` section F asserts that open-project's
+  `skipsChanged` emit reaches **0** listeners (a debug log line counting
+  `receivers()`, never dereferencing one) — red without the head half on an
+  ordinary heap. `qxa.poisoned_heap.live_skip_reasons` (Linux, glibc perturb)
+  turns the master-tab half red: `describeTrackHead`'s `rootName()` on the
+  freed mixer.
+- NOT DONE: `SStdMixerView` itself keeps two `SApplication` connections and
+  one `SSettings` connection to its content after its model dies; no case
+  reaches one between the model's death and the view's deferred delete, and
+  ASan over the five open/close-project cases is clean.
