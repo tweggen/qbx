@@ -364,8 +364,11 @@ endif()
 # They are NOT wall-clock tests: every verb waits for the panel to go idle
 # rather than sleeping, so RUN_SERIAL here is about the shared INI and nothing
 # else.
+# arrangement_arranger_gestures (QBX-243) drives media-browser-drag onto an
+# arrangement lane, so it owns and restores the same four keys.
 foreach(_media media_browser_browse media_browser_search
-                media_browser_drag_local media_browser_drag_belowlast)
+                media_browser_drag_local media_browser_drag_belowlast
+                arrangement_arranger_gestures)
     if(TEST qxa.${_media})
         set_tests_properties(qxa.${_media} PROPERTIES RUN_SERIAL TRUE)
     endif()

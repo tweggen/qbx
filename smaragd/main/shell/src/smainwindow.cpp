@@ -4281,8 +4281,19 @@ bool SMainWindow::isolateTakeGesture( const QString &clipRef, int takeRow )
         TW_LOGW( "ui.shell", "isolate-take: no arranger" );
         return false;
     }
-    return v->isolateTakeGesture( strackpath::stringToPath( clipRef ),
-                                  takeRow );
+    // ROOT-QUALIFIED (QBX-243): "Drums:1,0" names the column in Drums. The
+    // gesture runs on the ACTIVE arranger, so a qualifier naming any other
+    // root is refused rather than resolved in the wrong tree; a bare path
+    // means the active tab's root, as everywhere else in these seams. The
+    // bare parse this replaces failed closed on a qualified path.
+    const strackpath::QualifiedPath q = strackpath::parseQualified( clipRef );
+    if( !q.root.isEmpty() && q.root != v->rootName() ) {
+        TW_LOGW( "ui.shell", "isolate-take: %s names a root the active tab "
+                 "(\"%s\") does not edit", qPrintable( clipRef ),
+                 qPrintable( v->rootName() ) );
+        return false;
+    }
+    return v->isolateTakeGesture( q.idx, takeRow );
 }
 
 int SMainWindow::cleanupTakesGesture( bool tracksScope, bool scripted,
@@ -4306,6 +4317,28 @@ bool SMainWindow::splitSelectionGesture()
     if( !v ) return false;
     v->ctSplitSample();
     return true;
+}
+
+bool SMainWindow::nudgeClipPitchGesture( int cents )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v ) return false;
+    QAction *a = v->pitchActionFor( cents );
+    if( !a ) {
+        TW_LOGW( "ui.shell", "nudge-clip-pitch: no transpose key for %d cents "
+                 "(the keys are +100, -100, +10 and -10)", cents );
+        return false;
+    }
+    // trigger() emits whatever the enabled state (QBX-209 S4's lesson), so a
+    // disabled key is refused here as the shortcut map would refuse it.
+    if( !a->isEnabled() ) return false;
+    a->trigger();
+    return true;
+}
+
+QString SMainWindow::describeClipProperties()
+{
+    return clipPropsPanel_ ? clipPropsPanel_->describe() : QString();
 }
 
 // Build the REAL head off screen at the given lane geometry. Parentless and

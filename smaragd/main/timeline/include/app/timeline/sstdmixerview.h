@@ -636,6 +636,12 @@ public:
      */
     QString rootName() const;
 
+    /// TEST SEAM (QBX-243): the clip-transpose QAction bound to the key for a
+    /// step of `cents` (+100 "+", -100 "-", +10 Shift++, -10 Shift+-), or null
+    /// for any other step. The ACTION, not the slot, so a seam that triggers
+    /// it runs exactly the connection a keypress runs.
+    QAction *pitchActionFor( int cents ) const;
+
     STimeGridSpec getTimeGridSpec() const { return timeGridSpec_; }
 
     // The time-axis canvas. Exposed for the SHELL only (proposal 37 P4): the

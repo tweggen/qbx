@@ -684,14 +684,19 @@ QList<SClipPropertiesPanel::ClipRef> SClipPropertiesPanel::collectClips() const
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return out;
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = splacements::rootContainer( project );
+    // THE ACTIVE TAB'S ROOT, and its selection (QBX-243). The panel shows the
+    // app-wide selection, which proposal 09 §3 makes the ACTIVE root's list;
+    // its paths have to be taken relative to that same root, and resolved in
+    // it. The master spelling answered nothing in an arrangement tab, so the
+    // panel read "no clip selected" over a selected clip.
+    const QString rootName = app.activeSelectionRoot();
+    SObject *mixer = splacements::rootNamed( project, rootName );
     if( !mixer ) return out;
 
     // Paths, not the cached SLink list, are the authority: a path is re-resolved
     // against the live tree on every call, so a link destroyed since the last
     // refresh simply drops out instead of dangling.
-    const QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    const QList<QList<int>> paths = app.getCurrentSelectionPathsFor( rootName );
     for( const QList<int> &p : paths ) {
         SLink *link = splacements::placementAt( mixer, p );
         if( !link ) continue;
@@ -717,6 +722,26 @@ QList<SClipPropertiesPanel::ClipRef> SClipPropertiesPanel::collectClips() const
         out.append( ref );
     }
     return out;
+}
+
+QString SClipPropertiesPanel::describe()
+{
+    refresh();
+    // isHidden(), not isVisible(): a --test-case run never shows the window,
+    // so isVisible() is false for every widget in it.
+    QString page = QStringLiteral( "none" );
+    if( placeholder_ && placeholder_->isHidden() )
+        page = ( midiGroup_ && !midiGroup_->isHidden() )
+            ? QStringLiteral( "midi" ) : QStringLiteral( "audio" );
+    return QStringLiteral( "page=%1|clips=%2|midiClips=%3|name=%4|midiName=%5"
+                           "|autoFade=%6|pitch=%7" )
+        .arg( page )
+        .arg( collectClips().size() )
+        .arg( collectMidiClips().size() )
+        .arg( nameEdit_ ? nameEdit_->text() : QString() )
+        .arg( midiNameEdit_ ? midiNameEdit_->text() : QString() )
+        .arg( autoFadeLabel_ ? autoFadeLabel_->text() : QString() )
+        .arg( pitchSpin_ ? pitchSpin_->text() : QString() );
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,8 +1318,13 @@ void SClipPropertiesPanel::refreshAutoFadeStatus( const QList<ClipRef> &clips )
     // One `laneSeams` per LANE, not per clip: the answer is a property of the
     // whole lane's ordering, and a multi-lane selection would otherwise
     // re-sort one lane once per clip on it.
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = splacements::rootContainer( project );
+    //
+    // In the ACTIVE root, which is the tree collectClips() took the paths
+    // relative to (QBX-243). Against the master a bare lane path resolves the
+    // master's lane of the same index -- a REAL lane in the wrong tree, whose
+    // seams say nothing about this clip.
+    SObject *mixer = splacements::rootNamed(
+        project, SApplication::app().activeSelectionRoot() );
     QHash<SObject *, QHash<SLink *, sautofade::Seams>> byLane;
     int exemptIn = 0, exemptOut = 0, explicitIn = 0, explicitOut = 0, n = 0;
     for( const ClipRef &c : clips ) {
@@ -1418,12 +1448,13 @@ SClipPropertiesPanel::collectMidiClips() const
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
     if( !project ) return out;
-    // check_root_resolution: suspect QBX-243 -- the arranger knows its own root (rootName/submitFor); this is the master
-    SObject *mixer = splacements::rootContainer( project );
+    // The ACTIVE root and its selection - the same rule as collectClips().
+    const QString rootName = app.activeSelectionRoot();
+    SObject *mixer = splacements::rootNamed( project, rootName );
     if( !mixer ) return out;
 
     // Paths, not cached links - the same rule as collectClips().
-    const QList<QList<int>> paths = app.getCurrentSelectionPaths();
+    const QList<QList<int>> paths = app.getCurrentSelectionPathsFor( rootName );
     for( const QList<int> &p : paths ) {
         SLink *link = splacements::placementAt( mixer, p );
         if( !link ) continue;

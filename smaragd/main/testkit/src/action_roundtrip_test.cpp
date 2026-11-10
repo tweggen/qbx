@@ -610,6 +610,11 @@ const Fixture kFixtures[] = {
       "<assert-track-detail-sections trackPath='1,0' contains='feelflow=1'"
       " absent='plugins=1'/>" },
 
+    // --- QBX-243: the arranger's transpose keys and the clip properties dock
+    { "nudge-clip-pitch", "<nudge-clip-pitch cents='-10'/>" },
+    { "assert-clip-properties",
+      "<assert-clip-properties contains='clips=1' absent='page=none'/>" },
+
     // --- the automation UI verbs (proposal 37 P6) ---------------------------
     // `take` rather than `slotIndex` here, because a `cut:` target is the one
     // that has takes; the slot half is covered by the write-tick row below.

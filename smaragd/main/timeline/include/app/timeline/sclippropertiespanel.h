@@ -60,6 +60,20 @@ public:
     // committed action would fight the user.
     void focusFirstField();
 
+    /**
+     * TEST SEAM (QBX-243): what the panel is SHOWING, read off its own
+     * widgets after a refresh(), never recomputed beside them:
+     *
+     *   page=<none|audio|midi>|clips=<n>|midiClips=<n>|name=<text>
+     *   |midiName=<text>|autoFade=<status line>|pitch=<cents>
+     *
+     * `clips` / `midiClips` are collectClips() / collectMidiClips(), the two
+     * resolutions every commit slot acts through, so a panel that resolves the
+     * selection in the wrong root reads 0 here exactly as it reads "no clip
+     * selected" to the user. Fields are APPENDED, never inserted.
+     */
+    QString describe();
+
 public slots:
     // Re-read the selection and repopulate every field. Cheap and idempotent.
     void refresh();
