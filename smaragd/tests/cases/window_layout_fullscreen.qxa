@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-294 - never relaunch into full screen.
+
+  `SMainWindow::saveWindowLayout()` stored `saveGeometry()` unchanged in
+  `ui/windowGeometry`, and Qt's geometry blob carries the full-screen flag.
+  At the next interactive start `restoreWindowLayout()` + `show()` put the
+  window back into full screen; on macOS it had never been a native
+  full-screen Space, so the menu bar never came back and there was no way out.
+  Every later start did the same.
+
+  The fix has two halves and this case gates each on its own:
+
+    RESTORE - after restoreGeometry(), a full-screen state becomes maximized
+              (swindowgeometry::relaunchState). Gated by the four
+              restore-window-layout lines: a full-screen blob written by Qt,
+              and the 66-byte blob from the field report, restore MAXIMIZED;
+              an ordinary maximized and an ordinary windowed blob restore as
+              they did before.
+
+    SAVE    - the stored blob never carries the flag
+              (swindowgeometry::withoutFullScreen). Gated by the
+              save-window-layout lines with windowState=: a full-screen window
+              stores a blob that Qt restores maximized; maximized and windowed
+              windows store what they did before.
+
+  Every assertion is a window STATE (`windowState()`), never a rectangle: a
+  "test-case" run never shows the main window, so no geometry is real, but
+  the state restoreGeometry() and the fix give it is. What the platform does
+  with that state at show() (on macOS: the menu bar) is hand-checked.
+
+  THIS CASE OWNS NO SETTINGS KEY. Both verbs snapshot `ui/windowGeometry` and
+  `ui/windowState`, write them back (or remove them again when they were
+  absent) BEFORE they assert, and put the main window's own geometry and state
+  back too.
+
+  Watched failing on sabotaged binaries: with the relaunchState() call removed
+  from restoreWindowLayout() the "fullscreen" and "report" restore lines fail
+  (restored as fullscreen); with the withoutFullScreen() call removed from
+  saveWindowLayout() the windowState="fullscreen" save line fails (stored
+  fullscreen). The other lines pass on both, as the "as before" claim says
+  they must.
+-->
+<SActionScript version="1" name="window_layout_fullscreen">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- RESTORE. A blob Qt wrote for a full-screen window relaunches
+         maximized. -->
+    <restore-window-layout seed="fullscreen" expectState="maximized"/>
+
+    <!-- ...and so does the exact blob from the report: frame 0,26 to
+         1279,827, maximized byte 0, full-screen byte 0x04. -->
+    <restore-window-layout seed="report" expectState="maximized"/>
+
+    <!-- As before: maximized stays maximized, windowed stays windowed. -->
+    <restore-window-layout seed="maximized" expectState="maximized"/>
+    <restore-window-layout seed="normal" expectState="normal"/>
+
+    <!-- SAVE. A full-screen window stores a blob that restores maximized. -->
+    <save-window-layout force="true" expectWritten="true"
+                        windowState="fullscreen" expectStored="maximized"/>
+
+    <!-- As before: maximized and windowed windows store what they are. -->
+    <save-window-layout force="true" expectWritten="true"
+                        windowState="maximized" expectStored="maximized"/>
+    <save-window-layout force="true" expectWritten="true"
+                        windowState="normal" expectStored="normal"/>
+  </actions>
+
+</SActionScript>

@@ -1786,6 +1786,39 @@ failing under both sabotages). **NOT gated: the wiring itself** — `close()`'s
 prompt is a modal `exec()` and its success ends the process, so neither
 `fileExit()` nor `aboutToQuit` has a headless route. Hand-verified.
 
+## inv. 59a — a relaunch NEVER comes back full screen (QBX-294)
+
+Full screen is a state of the session it was entered in, never of the next
+one. `QWidget::saveGeometry()`'s blob carries the full-screen flag (byte 45 of
+the version-3 layout, `0x04`), and stored unchanged in `ui/windowGeometry` it
+put every later start back into full screen: on macOS, where the window had
+been flagged full screen without ever being a native full-screen Space, with no
+menu bar and no way out short of deleting the key by hand.
+
+Two halves, each enforced on its own, both through the pure functions of
+`app/shell/swindowgeometry.h`:
+
+- **save** — `saveWindowLayout()` stores `withoutFullScreen( saveGeometry() )`:
+  the full-screen byte cleared and the maximized byte (44, `0x02`) set. No INI
+  written since carries the flag.
+- **restore** — `restoreWindowLayout()` maps the state `restoreGeometry()` left
+  through `relaunchState()`: full screen becomes maximized, which is what the
+  first-run path shows. An INI written before the fix is harmless too.
+
+Every other state restores exactly as before. Qt's `restoreGeometry()` also
+REFUSES a whole blob whose stored screen width is off from the current
+screen's by more than 0.8..1.25 (a high-DPI sanity check); `restoreWindowLayout()`
+then reports nothing restored and `main.cpp` takes the maximized first-run path.
+
+Gated by `window_geometry_test` (the offsets asked of a blob Qt writes, the
+patch judged by Qt's own restore, the field report's blob verbatim and adapted)
+and `qxa.window_layout_fullscreen` (both call sites, through the
+`restore-window-layout` verb and `save-window-layout`'s `windowState` /
+`expectStored`; each half watched failing under its own sabotage). Asserted as
+window STATES, never rectangles: a `--test-case` run never shows the window.
+**NOT gated: what the platform does with a maximized state at `show()`** —
+on macOS, that the menu bar is back. Hand-checked.
+
 ## inv. 60 — `SLoadProjectAction` does NOT rebind the arranger (pre-existing, recorded 2026-09-06)
 
 `ensureArranger_()` returns the active tab's existing editor whenever there is
