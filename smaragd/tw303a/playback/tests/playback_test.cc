@@ -3229,8 +3229,12 @@ int main()
             CHECK(engine.retiredRootCountForTest() == 0,
                   "QBX-287 (b): the next quiescent swap releases what was parked");
             engine.setFrozenDemandRoot(nullptr);
+            // `other` too must be gone before (c) counts: the readahead's
+            // per-pass owning copy can outlive the swap by a pass, and a late
+            // death landing inside (c) read as 301 of 300 (QBX-297, measured).
+            std::weak_ptr<twComponent> wOther = other;
             other.reset();
-            for (int i = 0; i < 2000 && !w.expired(); ++i)
+            for (int i = 0; i < 2000 && (!w.expired() || !wOther.expired()); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             CHECK(w.expired(), "QBX-287 (b): ...and the parked root is gone");
         }
