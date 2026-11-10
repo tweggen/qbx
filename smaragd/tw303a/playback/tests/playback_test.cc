@@ -3175,6 +3175,18 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
             swapReturnedWhileParked = swapped.load();
             rootAliveWhileParked = !w.expired();
+            if (!rootAliveWhileParked) {
+                // The engine released the root the parked pull is reading.
+                // Un-parking it now would be a use-after-free, so report and
+                // stop here: a deterministic FAIL rather than undefined
+                // behaviour (QBX-287 sabotage: the setter's wait removed).
+                printf("FAIL QBX-287: the old root was RELEASED under a pull block "
+                       "still reading it (swap returned: %s); aborting before the "
+                       "pull resumes on freed memory\n",
+                       swapReturnedWhileParked ? "yes" : "no");
+                fflush(stdout);
+                std::_Exit(1);
+            }
             gRootGateArmed.store(false);
             swapper.join();
             puller.join();
