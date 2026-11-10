@@ -158,7 +158,9 @@
                       minWaveMeanPct="1"/>
 
     <!-- ===== 11. HEAR ONE TAKE ALONE, on the Drums column =============== -->
-    <isolate-take-gesture clip="1,0" take="1"/>
+    <!-- Root-qualified: the seam parses the qualifier (QBX-243) and runs the
+         gesture on the active tab, which is Drums. -->
+    <isolate-take-gesture clip="Drums:1,0" take="1"/>
     <assert-take-column clip="Drums:1,0" comp="" activeTake="1"/>
     <assert-take-column clip="Drums:1,0" takeAtPos="95999" expectTake="-1"/>
     <undo count="1"/>

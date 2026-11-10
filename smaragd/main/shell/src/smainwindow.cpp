@@ -4281,8 +4281,19 @@ bool SMainWindow::isolateTakeGesture( const QString &clipRef, int takeRow )
         TW_LOGW( "ui.shell", "isolate-take: no arranger" );
         return false;
     }
-    return v->isolateTakeGesture( strackpath::stringToPath( clipRef ),
-                                  takeRow );
+    // ROOT-QUALIFIED (QBX-243): "Drums:1,0" names the column in Drums. The
+    // gesture runs on the ACTIVE arranger, so a qualifier naming any other
+    // root is refused rather than resolved in the wrong tree; a bare path
+    // means the active tab's root, as everywhere else in these seams. The
+    // bare parse this replaces failed closed on a qualified path.
+    const strackpath::QualifiedPath q = strackpath::parseQualified( clipRef );
+    if( !q.root.isEmpty() && q.root != v->rootName() ) {
+        TW_LOGW( "ui.shell", "isolate-take: %s names a root the active tab "
+                 "(\"%s\") does not edit", qPrintable( clipRef ),
+                 qPrintable( v->rootName() ) );
+        return false;
+    }
+    return v->isolateTakeGesture( q.idx, takeRow );
 }
 
 int SMainWindow::cleanupTakesGesture( bool tracksScope, bool scripted,
