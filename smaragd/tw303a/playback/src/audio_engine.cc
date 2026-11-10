@@ -5,6 +5,7 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/core/twlog.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -27,6 +28,8 @@ AudioEngine::AudioEngine(std::shared_ptr<twComponent> synthOutput, uint32_t samp
         r.reset();
     }
     passthrough_ = true;
+    // No thread reads it yet; the fallback is resolved here once (QBX-287).
+    rtFrozenRoot_.store(synthOutput_.get(), std::memory_order_relaxed);
 }
 
 std::size_t AudioEngine::graphChannels() const {
@@ -83,9 +86,35 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
                                 length_t nFrames) {
     if (!outChannels || nChannels == 0) return 0;
 
-    if (!synthOutput_ || nFrames == 0) {
+    // THE ROOT, ONCE PER BLOCK (QBX-287). pullSeq_ goes odd BEFORE the read and
+    // even again after the block's last use of it; setFrozenDemandRoot() waits
+    // for that before dropping the root it replaced. Both are seq_cst so that
+    // either the setter sees this block as in flight, or this read sees the
+    // setter's new pointer -- never neither. A raw pointer, so this thread
+    // never owns a root and can never be the one that destroys it.
+    struct PullScope {
+        std::atomic<std::uint32_t> &seq;
+        explicit PullScope(std::atomic<std::uint32_t> &s) : seq(s)
+        { seq.fetch_add(1, std::memory_order_seq_cst); }
+        ~PullScope() { seq.fetch_add(1, std::memory_order_release); }
+    } pullScope(pullSeq_);
+    twComponent *const root = rtFrozenRoot_.load(std::memory_order_seq_cst);
+
+    if (!root || nFrames == 0) {
         zeroChannels(outChannels, nChannels, 0, (std::size_t) nFrames);
         return 0;
+    }
+
+    // A page held from ANOTHER root is not this block's to serve: its epoch is
+    // that root's, and the seek seam the setter raises may land a block later
+    // than the pointer. Drop it here, so the order this thread observes the two
+    // in cannot matter. The cursor is re-derived by updateFrozenPage().
+    if (root != rtHeldRoot_) {
+        currentFrozenPage_ = nullptr;
+        prevFrozenPage_ = nullptr;
+        pageFrameOffset_ = 0;
+        cachedPageValidFrames_ = 0;
+        rtHeldRoot_ = root;
     }
 
     // Adopt a pending live seek (requestSeek). We are the RT pull thread — the
@@ -151,7 +180,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
             // Step 2: Validate/load page (always: updateFrozenPage also detects
             // pages outdated by an edit mid-playback, and early-returns cheaply
             // when the held page is still current)
-            updateFrozenPage(pos);
+            updateFrozenPage(pos, root);
 
             // If page not available, stop pulling
             if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
@@ -231,7 +260,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
                         cachedPageValidFrames_,
                         currentFrozenPage_ ? currentFrozenPage_->validFrames : 0u,
                         currentFrozenPage_ ? (unsigned long long)currentFrozenPage_->contentEpoch.load() : 0ULL,
-                        frozenRoot() ? (unsigned long long)frozenRoot()->contentEpochNow() : 0ULL,
+                        (unsigned long long)root->contentEpochNow(),
                         (unsigned long long)readaheadComputedUpTo_,
                         (int)cycleEnabled_.load(std::memory_order_relaxed),
                         (unsigned long long)loopEnd_.load(std::memory_order_relaxed) );
@@ -324,7 +353,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
         // Step 2: Validate/load page (always: updateFrozenPage also detects
         // pages outdated by an edit mid-playback, and early-returns cheaply
         // when the held page is still current)
-        updateFrozenPage(pos);
+        updateFrozenPage(pos, root);
 
         // If page not available, output silence and stop
         if (!currentFrozenPage_ || currentFrozenPage_->validAspects == 0) {
@@ -401,7 +430,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
     return produced;
 }
 
-void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
+void AudioEngine::updateFrozenPage(uint64_t desiredPos, twComponent *root) {
     // Calculate which page this position belongs to
     uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
     offset_t pageStartPos = twFloorAlign( desiredPos, (offset_t) pageSize );
@@ -411,7 +440,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
 
     // Current content epoch: pages rendered before the last edit are stale
     // even though their validAspects are still set (lock-free atomic read).
-    const uint64_t epochNow = frozenRoot()->contentEpochNow();
+    const uint64_t epochNow = root->contentEpochNow();
 
     // A generation change means the page object was invalidated/repurposed
     // (invalidateAllPages) — its buffer cannot be trusted at all; drop hard.
@@ -429,7 +458,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
     // geometry; serving it would be reading the wrong bytes on the audio
     // thread. Dropping the held page here also covers the heldStillCovers fast
     // path below without a second test.
-    const idx_t widthNow = frozenRoot()->getOutputChannels();
+    const idx_t widthNow = root->getOutputChannels();
     if (currentFrozenPage_ && !twPageWidthUsable(currentFrozenPage_.get(), widthNow)) {
         currentFrozenPage_ = nullptr;
         prevFrozenPage_ = nullptr;
@@ -456,7 +485,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos) {
         // Lock-free cache lookup (read-only audio thread).
         // Audio thread never allocates pages, only reads existing ones.
         // Read-ahead thread allocates and freezes pages; this just reads the cache.
-        auto page = frozenRoot()->getPageIfExists(pageStartPos);
+        auto page = root->getPageIfExists(pageStartPos);
         if (page && page->validAspects != 0 &&
             page->contentEpoch.load() >= epochNow &&
             twPageWidthUsable(page.get(), widthNow) &&
@@ -639,12 +668,56 @@ void AudioEngine::configureResampling(uint32_t inRate, uint32_t outRate) {
     ensureResampleBuffers(width, (std::size_t) maxInputFrames);
 }
 
+std::shared_ptr<twComponent> AudioEngine::frozenRoot() const
+{
+    std::shared_ptr<twComponent> r = std::atomic_load( &frozenDemandRoot_ );
+    return r ? r : synthOutput_;
+}
+
+bool AudioEngine::awaitPullQuiescent()
+{
+    // Main thread, right after a seq_cst store to rtFrozenRoot_. An EVEN count
+    // means no block is in flight, and any block that starts later reads the
+    // new pointer. An ODD one names the block in flight; it is over once the
+    // count moves. The bound is many device blocks long: a pull that has not
+    // finished one block by then is stalled, and the caller parks the old root
+    // rather than freeing it under that block.
+    const std::uint32_t inFlight = pullSeq_.load( std::memory_order_seq_cst );
+    if( ( inFlight & 1u ) == 0 ) return true;
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds( 250 );
+    while( pullSeq_.load( std::memory_order_acquire ) == inFlight ) {
+        if( std::chrono::steady_clock::now() >= deadline ) return false;
+        std::this_thread::yield();
+    }
+    return true;
+}
+
 void AudioEngine::setFrozenDemandRoot( const std::shared_ptr<twComponent> &root )
 {
     // Main thread. A no-op when nothing moves, because the drop below is not
     // free: it costs the RT its held page and the readahead its frontier.
-    if( frozenDemandRoot_ == root ) return;
-    frozenDemandRoot_ = root;
+    std::shared_ptr<twComponent> old = std::atomic_load( &frozenDemandRoot_ );
+    if( old == root ) return;
+
+    // PUBLISH (QBX-287; CONTRACT "The frozen lane RE-ROOTS", property 6). The
+    // owning handle first, for the readahead's next pass; then the raw pointer
+    // the RT reads once per block; then wait until no block can still be using
+    // the old one. Only after that may `old` -- possibly the last owner -- go.
+    std::atomic_store( &frozenDemandRoot_, root );
+    rtFrozenRoot_.store( root ? root.get() : synthOutput_.get(),
+                         std::memory_order_seq_cst );
+    if( awaitPullQuiescent() ) {
+        // Everything parked earlier was replaced before this store, so the
+        // pull, now past a block boundary after it, cannot hold any of them.
+        retiredRoots_.clear();
+    } else {
+        TW_LOGW( "playback", "[PLAYBACK] frozen-root swap: the pull did not leave "
+                 "its block within the bound; the old root is kept alive until a "
+                 "later swap or the engine's end (QBX-287)" );
+        if( old ) retiredRoots_.push_back( std::move( old ) );
+    }
+    old.reset();
 
     TW_LOGI( "playback", "[PLAYBACK] frozen lane re-rooted %s the master chain "
              "(proposal 45 AC3.1 / D4b option 1)%s",
@@ -759,16 +832,47 @@ void AudioEngine::readaheadLoop() {
     // poll. It is skipped only on the first iteration; every `continue` below
     // still lands on a wait, so this cannot become a spin.
     bool firstPass = true;
+    std::weak_ptr<twComponent> lastRoot;   // the previous pass's root (QBX-287)
+    bool firstRoot = true;
     while (readaheadRunning_.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lk(readaheadMutex_);
         if (!firstPass) readaheadCv_.wait_for(lk, std::chrono::milliseconds(20));
         firstPass = false;
         lk.unlock();
 
-        if (!frozenRoot() || !readaheadRunning_.load(std::memory_order_relaxed)) continue;
+        // THE ROOT, ONCE PER PASS (QBX-287): one owning copy, so a swap on the
+        // main thread mid-pass cannot split this pass across two roots, and
+        // the root cannot die under it. Not the RT, so atomic_load's hidden
+        // lock is acceptable here; and if this copy turns out to be the last
+        // one, the root is destroyed on this thread, never on the RT.
+        const std::shared_ptr<twComponent> root = frozenRoot();
+        if (!root || !readaheadRunning_.load(std::memory_order_relaxed)) continue;
 
         uint64_t currentPos = currentPos_.load(std::memory_order_relaxed);
         offset_t pageStart = twFloorAlign( (offset_t) currentPos, (offset_t) pageSize );
+
+        // A NEW ROOT RESTARTS THE CHAIN. The frontier, the predecessor pages and
+        // the in-flight demands were all built against the previous root, and
+        // the seek seam the setter raises only moves the playhead -- to where it
+        // already is, so the jump detector below never fires for it. Without
+        // this a demand for the OLD root, issued at a coincidentally equal
+        // content epoch, counted as covering the new root's window. Compared by
+        // control block through a weak_ptr, so a freed root's address being
+        // reused cannot hide a change.
+        const bool rootChanged = lastRoot.owner_before(root) || root.owner_before(lastRoot);
+        if (rootChanged && !firstRoot) {
+            TW_LOGI( "playback", "[READAHEAD] Frozen root changed: restarting chain at page %llu "
+                    "(frontier was %llu)",
+                    (unsigned long long)pageStart, (unsigned long long)readaheadComputedUpTo_ );
+            readaheadPrevPage_ = nullptr;
+            readaheadComputedUpTo_ = (uint64_t) pageStart;
+            readaheadPostWrapPrevPage_ = nullptr;
+            readaheadPostWrapComputedUpTo_ = 0;
+            pendingDemand_.reset();
+            pendingDemand2_.reset();
+        }
+        lastRoot = root;
+        firstRoot = false;
 
         // fix/loop-behaviour, issue h. Loop state, read once per tick so the
         // wrap detector and the two-range window below agree on the same
@@ -845,7 +949,7 @@ void AudioEngine::readaheadLoop() {
             // invalidate pages BEHIND readaheadComputedUpTo_ (content epoch
             // bump), and those must be re-frozen. Validity is re-checked per
             // page instead, which self-heals under any edit/playback ordering.
-            const uint64_t epochNow = frozenRoot()->contentEpochNow();
+            const uint64_t epochNow = root->contentEpochNow();
 
             // PROBE, don't allocate. getOrAllocatePage() inserts an empty
             // placeholder for a position that has none, and freezePage() later
@@ -855,7 +959,7 @@ void AudioEngine::readaheadLoop() {
             // across an edit) has nothing to fall back TO at that position. The
             // readahead only wants to know whether a current page already
             // exists; asking non-destructively is both correct and cheaper.
-            auto existing = frozenRoot()->getPageIfExists(pos);
+            auto existing = root->getPageIfExists(pos);
             if (existing && existing->validAspects != 0 &&
                 existing->contentEpoch.load() >= epochNow) {
                 // Already frozen and current; update prevPage and move on
@@ -896,7 +1000,7 @@ void AudioEngine::readaheadLoop() {
                 if (!covered) {
                     const int n = (int)((wantEnd - pos) / pageSize);
                     pendingDemand_ = scheduler_->requestGraphPages(
-                        frozenRoot(), pos, n, /*priority*/ 9);
+                        root, pos, n, /*priority*/ 9);
                     pendingDemandStart_ = pos;
                     pendingDemandEnd_ = wantEnd;
                     pendingDemandEpoch_ = epochNow;
@@ -911,7 +1015,7 @@ void AudioEngine::readaheadLoop() {
             // Compute this page (blocking, may take milliseconds). Via
             // requestPage (Phase 2a): dedups against concurrent revalidation of
             // the same page rather than double-rendering it.
-            auto page = frozenRoot()->requestPage(
+            auto page = root->requestPage(
                 pos, nullptr, 0, (length_t)pageSize,
                 engineSampleRate_, readaheadPrevPage_);
 
@@ -949,7 +1053,7 @@ void AudioEngine::readaheadLoop() {
                     auto start_skip = std::chrono::steady_clock::now();
 
                     // Try to freeze skip-ahead page with NO prior state (fresh chain)
-                    auto skipPage = frozenRoot()->requestPage(
+                    auto skipPage = root->requestPage(
                         skipPos, nullptr, 0, (length_t)pageSize,
                         engineSampleRate_, nullptr);  // Fresh state!
 
@@ -989,8 +1093,8 @@ void AudioEngine::readaheadLoop() {
                                 std::shared_ptr<CaptureRevalidator::GraphDemand> &pending,
                                 uint64_t &pendingStart, uint64_t &pendingEnd,
                                 uint64_t &pendingEpoch ) -> bool {
-                const uint64_t epochNow = frozenRoot()->contentEpochNow();
-                auto existing = frozenRoot()->getPageIfExists(pos);
+                const uint64_t epochNow = root->contentEpochNow();
+                auto existing = root->getPageIfExists(pos);
                 if (existing && existing->validAspects != 0 &&
                     existing->contentEpoch.load() >= epochNow) {
                     prevPage = existing;
@@ -1006,7 +1110,7 @@ void AudioEngine::readaheadLoop() {
                         const int n = (int)((wantEnd - pos) / pageSize);
                         if (n > 0) {
                             pending = scheduler_->requestGraphPages(
-                                frozenRoot(), pos, n, /*priority*/ 9);
+                                root, pos, n, /*priority*/ 9);
                             pendingStart = pos;
                             pendingEnd = wantEnd;
                             pendingEpoch = epochNow;
@@ -1015,7 +1119,7 @@ void AudioEngine::readaheadLoop() {
                     return false;   // frontier advances on later ticks as pages land
                 }
                 // Legacy synchronous path (no scheduler — SMARAGD_REVAL_WORKERS=0).
-                auto page = frozenRoot()->requestPage(
+                auto page = root->requestPage(
                     pos, nullptr, 0, (length_t)pageSize, engineSampleRate_, prevPage);
                 if (page && page->validAspects != 0) {
                     prevPage = page;
@@ -1024,7 +1128,7 @@ void AudioEngine::readaheadLoop() {
                 }
                 if (prevPage != nullptr) {
                     uint64_t skipPos = pos + (uint64_t)SKIP_DISTANCE * pageSize;
-                    auto skipPage = frozenRoot()->requestPage(
+                    auto skipPage = root->requestPage(
                         skipPos, nullptr, 0, (length_t)pageSize, engineSampleRate_, nullptr);
                     if (skipPage && skipPage->validAspects != 0) {
                         prevPage = skipPage;

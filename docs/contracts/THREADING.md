@@ -98,6 +98,12 @@ State handoff UI→audio is snapshot/double-buffer based:
   mutex (`revalSwapPages_nolock`).
 - `twSpeaker`: the render callback captures `audioEngine_` as a local
   `shared_ptr` copy; the handle itself is guarded by `engineMutex_`.
+- `AudioEngine`'s frozen root (QBX-287): the RT pull reads a RAW pointer
+  (`rtFrozenRoot_`) once per block, never a `shared_ptr` — libstdc++'s
+  `atomic_load` on a `shared_ptr` takes a pooled mutex, and the RT's copy could
+  be the last owner. The main-thread setter keeps the old root alive until the
+  pull has left the block that may still read it (`pullSeq_`). Details in
+  `smaragd/tw303a/playback/CONTRACT.md`, re-rooting property 6.
 
 ## Rule 3 — lock discipline
 
