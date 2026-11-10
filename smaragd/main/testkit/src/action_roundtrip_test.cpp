@@ -1473,15 +1473,23 @@ bool isLaneAddressed(SActionRegistry &registry, const QString &verb)
         SAction *a = registry.create(verb);
         if (!a) return false;
 
+        // The fixture is parsed into `doc` ITSELF, which lives to the end of
+        // the iteration (QBX-299). It used to be parsed into a document scoped
+        // to the `if (fx)` block and cloned out of it, but a QDom node does not
+        // keep its owner document alive: the clone kept a raw pointer to the
+        // document private that block's end freed, and setAttribute() below
+        // then wrote a refcount into the freed chunk. That write is inside
+        // libQt6Xml, which ASan does not instrument, so an ASan build passed;
+        // a glibc malloc perturb aborted it every time, and the
+        // poisoned_heap.action_roundtrip_test ctest variant holds it.
         QDomDocument doc;
         QDomElement elem;
-        if (fx) {
-            QDomDocument fdoc;
-            if (fdoc.setContent(QString::fromLatin1(fx)))
-                elem = fdoc.documentElement().cloneNode(true).toElement();
+        if (fx && doc.setContent(QString::fromLatin1(fx)))
+            elem = doc.documentElement();
+        if (elem.isNull()) {
+            elem = doc.createElement(verb);
+            doc.appendChild(elem);
         }
-        if (elem.isNull()) elem = doc.createElement(verb);
-        doc.appendChild(elem);
         // "$master" is a legal lane address in every spelling, and a verb that
         // stores it verbatim writes it back verbatim; one that parses it into
         // an index path writes the same sentinel out through pathToString().
