@@ -58,17 +58,23 @@ int whiteIndex( int semitone )
  * else the first event clip on the SELECTED TRACK. An index path, resolved
  * fresh - the keyboard caches nothing, for the same reason every other
  * selection follower does not (timeline invariant 8).
+ *
+ * BOTH halves are asked of the ACTIVE TAB'S ROOT (QBX-244), and the path comes
+ * back with that root beside it: the selection is kept per root (proposal 09
+ * 3), and so is the selected track (each root is its own SStdMixer). Asked of
+ * the master instead, an arrangement tab's selected clip came back as no path
+ * and the keyboard fell through to the MASTER's selected track -- a note
+ * written into a clip in a tab the user was not looking at.
  */
-QList<int> targetEventClip()
+QList<int> targetEventClip( SProject *project, QString &rootOut )
 {
     SApplication &app = SApplication::app();
-    SProject *project = app.getCurrentProject();
+    rootOut = app.activeSelectionRoot();
     if( !project ) return QList<int>();
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    SObject *mixer = splacements::rootContainer( project );
+    SObject *mixer = splacements::rootNamed( project, rootOut );
     if( !mixer ) return QList<int>();
 
-    for( const QList<int> &p : app.getCurrentSelectionPaths() ) {
+    for( const QList<int> &p : app.getCurrentSelectionPathsFor( rootOut ) ) {
         SLink *link = splacements::placementAt( mixer, p );
         if( !link ) continue;
         SObject *obj = &link->getSObject();
@@ -80,6 +86,7 @@ QList<int> targetEventClip()
     STrack *track = stdMixer ? stdMixer->getSelectedTrack() : nullptr;
     if( !track ) return QList<int>();
     const QList<int> trackPath = strackpath::pathOf( mixer, track );
+    if( trackPath.isEmpty() ) return QList<int>();
     int i = 0;
     for( SLink *lk : track->childLinks() ) {
         SObject *obj = &lk->getSObject();
@@ -226,12 +233,15 @@ bool SVirtualKeyboardDock::pressNote( int midiKey, double velocity,
 
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return false;
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    SObject *mixer = splacements::rootContainer( project );
-    if( !mixer ) return false;
 
-    const QList<int> path = targetEventClip();
+    // The target and the root it lives in come out of ONE walk (QBX-244), so
+    // the path is resolved -- and the add-note stamped -- in the same tree it
+    // was found in.
+    QString root;
+    const QList<int> path = targetEventClip( project, root );
     if( path.isEmpty() ) return false;
+    SObject *mixer = splacements::rootNamed( project, root );
+    if( !mixer ) return false;
 
     SLink *link = splacements::placementAt( mixer, path );
     if( !link ) return false;
@@ -252,9 +262,11 @@ bool SVirtualKeyboardDock::pressNote( int midiKey, double velocity,
     if( durationTicks <= 0 ) durationTicks = 960;
     if( velocity <= 0.0 ) velocity = 100.0;
 
-    SApplication::app().submitAction(
+    SAddNoteAction *add =
         new SAddNoteAction( path, tick, durationTicks, midiKey, velocity,
-                            0, 64.0, -1, true ) );
+                            0, 64.0, -1, true );
+    add->setPathRoot( root );
+    SApplication::app().submitAction( add );
     lastKey_ = midiKey;
     update();
     return true;

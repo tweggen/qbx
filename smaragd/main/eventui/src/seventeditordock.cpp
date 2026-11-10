@@ -24,6 +24,7 @@
 
 #include "app/model/sclipwindow.h"
 #include "app/model/slink.h"
+#include "app/model/sobjectpath.h"
 #include "app/model/sobject.h"
 #include "app/model/splacements.h"
 #include "app/model/sproject.h"
@@ -260,7 +261,7 @@ void SEventEditorDock::setKind( const QString &kind )
     view_->setGrid( gridCombo_ ? gridCombo_->currentText()
                                : QStringLiteral( "1/16" ) );
     viewSlot_->addWidget( view_, 1 );
-    view_->setClip( clipPath_ );
+    view_->setClip( clipRoot_, clipPath_ );
     placeholder_->setVisible( clipPath_.isEmpty() );
     view_->setVisible( !clipPath_.isEmpty() );
 
@@ -274,12 +275,18 @@ void SEventEditorDock::setKind( const QString &kind )
 
 QString SEventEditorDock::describe() const
 {
-    if( view_ ) return view_->describe() + describeHScroll();
+    // `clip=` is the LAST field (QBX-244): which clip, in which ROOT, the dock
+    // is bound to. Appended after everything else, so the order every older
+    // `contains=` relies on is unchanged.
+    const QString clip = QStringLiteral( "|clip=" )
+        + ( clipPath_.isEmpty() ? QString()
+                                : strackpath::qualifiedToString( clipRoot_, clipPath_ ) );
+    if( view_ ) return view_->describe() + describeHScroll() + clip;
     // No registered kind at all: report the same shape a bound view would, so
     // a case can always match on `empty=`.
     return QStringLiteral( "kind=|notes=0|grid=%1|linked=%2|empty=1|selection=0" )
         .arg( gridCombo_ ? gridCombo_->currentText() : QStringLiteral( "1/16" ) )
-        .arg( ( axis_ && axis_->linked() ) ? 1 : 0 );
+        .arg( ( axis_ && axis_->linked() ) ? 1 : 0 ) + clip;
 }
 
 QString SEventEditorDock::describeHScroll() const
@@ -309,35 +316,50 @@ QString SEventEditorDock::describeHScroll() const
 // The selection follower (timeline invariants 8 and 9)
 // ---------------------------------------------------------------------------
 
-QList<int> SEventEditorDock::resolveSelectedEventClip() const
+void SEventEditorDock::resolveSelectedEventClip( QString &rootOut,
+                                                 QList<int> &pathOut ) const
 {
+    rootOut.clear();
+    pathOut.clear();
     SApplication &app = SApplication::app();
     SProject *project = app.getCurrentProject();
-    if( !project ) return QList<int>();
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    SObject *mixer = splacements::rootContainer( project );
-    if( !mixer ) return QList<int>();
+    if( !project ) return;
+
+    // THE ACTIVE TAB'S ROOT (QBX-244). The selection is kept per root
+    // (proposal 09 3), and the list the editor follows is the active one --
+    // but getCurrentSelectionPaths() spells it against the MASTER, so in an
+    // arrangement tab every selected clip came back as no path at all and
+    // the editor showed "No event clip selected" over a selected MIDI clip.
+    // The paths are asked for in the root they live in, and resolved there.
+    const QString root = app.activeSelectionRoot();
+    SObject *mixer = splacements::rootNamed( project, root );
+    if( !mixer ) return;
 
     // PATHS, never cached links. The first EVENT clip in the selection wins;
     // an audio-only selection resolves to nothing, which is what clears the
     // editor rather than leaving a stale clip on screen.
-    for( const QList<int> &p : app.getCurrentSelectionPaths() ) {
+    for( const QList<int> &p : app.getCurrentSelectionPathsFor( root ) ) {
         SLink *link = splacements::placementAt( mixer, p );
         if( !link ) continue;
         SObject *obj = &link->getSObject();
         if( SClipWindow *w = obj->windowTakeAt( -1 ) ) obj = &w->asObject();
         if( obj->contentKind() != SContentKind::Event ) continue;
-        return p;
+        rootOut = root;
+        pathOut = p;
+        return;
     }
-    return QList<int>();
 }
 
-void SEventEditorDock::bindClip( const QList<int> &clipPath )
+void SEventEditorDock::bindClip( const QString &clipSpec )
 {
-    if( clipPath.isEmpty() ) { refresh(); return; }
-    clipPath_ = clipPath;
+    if( clipSpec.isEmpty() ) { refresh(); return; }
+    // The qualifier names the root; parseQualified, never stringToPath, which
+    // would turn "Drums:0,0" into an unresolvable path (proposal 45 D9).
+    const strackpath::QualifiedPath q = strackpath::parseQualified( clipSpec );
+    clipRoot_ = q.root;
+    clipPath_ = q.idx;
     if( view_ ) {
-        view_->setClip( clipPath );
+        view_->setClip( clipRoot_, clipPath_ );
         view_->refresh();
         view_->setVisible( true );
     }
@@ -354,10 +376,13 @@ void SEventEditorDock::refresh()
     if( updating_ ) return;
     updating_ = true;
 
-    const QList<int> path = resolveSelectedEventClip();
+    QString root;
+    QList<int> path;
+    resolveSelectedEventClip( root, path );
+    clipRoot_ = root;
     clipPath_ = path;
     if( view_ ) {
-        view_->setClip( path );
+        view_->setClip( root, path );
         view_->refresh();
         view_->setVisible( !path.isEmpty() );
     }
@@ -462,9 +487,12 @@ void SEventEditorDock::onQuantizeClicked()
     if( clipPath_.isEmpty() ) return;
     // A quantize is a set-notes COMPOSITION, so its inverse is the previous
     // state like every other content edit - one undo step for one click.
-    SApplication::app().submitAction(
+    // Stamped with the clip's ROOT (QBX-244): the path is inside that root.
+    SQuantizeNotesAction *a =
         new SQuantizeNotesAction( clipPath_, gridCombo_->currentText(),
-                                  1.0, 0.0, -1, true ) );
+                                  1.0, 0.0, -1, true );
+    a->setPathRoot( clipRoot_ );
+    SApplication::app().submitAction( a );
 }
 
 void SEventEditorDock::onCcLaneClicked()

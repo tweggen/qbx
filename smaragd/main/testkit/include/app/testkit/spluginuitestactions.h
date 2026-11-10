@@ -176,6 +176,36 @@ private:
     QString expect_;
 };
 
+// assert-editor-restore-plan — WHICH plugin editors a load would re-open
+// (QBX-244). Proposal 33 D2's post-load walk returns at once under
+// --test-case, so the walk is exposed through SPluginNativeEditor::
+// restorePlan(), which reads the very list the restore iterates and opens
+// nothing. The plan is "<track spec>/<slot>" entries joined by ';', the
+// track spelled with its ROOT's qualifier ("Drums:0/0").
+//   contains = ""   substring the plan must hold
+//   absent   = ""   substring it must not
+//   count    = "-1" exact number of entries (-1 = not checked)
+class SAssertEditorRestorePlanAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "assert-editor-restore-plan" );
+    }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+    QStringList knownAttributes() const override
+    {
+        return { QStringLiteral( "contains" ), QStringLiteral( "absent" ),
+                 QStringLiteral( "count" ) };
+    }
+
+private:
+    QString contains_;
+    QString absent_;
+    int     count_ = -1;
+};
+
 // plugin-native-editor — open or close the PLUGIN'S OWN window (proposal 33
 // M4/M6), the thing a double-click opens when a plugin has a native editor.
 //

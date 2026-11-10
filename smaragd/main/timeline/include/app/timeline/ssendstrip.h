@@ -75,10 +75,12 @@ private:
     };
 
     void rebuild();
-    /// The track's path from the mixer root, which every verb wants as its
-    /// `track=`. Empty when the track is not reachable, in which case nothing
-    /// is committed rather than something being committed to the wrong lane.
-    QString trackSpec() const;
+    /// The track's path inside the ROOT that holds it, which every verb wants
+    /// as its `track=`, and that root's name (empty = the master), which goes
+    /// into the action's pathRoot_ (QBX-244, QBX-249). Empty when the track is
+    /// not reachable, in which case nothing is committed rather than something
+    /// being committed to the wrong lane.
+    QString trackSpec( QString &rootOut ) const;
 
     STrack      *track_ = nullptr;
     QVBoxLayout *layout_ = nullptr;

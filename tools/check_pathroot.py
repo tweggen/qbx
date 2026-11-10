@@ -107,19 +107,17 @@ EXEMPT = {
     "objects/mixer/src/sdissolvearrangementaction.cpp":
         "restorePlan names MASTER destinations (where the tracks go back to)",
 
-    # KNOWN GAP, not a safe path: the event editor dock binds a clip by bare
-    # index path and has no root of its own, so an event clip inside an
-    # ARRANGEMENT cannot be opened in it. Listed here rather than silently
-    # passing, because an exemption with a reason is the honest way to carry a
-    # gap that is not being fixed in this change. See the PR body.
-    # TWO gaps, nine sites, and the count is stated so a tenth cannot arrive
-    # unnoticed behind a reason that only covers the first nine (QBX-246 found
-    # this entry describing 8 of what were already 9). The describe/grab/click
-    # seams that used to be in here are gone: they resolve laneBySpec() now.
+    # KNOWN GAP, not a safe path. ONE site, and the count is stated so a
+    # second cannot arrive unnoticed behind a reason that only covers the
+    # first (QBX-246 found this entry describing 8 of what were already 9).
+    # QBX-244 CLOSED the other eight: the event editor's bindClip takes a
+    # ROOT-QUALIFIED spec now and parses it with parseQualified, so an event
+    # clip in an arrangement opens in the editor, and its eight bare parses
+    # are gone from this file. The entry stays only for QBX-243's site; when
+    # that one goes, DELETE the entry -- an exemption left behind re-opens the
+    # hole silently for the next change.
     "shell/src/smainwindow.cpp":
-        "GAP x8 (QBX-244): eventEditor_->bindClip takes a bare path, so an "
-        "event clip in an arrangement is not reachable from the event editor "
-        "yet. GAP x1 (QBX-243): isolateTakeGesture parses clipRef bare",
+        "GAP x1 (QBX-243): isolateTakeGesture parses clipRef bare",
 
     # ---- ADDED BY QBX-242, when this checker was finally wired into
     # ---- ci/gates.sh and ran for the first time since 2026-08-20.

@@ -15,6 +15,7 @@
 #include "app/model/sclipwindow.h"
 #include "app/model/sexternfile.h"
 #include "app/model/slink.h"
+#include "app/model/splacements.h"
 #include "app/objects/track/strack.h"
 #include "app/model/sproject.h"
 #include "app/objects/track/sfeelflowbounce.h"   // SFeelFlowUiData
@@ -27,8 +28,11 @@ QColor STrackRendererInline::laneFillColor( STrack &track )
     bool isTrackSelected = false;
     SProject *project = SAppContext::get().getCurrentProject();
     if( project ) {
-        // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-        SObject *root = project->masterRoot();
+        // THE ROOT THAT HOLDS THIS TRACK (QBX-244): each root keeps its own
+        // active lane, so an arrangement's lane is "selected" against the
+        // arrangement, never against the master (where it is not a lane at
+        // all, and so was never drawn selected).
+        SObject *root = splacements::rootHolding( project, &track );
         if( root ) {
             if( root && root->activeLane() == &track ) {
                 isTrackSelected = true;
@@ -365,8 +369,9 @@ void STrackRendererInline::draw( SLink &, SRenderContext &ctx )
     int colorIndex = getTrack().colorIndex();
     if( colorIndex < 0 ) {
         SProject *proj = SAppContext::get().getCurrentProject();
-        // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-        SObject *root = proj ? proj->masterRoot() : nullptr;
+        // The root that HOLDS the track (QBX-244), as sClipBodyOf() asks it:
+        // the auto index is the lane's position within its own root.
+        SObject *root = splacements::rootHolding( proj, &getTrack() );
         colorIndex = root ? sclipcolors::autoIndexForLane( *root, getTrack() ) : 0;
     }
     const bool laneMuted = getTrack().isMuted();

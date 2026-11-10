@@ -11,6 +11,7 @@
 #include "app/objects/track/strackrndrinline.h"   // feelFlowPalette (M3b strip)
 
 #include <algorithm>
+#include <utility>
 
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -22,12 +23,22 @@
 
 namespace {
 
-QList<int> trackPathOf( STrack *track )
+// The panel's track, addressed in the root that HOLDS it (QBX-244): the
+// qualified spelling, split into the path the action takes and the root it
+// is stamped with. pathOf( rootContainer() ) answered only for the master, so
+// in an arrangement the path came back empty and both gestures went nowhere.
+// Null when no root reaches the track; the caller then submits nothing.
+template <class A, class... Args>
+A *rootedFor( STrack *track, Args &&...args )
 {
     SProject *proj = SApplication::app().getCurrentProject();
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    SObject *root = splacements::rootContainer( proj );
-    return root ? strackpath::pathOf( root, track ) : QList<int>();
+    const QString spec = splacements::specOf( proj, track );
+    if( spec.isEmpty() ) return nullptr;
+    const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+    if( q.idx.isEmpty() ) return nullptr;
+    A *a = new A( q.idx, std::forward<Args>( args )... );
+    a->setPathRoot( q.root );
+    return a;
 }
 
 } // namespace
@@ -115,6 +126,9 @@ SFeelFlowPanel::SFeelFlowPanel( STrack *track, QWidget *parent )
     headerRow->addWidget( stateLabel_ );
     headerRow->addStretch( 1 );
     modeCombo_ = new QComboBox();
+    // Named so the shell's test seam (click-feel-flow-panel button="mode-*")
+    // drives THIS control's currentIndexChanged, not a copy of the handler.
+    modeCombo_->setObjectName( QStringLiteral( "feelFlowMode" ) );
     modeCombo_->addItem( tr( "Adaptive" ) );   // index 0 == FeelFlowMode::Adaptive
     modeCombo_->addItem( tr( "Trained" ) );    // index 1 == FeelFlowMode::Trained
     headerRow->addWidget( modeCombo_ );
@@ -180,8 +194,8 @@ void SFeelFlowPanel::onLearnClicked()
     if( !track_ ) return;
     SProject *proj = SApplication::app().getCurrentProject();
     if( !proj ) return;
-    SApplication::app().submitAction(
-        new SLearnFeelFlowAction( trackPathOf( track_ ) ) );
+    if( SAction *a = rootedFor<SLearnFeelFlowAction>( track_ ) )
+        SApplication::app().submitAction( a );
     refresh();
 }
 
@@ -191,8 +205,8 @@ void SFeelFlowPanel::onModeChanged( int index )
     const STrack::FeelFlowMode mode =
         index == 1 ? STrack::FeelFlowMode::Trained : STrack::FeelFlowMode::Adaptive;
     if( mode == track_->feelFlowMode() ) return;   // no-op: nothing to submit
-    SApplication::app().submitAction(
-        new SSetFeelFlowModeAction( trackPathOf( track_ ), mode ) );
+    if( SAction *a = rootedFor<SSetFeelFlowModeAction>( track_, mode ) )
+        SApplication::app().submitAction( a );
     refresh();
 }
 

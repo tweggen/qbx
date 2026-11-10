@@ -4685,8 +4685,12 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
         if( obj->contentKind() == SContentKind::Event ) {
             QList<int> path = strackpath::pathOf( smv_.getModel(), lastClickTrack_ );
             path.append( lastClickTrack_->indexOfChild( lastClickSLink_ ) );
+            // QUALIFIED with this arranger's own root (QBX-244): `path` is
+            // inside smv_.getModel(), which is an arrangement in its tab, and
+            // a bare spelling would open the MASTER's clip at the same index.
             if( SMainWindow *mw = findMainWindow() )
-                mw->showEventEditor( strackpath::pathToString( path ) );
+                mw->showEventEditor(
+                    strackpath::qualifiedToString( smv_.rootName(), path ) );
             ev->accept();
             return;
         }

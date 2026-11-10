@@ -27,7 +27,10 @@
 #include <QWidget>
 #include <QWindow>
 
+#include <algorithm>
 #include <map>
+#include <QPair>
+#include <QStringList>
 
 namespace {
 
@@ -366,40 +369,83 @@ void SPluginNativeEditor::saveGeometryToSettings() const
     SSettings::instance().setPluginEditorGeometry( key, geometry() );
 }
 
-void SPluginNativeEditor::restoreOpenEditors( SProject *project,
-                                              QWidget *parentForPosition )
+namespace {
+
+// EVERY ROOT'S TRACKS, each root once (QBX-244). A window left open on a
+// track is a setting the file carries whichever root holds the track -- the
+// master, an arrangement, or an asset fragment that holds lanes of its own --
+// so the walk enumerates every root rootNamed() can resolve, in its order.
+// The master was the only root until QBX-231 added the arrangements; the
+// asset fragments were still missing.
+QList<QPair<STrack *, SPluginSlot *>> restorableSlots( SProject *project )
 {
-    if( !project ) return;
-    // See the header: a qxa run uses the real platform plugin, so this would put
-    // plugin windows on the developer's screen mid-suite.
-    if( SApplication::app().isTestCaseMode() ) return;
+    QList<QPair<STrack *, SPluginSlot *>> out;
+    if( !project ) return out;
+
+    QList<SObject *> roots;
+    // check_root_resolution: master -- the walk enumerates EVERY root, and the master is the first of them
+    roots.append( splacements::rootContainer( project ) );
+    QList<QString> names = project->arrangementNames();
+    QList<QString> assets = project->assetNames();
+    std::sort( assets.begin(), assets.end() );   // a QHash's keys: fix the order
+    names += assets;
+    for( const QString &name : names ) {
+        SObject *root = splacements::rootNamed( project, name );
+        if( root && !roots.contains( root ) ) roots.append( root );
+    }
 
     QList<STrack *> tracks;
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    collectTracks( splacements::rootContainer( project ), tracks );
-    // ...and every arrangement's (QBX-231): an asset's tracks hold plugins too,
-    // and a window left open on one is a setting the file carries just the
-    // same. NOT GATED: this function returns at once under --test-case.
-    for( const QString &name : project->arrangementNames() )
-        collectTracks( project->arrangement( name ), tracks );
+    for( SObject *root : roots ) collectTracks( root, tracks );
 
     for( STrack *t : tracks ) {
         SPluginChain *chain = t ? t->getPluginChain() : nullptr;
         if( !chain ) continue;
         for( int i = 0; i < chain->getSlotCount(); ++i ) {
             SPluginSlot *slot = chain->getSlotAt( i );
-            if( !slot || !slot->getEditorOpen() ) continue;
-            // An app-side editor (QBX-279) restores through its own entry.
-            if( spluginappeditors::hasEditorFor( slot ) ) {
-                spluginappeditors::openFor( t, slot, parentForPosition, true );
-                continue;
-            }
-            // openFor() re-asserts the flag on success. On FAILURE it is left
-            // exactly as the file had it, on purpose: the plugin may be missing
-            // on this machine and back on the next one, and silently clearing
-            // the flag would lose the user's setting to a temporary condition.
-            SPluginNativeEditor::openFor( t, slot, parentForPosition );
+            if( slot && slot->getEditorOpen() ) out.append( { t, slot } );
         }
+    }
+    return out;
+}
+
+}  // namespace
+
+QStringList SPluginNativeEditor::restorePlan( SProject *project )
+{
+    QStringList out;
+    for( const auto &ts : restorableSlots( project ) ) {
+        SPluginChain *chain = ts.first->getPluginChain();
+        int idx = -1;
+        for( int i = 0; chain && i < chain->getSlotCount(); ++i )
+            if( chain->getSlotAt( i ) == ts.second ) { idx = i; break; }
+        out << splacements::specOf( project, ts.first ) + QLatin1Char( '/' )
+                   + QString::number( idx );
+    }
+    return out;
+}
+
+void SPluginNativeEditor::restoreOpenEditors( SProject *project,
+                                              QWidget *parentForPosition )
+{
+    if( !project ) return;
+    // See the header: a qxa run uses the real platform plugin, so this would put
+    // plugin windows on the developer's screen mid-suite. restorePlan() is the
+    // headless view of the same walk.
+    if( SApplication::app().isTestCaseMode() ) return;
+
+    for( const auto &ts : restorableSlots( project ) ) {
+        STrack *t = ts.first;
+        SPluginSlot *slot = ts.second;
+        // An app-side editor (QBX-279) restores through its own entry.
+        if( spluginappeditors::hasEditorFor( slot ) ) {
+            spluginappeditors::openFor( t, slot, parentForPosition, true );
+            continue;
+        }
+        // openFor() re-asserts the flag on success. On FAILURE it is left
+        // exactly as the file had it, on purpose: the plugin may be missing
+        // on this machine and back on the next one, and silently clearing
+        // the flag would lose the user's setting to a temporary condition.
+        SPluginNativeEditor::openFor( t, slot, parentForPosition );
     }
 }
 

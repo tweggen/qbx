@@ -62,20 +62,32 @@ public:
 
     /** The clip the editor is bound to; empty when it shows nothing. */
     const QList<int> &clipPath() const { return clipPath_; }
+    /** ...and the ROOT that path is inside (empty = the master). QBX-244. */
+    const QString &clipRoot() const { return clipRoot_; }
 
     /**
      * The test face (`assert-event-editor`). Delegates to the view, so the
      * string is the view's describe() verbatim; with no view at all it reports
      * the empty form, which is what an audio-clip selection produces.
+     * The LAST field is `|clip=<spec>`, the bound clip's ROOT-QUALIFIED
+     * address (`Drums:0,0`, a bare `0,0` in the master, empty when unbound) --
+     * appended, never inserted, so every older `contains=` still matches.
      */
     QString describe() const;
 
     /**
-     * Bind to an explicit clip instead of the selection. The testkit's route
-     * (`assert-event-editor clip=`), so a case can describe a clip it has not
-     * selected; an empty path means "follow the selection", i.e. refresh().
+     * Bind to an explicit clip instead of the selection: the double-click's
+     * route (SMainWindow::showEventEditor) and the testkit's
+     * (`assert-event-editor clip=`). An empty spec means "follow the
+     * selection", i.e. refresh().
+     *
+     * ROOT-QUALIFIED (QBX-244): `Drums:0,0` is the clip at {0,0} in the
+     * arrangement Drums, a bare `0,0` the master's -- parsed with
+     * strackpath::parseQualified, never stringToPath. It took a bare index
+     * path until then, so an event clip inside an arrangement could not be
+     * opened in the editor at all.
      */
-    void bindClip( const QList<int> &clipPath );
+    void bindClip( const QString &clipSpec );
 
     /**
      * TEST ENTRY POINT for the horizontal scroll bar (QBX-216): drives the
@@ -122,8 +134,11 @@ private slots:
 
 private:
     void buildUi();
-    /** The first EVENT clip in the current selection, or an empty path. */
-    QList<int> resolveSelectedEventClip() const;
+    /**
+     * The first EVENT clip in the ACTIVE ROOT's selection, as a root plus an
+     * index path inside it; an empty path when there is none.
+     */
+    void resolveSelectedEventClip( QString &rootOut, QList<int> &pathOut ) const;
     void applyGridToChildren();
 
     // --- the horizontal scroll bar (QBX-216) --------------------------------
@@ -152,6 +167,7 @@ private:
     QCheckBox   *linkCheck_  = nullptr;
 
     QString    kind_;
+    QString    clipRoot_;   // empty == the master (rootNamed's reading)
     QList<int> clipPath_;
     // Re-entrancy: refresh() runs off arrangementChanged, which the dock's own
     // committed edits emit (timeline invariant 9).

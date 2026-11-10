@@ -18,6 +18,7 @@
 #include "app/actions/sactionhistory.h"
 #include "app/model/sclipcolors.h"
 #include "app/model/sdefaultreset.h"
+#include "app/model/splacements.h"
 #include "app/model/sproject.h"
 #include "app/model/ssolorules.h"
 #include "app/objects/mixer/slaneorder.h"
@@ -361,8 +362,12 @@ void SMixerStrip::applyHeaderColor_()
 {
     STrack *t = track_.data();
     SProject *proj = SApplication::app().getCurrentProject();
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    SObject *root  = proj ? proj->masterRoot() : nullptr;
+    // THE ROOT THAT HOLDS THE TRACK (QBX-244), the same call sClipBodyOf()
+    // makes: the auto index is the lane's position WITHIN ITS ROOT, and an
+    // arrangement's track is not found in the master at all -- indexForLane's
+    // miss is index 0, so every strip in an arrangement's pane wore the first
+    // lane's colour while the arranger above it painted each lane its own.
+    SObject *root  = splacements::rootHolding( proj, t );
     const int idx = ( root && t ) ? sclipcolors::indexForLane( *root, *t ) : 0;
     headerColor_ = sclipcolors::body( idx, false, t && t->isMuted() );
     if( !nameLabel_ ) return;

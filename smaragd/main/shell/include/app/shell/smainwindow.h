@@ -550,7 +550,9 @@ public:
     // bound to the REAL track, so the model mutation it makes (starting a
     // bounce, submitting learn-feel-flow) is the genuine one, exactly as a
     // real click on the docked panel would make. `button` = "analyze" |
-    // "learn". False for an unknown button or track.
+    // "learn" | "mode-adaptive" | "mode-trained" (QBX-244: the last two set
+    // the REAL mode combo, whose currentIndexChanged submits
+    // set-feel-flow-mode). False for an unknown button or track.
     bool clickFeelFlowPanel( const QString &trackPath, const QString &button );
 
     // TEST ENTRY POINT (proposal 40 "Feel Flow" M3e AC 6): paint the puppet
@@ -591,9 +593,11 @@ public:
     // REAL widget rather than a re-spelling of it.
     //
     //   describeEventEditor  — bind the dock to `clipPath` (empty = follow the
-    //                          selection) and return SEventEditorDock::
+    //                          selection; ROOT-QUALIFIED since QBX-244,
+    //                          `Drums:0,0`) and return SEventEditorDock::
     //                          describe(); `kind` switches the editor kind
-    //                          first when non-empty.
+    //                          first when non-empty. `rebind = false` binds
+    //                          nothing and describes what is bound already.
     //   grabEventEditor      — paint the dock into a PNG. Coverage, not oracle.
     //   dragNote             — one REAL press/move/release on the piano roll.
     //   scrollEventEditorKeys — drives the piano roll's REAL vertical key
@@ -605,7 +609,8 @@ public:
     //   virtualKey           — one virtual-keyboard note at the locator, which
     //                          submits `add-note`. False when there is no event
     //                          clip to write into.
-    QString describeEventEditor( const QString &clipPath, const QString &kind );
+    QString describeEventEditor( const QString &clipPath, const QString &kind,
+                                 bool rebind = true );
     //   describeTransportReadout — the transport toolbar's position / time
     //                           selection readout as it is shown, after
     //                           re-reading every input (QBX-215).
@@ -807,7 +812,9 @@ public slots:
     // interactive app a dock merely toggled visible again must show what is
     // ALREADY selected rather than wait for a future selection change
     // (CONTRACT.md inv. 4/9). Public because the arranger's double-click
-    // handler calls it. clipPath empty = follow the current selection.
+    // handler calls it. clipPath empty = follow the current selection;
+    // otherwise ROOT-QUALIFIED (QBX-244): the arranger passes its own root's
+    // qualifier, so an arrangement tab opens the arrangement's clip.
     void showEventEditor( const QString &clipPath = QString() );
 
 protected:

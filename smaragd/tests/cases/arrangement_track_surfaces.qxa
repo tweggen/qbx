@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-244. THE SURFACES THAT HOLD A TRACK POINTER ADDRESS THE ROOT THAT HOLDS
+  THE TRACK, in an arrangement as in the master.
+
+  Each section below is one site QBX-242's census marked "suspect QBX-244",
+  where a widget holding an STrack resolved it against the MASTER root:
+
+    1. THE MIXER STRIP'S HEADER COLOUR (SMixerStrip::applyHeaderColor_). The
+       auto colour index is the lane's position WITHIN ITS ROOT; asked of the
+       master, an arrangement's track is not found and every strip got index
+       0. colorMismatch= compares each strip with sClipBodyOf(), the
+       arranger's own classifier (rootHolding); colors= counts distinct
+       headers, which a strip handing every lane index 0 collapses to 1.
+    2. THE ARRANGER'S CLIP BODY (STrackRendererInline::draw's colour index),
+       through the pixel classifier: Drums:1's clip must be painted in
+       Drums:1's colour, which is index 1 in Drums and nothing in the master.
+    3. THE SEND STRIP (SSendStrip): the lanes it offers and the address it
+       submits. The master and Drums each have a send lane of their own, so
+       a master-rooted strip offers the WRONG lane, not merely none.
+    4. THE FEEL FLOW PANEL'S MODE COMBO (SFeelFlowPanel): set-feel-flow-mode
+       addressed through specOf() and stamped with the root.
+    5. THE INSERT-EDITOR RESTORE WALK (SPluginNativeEditor::restoreOpenEditors)
+       through its headless twin, assert-editor-restore-plan: a native editor
+       left open on an arrangement's track is in the plan. (The restore
+       itself returns at once under test-case mode; the plan is the very
+       list it walks.)
+
+  NOT GATED HERE, and why:
+    * STrackRendererInline::laneFillColor's SELECTED-lane tint. The only seam
+      that reads a lane fill (assert-take-lane takeRow="-1") takes its
+      reference colour FROM laneFillColor itself, so a wrong root moves the
+      paint and the reference together and no pixel can differ. Gating it
+      needs a seam that states the lane's selection independently.
+    * The restore walk's ASSET-fragment roots: no construction available to
+      a script puts a TRACK inside an asset fragment (a fragment holds clips;
+      an asset over a folder track is a lane, which rootNamed refuses as a
+      root), so that half of the walk has nothing to find.
+-->
+<SActionScript version="1" name="arrangement_track_surfaces">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The master: one user lane and its own send lane. -->
+    <add-track index="-1"/>
+    <set-track-name trackPath="0" name="MasterLane"/>
+    <add-send-lane sendName="MasterVerb"/>
+
+    <!-- Drums: two user lanes, each with a clip, and a send lane of its own. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <set-track-name trackPath="Drums:0" name="Kick"/>
+    <set-track-name trackPath="Drums:1" name="Snare"/>
+    <add-sample trackPath="Drums:0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackPath="Drums:1" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-send-lane sendName="DrumVerb" arrangement="Drums"/>
+
+    <!-- ========== 1. THE MIXER STRIP'S HEADER COLOUR ================== -->
+    <assert-mixer-pane arrangement="Drums" contains="colorMismatch=0"/>
+    <assert-mixer-pane arrangement="Drums" absent="colors=1"/>
+
+    <!-- ========== 2. THE ARRANGER PAINTS EACH LANE ITS OWN COLOUR ===== -->
+    <open-arrangement-tab name="Drums"/>
+    <grid-disable/>
+    <assert-take-lane trackPath="Drums:1" takeRow="-1" grabWidth="800"
+                      grabHeight="300" maxGapCols="400"/>
+
+    <!-- ========== 3. THE SEND STRIP OFFERS ITS OWN ROOT'S LANES ======= -->
+    <assert-send-strip trackPath="Drums:0" rows="1" contains="lane=DrumVerb"
+                       absent="MasterVerb"/>
+    <send-strip-set trackPath="Drums:0" lane="DrumVerb" control="on" value="1"/>
+    <assert-sends track="0" arrangement="Drums" count="1" dest="DrumVerb"
+                  enabled="true"/>
+    <assert-sends track="0" count="0"/>
+    <send-strip-set trackPath="Drums:0" lane="DrumVerb" control="level" value="-6"/>
+    <assert-sends track="0" arrangement="Drums" dest="DrumVerb" level="-6"/>
+    <undo count="2"/>
+    <assert-sends track="0" arrangement="Drums" count="0"/>
+    <assert-sends track="0" count="0"/>
+
+    <!-- ========== 4. THE FEEL FLOW PANEL'S MODE ======================= -->
+    <assert-feel-flow-panel trackPath="Drums:0" contains="mode=adaptive"/>
+    <click-feel-flow-panel trackPath="Drums:0" button="mode-trained"/>
+    <assert-feel-flow-panel trackPath="Drums:0" contains="mode=trained"/>
+    <assert-feel-flow-panel trackPath="0" contains="mode=adaptive"/>
+    <undo count="1"/>
+    <assert-feel-flow-panel trackPath="Drums:0" contains="mode=adaptive"/>
+    <assert-feel-flow-panel trackPath="0" contains="mode=adaptive"/>
+
+    <!-- ========== 5. THE RESTORE WALK REACHES THE ARRANGEMENT ========= -->
+    <insert-plugin trackPath="Drums:0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gui"
+                   name="Smaragd Test GUI" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-editor-restore-plan count="0"/>
+    <plugin-native-editor trackPath="Drums:0" slotIndex="0" action="open"
+                          expectOpen="1"/>
+    <assert-editor-restore-plan count="1" contains="Drums:0/0"/>
+    <plugin-native-editor trackPath="Drums:0" slotIndex="0" action="close"
+                          expectOpen="0"/>
+    <assert-editor-restore-plan count="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+    <assert-track-count root="Drums" equals="2"/>
+  </assertions>
+
+</SActionScript>

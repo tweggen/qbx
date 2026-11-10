@@ -27,6 +27,18 @@ Invariants:
    use (`SEventEditorView::resolve()`), because any action can destroy a
    selected link — the use-after-destruction class this codebase has been
    burned by. Same rule as timeline inv. 8, same reason.
+
+   **The path is always held WITH ITS ROOT** (QBX-244): `clipRoot_` beside
+   `clipPath_`, resolved through `splacements::rootNamed()`, and every action
+   a view commits goes through `SEventEditorView::submitForClip()`, which
+   stamps that root onto it. `bindClip()` takes a ROOT-QUALIFIED spec
+   (`Drums:0,0`) parsed with `parseQualified`; the selection follower and the
+   virtual keyboard ask the ACTIVE TAB's root (`activeSelectionRoot()` plus
+   `getCurrentSelectionPathsFor()`), never `getCurrentSelectionPaths()`, which
+   spells the active list against the master. Until then an event clip inside
+   an arrangement could not be opened here at all: index `{0,0}` exists in
+   every root, so a master-rooted resolution finds a real clip and edits the
+   wrong one. Gate: `arrangement_event_editor.qxa`.
 2. **Every edit commits through a P1 verb, ONE action per GESTURE** (timeline
    inv. 3). A drag of N notes is one `set-notes`, not N `add-note`s; a
    quantize is one `quantize-notes`; a CC point is one `set-events`. The batch
