@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-295: Edit > Options... is the application's Preferences item.
+
+  On macOS the user pressed a shortcut and the options dialog did not open.
+  The action carried a bare Ctrl+, and no menu role, so where it landed on a
+  Mac (the application menu as Settings..., or the Edit menu) was Qt's guess
+  from the label. It now carries QAction::PreferencesRole, the platform's own
+  QKeySequence::Preferences bindings (Cmd-, on macOS) and Ctrl+, everywhere.
+
+  A test-case run never shows the window, so this reads the action itself:
+  its role, Ctrl+, among its shortcuts (on macOS Qt spells Cmd as Ctrl in
+  PortableText), and every platform Preferences binding among them.
+  Whether the macOS menu bar draws it under the application menu is a hand
+  check.
+-->
+<SActionScript version="1" name="options_preferences_binding">
+
+  <setup project="new"/>
+
+  <actions>
+    <assert-main-action objectName="options" menuRole="preferences"/>
+    <assert-main-action objectName="options" shortcut="Ctrl+,"/>
+    <assert-main-action objectName="options" standardKey="preferences"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+
+</SActionScript>

@@ -2314,8 +2314,19 @@ SMainWindow::SMainWindow()
                                          SLOT( disarmAllTracks() ) );
     actDisarmAll_->setEnabled( false );
     editMenu->addSeparator();
-    editMenu->addAction( "&Options...", QKeySequence( Qt::CTRL | Qt::Key_Comma ),
-                         this, SLOT( showOptionsDialog() ) );
+    // QBX-295: the platform's own Preferences binding (Cmd-, on macOS) plus
+    // Ctrl+, everywhere, and an explicit role, so on macOS the item lands in
+    // the application menu as Settings... instead of depending on Qt's guess
+    // from the label.
+    QAction *actOptions = editMenu->addAction( "&Options...", this,
+                                               SLOT( showOptionsDialog() ) );
+    actOptions->setObjectName( QStringLiteral( "options" ) );
+    actOptions->setMenuRole( QAction::PreferencesRole );
+    QList<QKeySequence> optionKeys =
+        QKeySequence::keyBindings( QKeySequence::Preferences );
+    const QKeySequence ctrlComma( Qt::CTRL | Qt::Key_Comma );
+    if( !optionKeys.contains( ctrlComma ) ) optionKeys.append( ctrlComma );
+    actOptions->setShortcuts( optionKeys );
     menuBar()->addMenu( editMenu );
 
     buildPaletteToolbar();

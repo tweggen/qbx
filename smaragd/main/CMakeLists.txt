@@ -568,6 +568,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sdemandedpage.h
     testkit/include/app/testkit/sassertpropertyaction.h
     testkit/include/app/testkit/soutputdevicetestactions.h
+    testkit/include/app/testkit/smainactiontestactions.h
     testkit/include/app/testkit/sasserttrackchannelsaction.h
     testkit/include/app/testkit/sassertfilecontainsaction.h
     testkit/include/app/testkit/sassertclipwindowaction.h
@@ -638,6 +639,7 @@ set(APP_UI_FILES
     testkit/src/sdemandedpage.cpp
     testkit/src/sassertpropertyaction.cpp
     testkit/src/soutputdevicetestactions.cpp
+    testkit/src/smainactiontestactions.cpp
     testkit/src/sasserttrackchannelsaction.cpp
     testkit/src/sassertfilecontainsaction.cpp
     testkit/src/sassertclipwindowaction.cpp
