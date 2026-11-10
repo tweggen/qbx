@@ -38,15 +38,19 @@
   what makes them a discriminator rather than four sanity checks:
 
     master_closure_linear_ring            ring alone, no master   0.082071
-    master_closure_linear_ring             ring alone, 2.0x master 0.164142
-    master_closure_heard_root             + root at -12 dB        0.201010
-    master_closure_heard_root_raised      + root at  -6 dB        0.283790
+    master_closure_heard_ring             ring alone, 2.0x master 0.164142
+    master_closure_heard_root             + root at -12 dB        0.176741 *
+    master_closure_heard_root_raised      + root at  -6 dB        0.267151 *
+
+  * over ONE WHOLE INPUT LOOP, [64000, 256000), not the 1 s window rows 1 and
+    2 use (QBX-239: the two root cases say why). Over that 1 s window they
+    read 0.201010 and 0.283790, but only at ONE phase of the looping ring.
 
   Rows 1 vs 2 are the mode itself: under the LINEAR split the ring bypasses the
   master, under CLOSURE it goes through it. Same fixture, same window, one
   master insert apart. Rows 3 vs 4 are the ROOT-PRESENCE
   discriminator - raising the unarmed track 6 dB must move the level by
-  1.4118. Before AC3.1 was rebuilt to suppress the frozen SUM rather than the
+  1.5115 over one input loop (1.4118 over the old 1 s window). Before AC3.1 was rebuilt to suppress the frozen SUM rather than the
   frozen PULL, the same change moved it by 1.0046: the arrangement was absent,
   because twSpeaker publishes the transport position from
   engine->currentPosition() AFTER the pull it had stopped making, so the

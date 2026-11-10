@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Proposal 45 M3, AC3.3 / D4b: THE ROOT-PRESENCE DISCRIMINATOR. Identical to master_closure_heard_root but for the unarmed track at -6 dB: 2 x sqrt(0.082071^2 + 0.115752^2) = 0.283790, a factor of 1.4118. The two bands do not overlap.
+  Proposal 45 M3, AC3.3 / D4b: THE ROOT-PRESENCE DISCRIMINATOR. Identical to master_closure_heard_root but for the unarmed track at -6 dB. Over one whole input loop (QBX-239): 2 x sqrt(0.066661^2 + 0.115752^2) = 0.267151, a factor of 1.5115. The two bands do not overlap.
 
   ONE MEASUREMENT PER CASE, AND THAT IS NOT STYLE. The playback capture is
   CUMULATIVE across phases in one process - arming, playing, stopping and
@@ -16,14 +16,18 @@
 
     master_closure_linear_ring            ring alone, no master   0.082071
     master_closure_heard_ring             ring alone, 2.0x master 0.164142
-    master_closure_heard_root             + root at -12 dB        0.201010
-    master_closure_heard_root_raised      + root at  -6 dB        0.283790
+    master_closure_heard_root             + root at -12 dB        0.176741 *
+    master_closure_heard_root_raised      + root at  -6 dB        0.267151 *
+
+  * over ONE WHOLE INPUT LOOP, [64000, 256000), not the 1 s window rows 1 and
+    2 use (QBX-239: the two root cases say why). Over that 1 s window they
+    read 0.201010 and 0.283790, but only at ONE phase of the looping ring.
 
   Rows 1 vs 2 are the mode itself: under the LINEAR split the ring bypasses the
   master, under CLOSURE it goes through it. Same fixture, same window, one
   master insert apart. Rows 3 vs 4 are the ROOT-PRESENCE
   discriminator - raising the unarmed track 6 dB must move the level by
-  1.4118. Before AC3.1 was rebuilt to suppress the frozen SUM rather than the
+  1.5115 over one input loop (1.4118 over the old 1 s window). Before AC3.1 was rebuilt to suppress the frozen SUM rather than the
   frozen PULL, the same change moved it by 1.0046: the arrangement was absent,
   because twSpeaker publishes the transport position from
   engine->currentPosition() AFTER the pull it had stopped making, so the
@@ -42,7 +46,11 @@
   and the ring test_sawtooth.wav, so their sum is sqrt of the sum of squares
   regardless of a relative phase nothing here controls. Two copies of one
   signal have no closed-form sum, and every band would have to widen until it
-  separated nothing.
+  separated nothing. NEARLY uncorrelated, measured (QBX-239): the ring's 12th
+  harmonic and the root's 11th are both 5280 Hz, and the ring's level ramp
+  spreads its lines, so a cross term is left. Over one input loop it moves
+  the sum by at most -0.56 % / +0.53 % across EVERY relative offset of the two
+  sources, computed from the fixtures themselves.
 
   HEADROOM IS PART OF THE MEASUREMENT, NOT HOUSEKEEPING. The armed track runs
   through a 0.25 gain so the 2.0x master does not clip. An earlier probe put
@@ -55,7 +63,10 @@
 
   <actions>
     <!-- Track 0: armed and monitored, on the paced file input carrying
-         test_sawtooth.wav (RMS 0.328284), through a 0.25 gain = 0.082071. -->
+         test_sawtooth.wav, through a 0.25 gain. The input LOOPS the file
+         every 192000 frames; over one whole loop its RMS is 0.266644, so
+         0.066661 after the gain. (The 0.328284 this line used to quote is its
+         RMS over the old 1 s window at one phase of the loop only.) -->
     <add-track index="-1"/>
     <set-track-input trackPath="0" input="audio:file:3"/>
     <set-monitor-mode trackPath="0" mode="on"/>
@@ -80,38 +91,28 @@
     <set-locator position="0"/>
     <toggle-playback play="1"/>
     <wait-playhead minAdvance="4096" timeoutMs="30000"/>
-    <wait-ms ms="5200"/>
+    <wait-ms ms="6600"/>
     <toggle-playback play="0"/>
-    <dump-playback-capture filename="master_closure_heard_root_raised.wav" minFrames="216000"/>
+    <dump-playback-capture filename="master_closure_heard_root_raised.wav" minFrames="256000"/>
 
     <!-- BOUND AND REPORT THE ONSET, which is the house rule
          sdumpplaybackcaptureaction.h states for anything measured over this
-         file. Pure diagnosis here: it makes a future red run name the
-         quantity that moved instead of leaving a bare number.
+         file. It is ALSO what keeps the window below inside the material:
+         the onset is the root's arrival, and the window starts 24000 frames
+         past the bound.
 
-         THE WINDOW IS DELIBERATELY NOT ANCHORED (QBX-228), unlike
-         master_closure_linear_ring's and master_closure_heard_ring's. Those
-         two vary by a pure CAPTURE-HEAD DISPLACEMENT – heard_ring's displaced
-         reading of 0.169044 is exactly what sweeping the clean capture to
-         -2048 predicts – so anchoring on the onset removes it, measured
-         2.98 % down to 0.32 %.
-
-         THIS CASE DOES NOT BEHAVE THAT WAY, and anchoring it made it WORSE.
-         Measured over six runs, it has two modes: onset 2056 reading
-         0.204219, and onset ~4075 reading 0.201039. If the second were the
-         first displaced by the ~2019 frames the onset moved, a window shifted
-         by that much would recover 0.204219. It reads 0.197326 – further
-         away, and from -1.56 % to -3.37 % against a band whose floor is
-         0.1950. So either the two modes differ in CONTENT rather than
-         position, or the onset mis-measures the displacement; either way an
-         onset anchor does not correct this case, and shipping one would have
-         moved it closer to failing while looking like a fix.
-
-         Filed separately rather than guessed at here: QBX-239. -->
+         ONE WHOLE INPUT LOOP, for the reason master_closure_heard_root gives
+         at length (QBX-239): the old 1 s window measured the PHASE of the
+         looping, ramping ring against the device start, a wall-clock quantity,
+         and could read anything from 0.2337 to 0.3088 at this level. Over one
+         loop every relative offset of the two sources reads 0.265836 to
+         0.268381 around the closed form 0.267151; measured 0.267362. The band
+         adds at least 1.2 % on each side and stays disjoint from the -12 dB case's
+         0.176741, which is what an unraised root would read here. -->
     <assert-audio-onset filename="master_closure_heard_root_raised.wav" channel="0" maxFrame="40000"/>
 
-    <assert-audio-energy filename="master_closure_heard_root_raised.wav" startFrame="168000" frameCount="48000"
-                         channel="0" minRms="0.2753" maxRms="0.2923"/>
+    <assert-audio-energy filename="master_closure_heard_root_raised.wav" startFrame="64000" frameCount="192000"
+                         channel="0" minRms="0.2622" maxRms="0.2721"/>
     <arm-track trackPath="0" armed="0"/>
 
     <!-- AC3.4: nobody rendered where they were not allowed to. Under Closure
