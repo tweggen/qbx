@@ -177,6 +177,45 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
+# --- the POISONED-HEAP variants (QBX-300; the same block as QBX-288's) -------
+#
+# A read of FREED memory passes every ordinary run whenever the freed block
+# still holds its old bytes, which on glibc it usually does. glibc's
+# malloc.perturb=65 fills every freed block (and every new one) in the NORMAL
+# build, so such a read returns garbage and, as a rule, crashes; tcache_count=0
+# is needed with it, since glibc's tcache fast path skips the perturb. Linux
+# only: the tunable is glibc's. Under ENABLE_ASAN it is inert (ASan owns malloc)
+# and ASan's own report is the stronger gate. Cases are listed by hand: each is
+# one a perturbed heap is known to turn red on the defect it names.
+#   live_skip_reasons  QBX-300: open-project deleted the old project under the
+#                      window's master view; that view's heads stayed wired to
+#                      SLiveMonitor::skipsChanged and read the freed STrack.
+# QBX-288 (PR #369) adds this same block for four other cases; whichever lands
+# second merges its names into the one list.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    foreach(_name live_skip_reasons)
+        if(TEST qxa.${_name})
+            add_test(NAME qxa.poisoned_heap.${_name}
+                COMMAND $<TARGET_FILE:smaragd>
+                        --test-case ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases/${_name}.qxa
+                        --test-output-dir ${CMAKE_BINARY_DIR}/test-output/poisoned_heap.${_name}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/cases
+            )
+            set_tests_properties(qxa.poisoned_heap.${_name} PROPERTIES
+                ENVIRONMENT "SMARAGD_RENDER_TIMEOUT_MS=180000;GLIBC_TUNABLES=glibc.malloc.perturb=65:glibc.malloc.tcache_count=0"
+                TIMEOUT 600
+            )
+            # The variant runs the SAME script, so any path the script spells
+            # itself (live_skip_reasons saves and reopens
+            # build/test-output/live_skip_reasons/armed.qxp) is shared with the
+            # plain case: under ctest -j the two must not overlap.
+            set_tests_properties(qxa.${_name} qxa.poisoned_heap.${_name} PROPERTIES
+                RESOURCE_LOCK qxa_script_${_name}
+            )
+        endif()
+    endforeach()
+endif()
+
 # --- the cross-process determinism gate (proposal 37 P3c, AC1 + AC2c) --------
 #
 # The render-vs-render byte gate is a FRESH-PROCESS property (design F4), and a

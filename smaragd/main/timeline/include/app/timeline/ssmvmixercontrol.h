@@ -295,6 +295,17 @@ private:
 
     SStdMixerView &smv_;
     STrack &tk_;
+    // QBX-300: the connections whose SENDER OUTLIVES THE PROJECT (the app's
+    // meter tick and meter reset, the live monitor's skipsChanged). Every
+    // other sender this head listens to is the track, its mixer or its
+    // project, and those connections go when that sender dies. These do not:
+    // a head is retired with deleteLater() (rebuildControlColumn, a closed
+    // view), a --test-case run never delivers DeferredDelete, and the project
+    // is deleted synchronously -- so a retired head outlived its track and the
+    // next skipsChanged read the freed STrack through tk_. They are cut when
+    // the TRACK is destroyed, the one moment that ends what tk_ refers to.
+    QList<QMetaObject::Connection> outlivingConnections_;
+    void onTrackDestroyed_();
     QGridLayout *qLayout_;
     // Kept as QBoxLayouts (not QV/QHBoxLayout) so the density modes can flip
     // their direction instead of rebuilding the strip.
