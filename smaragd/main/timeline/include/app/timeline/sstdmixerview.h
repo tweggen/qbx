@@ -542,8 +542,16 @@ public:
     double getBPM() const; 
     void setBPM( double );
 private:
-    double timeGridWidth_;
-    short emphasizeGrids_[4];
+    // INITIALISED, and the zero is load-bearing (QBX-288): SMVActualView's
+    // constructor runs loadRangeFromProject() from inside SStdMixerView's
+    // constructor, BEFORE that constructor sets this spec, so a fresh
+    // project's made-up default range is computed from these two members as
+    // they stand. Zero gives an empty range, which is what every build used
+    // to read off a zeroed heap and what transport_readout asserts; left
+    // uninitialised, any reused heap chunk (ASan's 0xbe fill, glibc's
+    // malloc.perturb) turns it into a selection nobody made.
+    double timeGridWidth_ = 0.0;
+    short emphasizeGrids_[4] = { 0, 0, 0, 0 };
 };
 
 class SSnapSpec
