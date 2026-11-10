@@ -96,13 +96,19 @@ State handoff UI→audio is snapshot/double-buffer based:
 - `SObject` page cache: `currentPage_` read via `std::atomic_load`;
   the revalidator builds `nextPage_` privately and swaps under the object
   mutex (`revalSwapPages_nolock`).
-- `twSpeaker`: the render callback captures `audioEngine_` as a local
-  `shared_ptr` copy; the handle itself is guarded by `engineMutex_`.
+- `twSpeaker`'s engine (QBX-297): the render callback reads a RAW pointer
+  (`rtEngine_`) once per callback inside a `twRtQuiescence` block; the owning
+  `audioEngine_` is guarded by `engineMutex_` and snapshotted by non-RT
+  callers. `publishEngine()` releases a replaced engine only after the
+  callback has left the block that may still use it, so `~AudioEngine` never
+  runs on the audio thread. `smaragd/tw303a/playback/CONTRACT.md` invariant 12.
 - `AudioEngine`'s frozen root (QBX-287): the RT pull reads a RAW pointer
   (`rtFrozenRoot_`) once per block, never a `shared_ptr` — libstdc++'s
   `atomic_load` on a `shared_ptr` takes a pooled mutex, and the RT's copy could
   be the last owner. The main-thread setter keeps the old root alive until the
-  pull has left the block that may still read it (`pullSeq_`). Details in
+  pull has left the block that may still read it (`pullSeq_`, a
+  `twRtQuiescence` — `tw/playback/twrtquiescence.h`, the one implementation of
+  this handshake; use it for the next RT-published object rather than a copy). Details in
   `smaragd/tw303a/playback/CONTRACT.md`, re-rooting property 6.
 
 ## Rule 3 — lock discipline

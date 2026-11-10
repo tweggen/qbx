@@ -30,9 +30,9 @@ Invariants:
    (locatorHeldElsewhere).
 3. OutputState machine: STOPPED→OPENING→BUFFERING→PLAYING→STOPPING; backend
    output starts only after the readahead reports ready (monitor thread).
-4. engineMutex_ is a LEAF lock (THREADING.md rule 3): the engine handle is
-   snapshotted as a shared_ptr copy; ~AudioEngine (joins readahead) runs
-   with no lock held.
+4. engineMutex_ is a LEAF lock (THREADING.md rule 3): non-RT callers snapshot
+   the engine handle as a shared_ptr copy; ~AudioEngine (joins readahead) runs
+   with no lock held. The render callback never takes it (invariant 12).
 5. Loop wrap [start, end) happens in the engine pull, atomics only. The wrap
    rewrites the playhead without walking the page cursor there, so:
 6. updateFrozenPage() DERIVES the whole read cursor (currentPageStartPos_,
@@ -108,12 +108,44 @@ Invariants:
     - With live OFF every path is exactly what it was: Play opens, priming
       defers the backend start, Stop closes.
 
-12. THE ENGINE HANDLE IS READ AND WRITTEN ATOMICALLY. A new AudioEngine can now
-    be minted while the callback is RUNNING (Play attaching to a device the live
-    lane opened), so `audioEngine_` is accessed through std::atomic_load /
-    std::atomic_store everywhere. engineMutex_ stays a LEAF and is never taken
-    by the callback. Before L1a a plain assignment was safe only because the
-    device could not be running yet.
+12. THE ENGINE IS PUBLISHED TO THE CALLBACK, NEVER OWNED BY IT (QBX-297). A new
+    AudioEngine can be minted, and the old one released, while the callback is
+    RUNNING (Play and Stop under a device the live lane keeps open). Before L1a
+    a plain assignment was safe only because the device could not be running
+    yet; L1a made the callback take an owning `std::atomic_load` copy, which is
+    a pooled mutex in libstdc++ and a copy that could be the LAST reference —
+    a Stop landing mid-callback then ran `~AudioEngine`, which joins the
+    readahead thread, on the audio thread. Now there are two handles and one
+    writer, the same publication `AudioEngine` uses for its frozen root
+    (re-rooting property 6), with the handshake factored into
+    `tw/playback/twrtquiescence.h` (`twRtQuiescence`) for both:
+    - **`audioEngine_`, the owning handle**, a plain `shared_ptr` guarded by
+      `engineMutex_`. Non-RT readers (`setCycle`, `requestSeek`,
+      `setLiveMasterClosure`, the monitor thread) take an owning copy through
+      `engineSnapshot()`.
+    - **`rtEngine_`, what the callback reads**: an `std::atomic<AudioEngine*>`,
+      loaded once per callback inside a `callbackSeq_` block that lasts the
+      whole callback. No lock, no refcount, and never the last reference.
+      `getAudioEngine()` reads it too — non-owning, for tests and status.
+    - **`publishEngine()`, the one writer** (`startOutput`'s publish and
+      `releaseEngine`, from `stopOutput` and from the monitor thread's
+      teardown). Serialised by `enginePublishMutex_` (taken before
+      `engineMutex_`, never inside it, never by the callback), it swaps the
+      owning handle, stores the raw pointer seq_cst, and releases the replaced
+      engine only once `callbackSeq_` shows no block that may have read it is
+      in flight — bounded at 250 ms. Past the bound the engine is parked in
+      `retiredEngines_` and released by the next publish that finds the
+      callback quiescent, or with the speaker (after its destructor closed the
+      device). The release runs after both locks are dropped.
+
+    Gate: `playback_test`'s QBX-297 case. An RT-gated root parks the callback
+    inside `graphChannels()`, engine in hand, with the live lane running: (a) a
+    Stop under the bound does not return and does not release the engine until
+    the block ends; (b) past the bound it returns with the engine parked, and
+    the next publish releases it; (c) 60 Play/Stop cycles under the running
+    callback. Every section asserts `AudioEngine::destroyedOnRtThreadCount()`
+    stays 0 — `~AudioEngine` counts itself when `twRtThreadGuard` says it runs
+    on the RT.
 
 13. THE RING IS A STREAM OF POSITION-STAMPED FRAMES, NOT A QUEUE OF BLOCKS,
     and the RT sum is a PURE FUNCTION (`twlive::mixStream`, extracted for the
@@ -612,7 +644,8 @@ through the published root (property 6). Six properties are contractual:
      parked in `retiredRoots_` (main thread only) and released at the next swap
      that finds the pull quiescent, or with the engine.
 
-   **Why not `std::atomic_load` on the RT, as `audioEngine_` does.** In
+   **Why not `std::atomic_load` on the RT, as `twSpeaker::audioEngine_` did
+   until QBX-297 (invariant 12).** In
    libstdc++ the free `atomic_load`/`atomic_store` on a `shared_ptr` take one of
    a pool of mutexes (`_Sp_locker`), and C++20's `atomic<shared_ptr>` is a
    lock bit with a futex wait — neither is lock-free. Worse, the RT's copy can

@@ -3,6 +3,7 @@
 #include "tw/graph/twcomponent.h"
 #include "tw/pages/tw_output_page.h"
 #include "tw/graph/tw303aenv.h"
+#include "tw/graph/tw_freeze_context.h"   // twRtThreadGuard (QBX-297)
 #include "tw/core/twlog.h"
 #include <algorithm>
 #include <chrono>
@@ -63,7 +64,16 @@ inline void zeroChannels(float* const* out, std::size_t nChannels,
 
 }  // namespace
 
+std::atomic<int> AudioEngine::destroyedOnRtThread_{0};
+std::atomic<int> AudioEngine::destroyed_{0};
+
 AudioEngine::~AudioEngine() {
+    // QBX-297: an engine must never die on the RT callback -- this destructor
+    // joins the readahead thread. twSpeaker publishes its engine so that the
+    // callback never owns one; this counts the breach if that ever regresses.
+    if (twRtThreadGuard::onRtThread())
+        destroyedOnRtThread_.fetch_add(1, std::memory_order_relaxed);
+    destroyed_.fetch_add(1, std::memory_order_relaxed);
     // Ensure read-ahead thread is stopped before destruction
     readaheadRunning_ = false;
     readaheadCv_.notify_all();
@@ -92,12 +102,9 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
     // either the setter sees this block as in flight, or this read sees the
     // setter's new pointer -- never neither. A raw pointer, so this thread
     // never owns a root and can never be the one that destroys it.
-    struct PullScope {
-        std::atomic<std::uint32_t> &seq;
-        explicit PullScope(std::atomic<std::uint32_t> &s) : seq(s)
-        { seq.fetch_add(1, std::memory_order_seq_cst); }
-        ~PullScope() { seq.fetch_add(1, std::memory_order_release); }
-    } pullScope(pullSeq_);
+    // The handshake itself is twRtQuiescence (QBX-297 factored it out; the
+    // speaker publishes its engine to the callback the same way).
+    twRtQuiescence::Block pullScope(pullSeq_);
     twComponent *const root = rtFrozenRoot_.load(std::memory_order_seq_cst);
 
     if (!root || nFrames == 0) {
@@ -674,25 +681,6 @@ std::shared_ptr<twComponent> AudioEngine::frozenRoot() const
     return r ? r : synthOutput_;
 }
 
-bool AudioEngine::awaitPullQuiescent()
-{
-    // Main thread, right after a seq_cst store to rtFrozenRoot_. An EVEN count
-    // means no block is in flight, and any block that starts later reads the
-    // new pointer. An ODD one names the block in flight; it is over once the
-    // count moves. The bound is many device blocks long: a pull that has not
-    // finished one block by then is stalled, and the caller parks the old root
-    // rather than freeing it under that block.
-    const std::uint32_t inFlight = pullSeq_.load( std::memory_order_seq_cst );
-    if( ( inFlight & 1u ) == 0 ) return true;
-    const auto deadline = std::chrono::steady_clock::now()
-                        + std::chrono::milliseconds( 250 );
-    while( pullSeq_.load( std::memory_order_acquire ) == inFlight ) {
-        if( std::chrono::steady_clock::now() >= deadline ) return false;
-        std::this_thread::yield();
-    }
-    return true;
-}
-
 void AudioEngine::setFrozenDemandRoot( const std::shared_ptr<twComponent> &root )
 {
     // Main thread. A no-op when nothing moves, because the drop below is not
@@ -707,7 +695,9 @@ void AudioEngine::setFrozenDemandRoot( const std::shared_ptr<twComponent> &root 
     std::atomic_store( &frozenDemandRoot_, root );
     rtFrozenRoot_.store( root ? root.get() : synthOutput_.get(),
                          std::memory_order_seq_cst );
-    if( awaitPullQuiescent() ) {
+    // Bounded: a pull that has not finished one block within it is stalled,
+    // and the old root is parked rather than freed under that block.
+    if( pullSeq_.awaitQuiescent() ) {
         // Everything parked earlier was replaced before this store, so the
         // pull, now past a block boundary after it, cannot hold any of them.
         retiredRoots_.clear();

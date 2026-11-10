@@ -30,6 +30,7 @@
 #include "tw/plugins/twplugininsert.h"
 #include "tw/plugins/twpluginslotproc.h"
 #include "tw/graph/twlatch.h"
+#include "tw/graph/tw_freeze_context.h"   // twRtThreadGuard (QBX-297)
 
 #include <algorithm>
 #include <atomic>
@@ -128,6 +129,28 @@ public:
     }
 private:
     const bool gated_;
+};
+
+// QBX-297: a tone that can HOLD twSpeaker's render callback inside its block.
+// The callback asks its engine for the project width (graphChannels(), the
+// context root's getOutputChannels()) right after it has read the engine, so
+// arming the gate parks the callback with that engine in hand -- the window in
+// which releasing the engine used to leave the callback the last owner. Only
+// the thread twRtThreadGuard marks as the RT is held; the readahead is not.
+static std::atomic<bool> gRtGateArmed{false};
+static std::atomic<bool> gRtGateEntered{false};
+
+class RtGatedTone : public ToneComponent {
+public:
+    explicit RtGatedTone(tw303aEnvironment &e) : ToneComponent(e) {}
+    idx_t getOutputChannels() const override {
+        if (twRtThreadGuard::onRtThread() && gRtGateArmed.load()) {
+            gRtGateEntered.store(true);
+            while (gRtGateArmed.load())
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        return 1;
+    }
 };
 
 // A WIDE tone whose declared width can be changed at runtime, for AC B4.5's
@@ -3298,6 +3321,127 @@ int main()
                   "QBX-287 (c): nothing left parked");
         }
         engine.stopReadahead();
+    }
+
+    // ------------------------------------------------------------------
+    // QBX-297: THE SPEAKER'S ENGINE IS PUBLISHED TO THE CALLBACK, NOT OWNED BY
+    // IT. With the live lane holding the device open, Play mints an engine and
+    // Stop releases it WHILE THE CALLBACK RUNS. The callback used to take an
+    // owning std::atomic_load copy, so a Stop landing mid-callback left it the
+    // last owner and ~AudioEngine (which joins the readahead) ran on the RT.
+    //   (a) a Stop under a callback parked mid-block does not return, and does
+    //       not release the engine, until that block is over -- and then the
+    //       engine dies on the stopping thread, not the callback's;
+    //   (b) past the bound the Stop returns and PARKS the engine, which the
+    //       next publish releases -- still not on the callback;
+    //   (c) a storm of Play/Stop under the running callback: no engine is ever
+    //       destroyed on the RT. (The case TSan reads.)
+    {
+        printf("\n=== QBX-297: the speaker's engine under a running callback ===\n");
+#if defined(_WIN32)
+        _putenv((char *)"SMARAGD_AUDIO_BACKEND=capture");
+#else
+        setenv("SMARAGD_AUDIO_BACKEND", "capture", 1);
+#endif
+        auto tone = std::make_shared<RtGatedTone>(env);
+        tone->init();
+        TestPlaybackContext ctx;
+        ctx.root = tone;
+
+        auto spk = std::make_shared<twSpeaker>(env);
+        spk->init();
+        spk->setPlaybackContext(&ctx);
+        const std::uint32_t rate = (std::uint32_t)env.getSRate();
+        CHECK(spk->openLive(rate, 1) == 0,
+              "QBX-297: the live lane opens the device, so the callback runs throughout");
+        const int rtDeadBefore = audio::AudioEngine::destroyedOnRtThreadCount();
+
+        // Play, park the callback inside a block that holds the new engine,
+        // then Stop from another thread and look while the block is held.
+        auto parkedStop = [&](int holdMs, bool &stopReturnedWhileParked,
+                              std::size_t &retiredWhileParked) {
+            spk->startOutput();   // publishes an engine under the running callback
+            gRtGateEntered.store(false);
+            gRtGateArmed.store(true);
+            for (int i = 0; i < 2000 && !gRtGateEntered.load(); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            CHECK(gRtGateEntered.load(),
+                  "QBX-297: the callback is parked inside a block, engine in hand");
+            const int deadBefore = audio::AudioEngine::destroyedCount();
+            std::atomic<bool> stopped{false};
+            std::thread stopper([&] { spk->stopOutput(); stopped.store(true); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
+            stopReturnedWhileParked = stopped.load();
+            retiredWhileParked = spk->retiredEngineCountForTest();
+            if (audio::AudioEngine::destroyedCount() != deadBefore) {
+                // The engine the parked callback holds was destroyed under it.
+                // Un-parking now would run the callback on freed memory, so
+                // report and stop: a deterministic FAIL, not undefined
+                // behaviour (QBX-297 sabotage: the publisher's wait removed).
+                printf("FAIL QBX-297: the engine was DESTROYED under a callback block "
+                       "still using it (Stop returned: %s); aborting before the "
+                       "callback resumes on freed memory\n",
+                       stopReturnedWhileParked ? "yes" : "no");
+                fflush(stdout);
+                std::_Exit(1);
+            }
+            gRtGateArmed.store(false);
+            stopper.join();
+            // Let the released callback finish the block it was in.
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        };
+
+        {   // (a) a block that ends within the bound
+            bool returned = true;
+            std::size_t retired = 99;
+            parkedStop(100, returned, retired);
+            if (audio::AudioEngine::destroyedOnRtThreadCount() != rtDeadBefore)
+                printf("FAIL QBX-297: an engine was DESTROYED ON THE CALLBACK THREAD "
+                       "(the RT owned it; sabotage: atomic_load on the RT)\n");
+            CHECK(!returned,
+                  "QBX-297 (a): Stop does not return while a callback block may still use the engine");
+            CHECK(retired == 0,
+                  "QBX-297 (a): ...it waits rather than parking, inside the bound");
+            CHECK(audio::AudioEngine::destroyedOnRtThreadCount() == rtDeadBefore,
+                  "QBX-297 (a): the engine is NOT destroyed on the callback thread");
+            CHECK(spk->getAudioEngine() == nullptr && spk->retiredEngineCountForTest() == 0,
+                  "QBX-297 (a): ...and it IS released, nothing kept");
+        }
+        {   // (b) a block that outlasts the bound
+            bool returned = false;
+            std::size_t retired = 0;
+            parkedStop(600, returned, retired);
+            CHECK(returned,
+                  "QBX-297 (b): past the bound Stop returns rather than hang on a stalled callback");
+            CHECK(retired == 1,
+                  "QBX-297 (b): ...with the engine PARKED, not released under the block");
+            CHECK(audio::AudioEngine::destroyedOnRtThreadCount() == rtDeadBefore,
+                  "QBX-297 (b): the parked engine is not destroyed on the callback thread");
+            CHECK(spk->retiredEngineCountForTest() == 1,
+                  "QBX-297 (b): ...it stays parked after the block ends, until a publish");
+            spk->startOutput();   // its releaseEngine() finds the callback quiescent
+            CHECK(spk->retiredEngineCountForTest() == 0,
+                  "QBX-297 (b): the next publish releases what was parked");
+            spk->stopOutput();
+            CHECK(audio::AudioEngine::destroyedOnRtThreadCount() == rtDeadBefore,
+                  "QBX-297 (b): ...off the callback thread");
+        }
+        {   // (c) the storm
+            constexpr int CYCLES = 60;
+            for (int i = 0; i < CYCLES; ++i) {
+                spk->startOutput();
+                std::this_thread::sleep_for(std::chrono::milliseconds(i % 7));
+                spk->stopOutput();
+            }
+            printf("     QBX-297 (c): %d Play/Stop cycles under the running callback, "
+                   "%d engine(s) destroyed on it\n", CYCLES,
+                   audio::AudioEngine::destroyedOnRtThreadCount() - rtDeadBefore);
+            CHECK(audio::AudioEngine::destroyedOnRtThreadCount() == rtDeadBefore,
+                  "QBX-297 (c): no engine was ever destroyed on the callback thread");
+            CHECK(spk->retiredEngineCountForTest() == 0 && spk->getAudioEngine() == nullptr,
+                  "QBX-297 (c): nothing left parked or published");
+        }
+        spk->closeLive();
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",

@@ -12,6 +12,7 @@
 
 #include "tw/sources/twresampler.h"
 #include "tw/schedule/capture_revalidator.h"  // stage 5: demand consumer
+#include "tw/playback/twrtquiescence.h"
 
 class twComponent;
 class twLatchStreamingOutput;
@@ -255,7 +256,19 @@ public:
     /// Main thread only.
     std::size_t retiredRootCountForTest() const { return retiredRoots_.size(); }
 
+    /// QBX-297: how many engines, process-wide, were destroyed on a thread
+    /// twRtThreadGuard marks as the RT callback. Must stay 0: ~AudioEngine
+    /// joins the readahead thread. twSpeaker's callback never owns an engine
+    /// (playback CONTRACT invariant 12), so only a regression can count here.
+    static int destroyedOnRtThreadCount()
+    { return destroyedOnRtThread_.load(std::memory_order_relaxed); }
+    /// QBX-297 test seam: engines destroyed so far, on any thread.
+    static int destroyedCount()
+    { return destroyed_.load(std::memory_order_relaxed); }
+
 private:
+    static std::atomic<int> destroyedOnRtThread_;
+    static std::atomic<int> destroyed_;
     std::shared_ptr<twComponent> synthOutput_;
     // HOW THE FROZEN ROOT IS PUBLISHED (QBX-287; playback CONTRACT, "The frozen
     // lane RE-ROOTS"). setFrozenDemandRoot() runs on the main thread while the
@@ -279,16 +292,13 @@ private:
     //    that does observe a quiescent pull, or with the engine.
     std::shared_ptr<twComponent> frozenDemandRoot_;
     std::atomic<twComponent *> rtFrozenRoot_{nullptr};
-    std::atomic<std::uint32_t> pullSeq_{0};
+    twRtQuiescence pullSeq_;   // the handshake (twrtquiescence.h)
     std::vector<std::shared_ptr<twComponent>> retiredRoots_;
     // Pull thread only: the root currentFrozenPage_ was read from. A block that
     // reads a different root drops the held page itself, so no block can serve
     // one root's page under another root's epoch, whatever order it observes
     // the root and the seek seam in.
     twComponent *rtHeldRoot_ = nullptr;
-    // Main thread: true once the pull was seen outside any block that began
-    // before the caller's store to rtFrozenRoot_ (bounded wait).
-    bool awaitPullQuiescent();
     uint32_t engineSampleRate_;  // The engine's native sample rate
 
     // Frozen page rendering state (Tier 1 enhancement)
