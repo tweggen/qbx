@@ -64,8 +64,12 @@
     <!-- ========== 2. THE ARRANGER PAINTS EACH LANE ITS OWN COLOUR ===== -->
     <open-arrangement-tab name="Drums"/>
     <grid-disable/>
+    <!-- Material is classified by sClipBodyOf(Drums:1), i.e. index 1 in
+         Drums. A lane painted with the master's answer (a miss, so index 0)
+         has NO column of that colour: every column reads as a gap. The
+         clip spans the whole grab, so the honest bound is zero. -->
     <assert-take-lane trackPath="Drums:1" takeRow="-1" grabWidth="800"
-                      grabHeight="300" maxGapCols="400"/>
+                      grabHeight="300" maxGapCols="0" gapRuns="0"/>
 
     <!-- ========== 3. THE SEND STRIP OFFERS ITS OWN ROOT'S LANES ======= -->
     <assert-send-strip trackPath="Drums:0" rows="1" contains="lane=DrumVerb"
