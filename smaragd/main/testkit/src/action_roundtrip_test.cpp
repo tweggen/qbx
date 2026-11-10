@@ -863,6 +863,13 @@ const Fixture kFixtures[] = {
       "<save-window-layout force='true' expectWritten='true'/>" },
     { "save-window-layout",
       "<save-window-layout force='false' expectWritten='false'/>" },
+    // QBX-294. windowState/expectStored are written only when given, so the
+    // two fixtures above round-trip without them and this one with both.
+    { "save-window-layout",
+      "<save-window-layout force='true' expectWritten='true'"
+      " windowState='fullscreen' expectStored='maximized'/>" },
+    { "restore-window-layout",
+      "<restore-window-layout seed='report' expectState='maximized'/>" },
     // GATE 5c, + gate 6's expectAuth. Every attribute is written
     // unconditionally, so the fixture declares all nine -- including the two
     // whose defaults are non-empty.

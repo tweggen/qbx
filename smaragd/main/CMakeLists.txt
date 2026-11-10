@@ -611,6 +611,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sstatusbartestactions.h
     testkit/include/app/testkit/sassertunsavedchangesaction.h
     testkit/include/app/testkit/ssavewindowlayoutaction.h
+    testkit/include/app/testkit/srestorewindowlayoutaction.h
     testkit/include/app/testkit/sassertmasterinputsaction.h
     testkit/include/app/testkit/scloseprojectaction.h
     testkit/include/app/testkit/sopenprojectaction.h
@@ -685,6 +686,7 @@ set(APP_UI_FILES
     testkit/src/sstatusbartestactions.cpp
     testkit/src/sassertunsavedchangesaction.cpp
     testkit/src/ssavewindowlayoutaction.cpp
+    testkit/src/srestorewindowlayoutaction.cpp
     testkit/src/sassertmasterinputsaction.cpp
     testkit/src/scloseprojectaction.cpp
     testkit/src/sopenprojectaction.cpp
@@ -1205,6 +1207,19 @@ target_link_libraries(plugin_search_paths_test
 )
 add_test(NAME plugin_search_paths_test COMMAND plugin_search_paths_test)
 set_tests_properties(plugin_search_paths_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# QBX-294: never relaunch into full screen. The two pure functions of
+# app/shell/swindowgeometry.h, judged against blobs Qt itself writes and
+# restores on never-shown widgets; the SMainWindow call sites are gated by
+# window_layout_fullscreen.qxa.
+add_executable(window_geometry_test shell/tests/window_geometry_test.cpp)
+target_link_libraries(window_geometry_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME window_geometry_test COMMAND window_geometry_test)
+set_tests_properties(window_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(secret_store_test shell/tests/secret_store_test.cpp)

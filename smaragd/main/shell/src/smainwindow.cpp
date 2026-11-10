@@ -49,6 +49,7 @@
 #include "app/shell/smainwindow.h"
 #include "app/shell/stransportreadout.h"
 #include "app/shell/sviewtabs.h"
+#include "app/shell/swindowgeometry.h"
 #include "app/shell/sarmindicator.h"
 #include "app/shell/ssoloindicator.h"
 #include "app/model/sobject.h"
@@ -1394,7 +1395,12 @@ bool SMainWindow::saveWindowLayout( bool force )
     if( !force && SApplication::app().isTestCaseMode() ) return false;
 
     const QByteArray state = saveState();
-    const QByteArray geo   = saveGeometry();
+    // QBX-294: full screen belongs to this session, never to the next one. The
+    // blob Qt writes carries the flag, and restored it put every later start
+    // back into full screen (on macOS with no menu bar and no way out); the
+    // stored copy says MAXIMIZED instead. restoreWindowLayout() maps it too,
+    // for an INI written before this.
+    const QByteArray geo   = swindowgeometry::withoutFullScreen( saveGeometry() );
     // The timer runs whether or not anything moved; an unchanged INI write is
     // pure churn (and, with several worktrees' apps open, pure contention).
     if( !force && state == lastSavedLayout_ && !lastSavedLayout_.isEmpty()
@@ -1411,6 +1417,18 @@ bool SMainWindow::restoreWindowLayout()
 {
     const QByteArray geo = SSettings::instance().windowGeometry();
     const bool geoRestored = !geo.isEmpty() && restoreGeometry( geo );
+    // QBX-294: never relaunch into full screen. A geometry stored with the
+    // full-screen flag (any INI written before saveWindowLayout() dropped it)
+    // comes back maximized, which is what the first-run path shows.
+    if( geoRestored ) {
+        const Qt::WindowStates restored = windowState();
+        const Qt::WindowStates relaunch = swindowgeometry::relaunchState( restored );
+        if( relaunch != restored ) {
+            qInfo() << "restoreWindowLayout: the stored geometry was full screen;"
+                       " relaunching maximized instead (QBX-294)";
+            setWindowState( relaunch );
+        }
+    }
     const QByteArray state = SSettings::instance().windowState();
     if( !state.isEmpty() ) restoreState( state );
     return geoRestored;

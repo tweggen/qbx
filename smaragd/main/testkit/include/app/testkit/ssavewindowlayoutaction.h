@@ -31,8 +31,20 @@
  *                 written. The pair (force=false, expectWritten=false) is the
  *                 suppression assertion.
  *
+ *   windowState   (QBX-294) "fullscreen" | "maximized" | "normal" -- put the
+ *                 main window in that state for the call, and back afterwards.
+ *                 Omitted: leave the window as it is.
+ *   expectStored  (QBX-294) "maximized" | "normal" | "fullscreen" -- the state
+ *                 Qt's own restoreGeometry() gives a scratch widget from the
+ *                 blob the call stored ("maximized" means maximized and not
+ *                 full screen). Omitted: not checked. The full-screen window's
+ *                 blob must restore maximized: no stored geometry may carry the
+ *                 full-screen flag.
+ *
  * XML format:
  * <save-window-layout force="true" expectWritten="true"/>
+ * <save-window-layout force="true" expectWritten="true"
+ *                     windowState="fullscreen" expectStored="maximized"/>
  * <save-window-layout force="false" expectWritten="false"/>
  */
 class SSaveWindowLayoutAction : public SAction
@@ -43,13 +55,16 @@ public:
     QString name() const override
     { return QStringLiteral( "save-window-layout" ); }
     QStringList knownAttributes() const override
-    { return { QStringLiteral( "force" ), QStringLiteral( "expectWritten" ) }; }
+    { return { QStringLiteral( "force" ), QStringLiteral( "expectWritten" ),
+               QStringLiteral( "windowState" ), QStringLiteral( "expectStored" ) }; }
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
     bool force_         = true;
     bool expectWritten_ = true;
+    QString windowState_;
+    QString expectStored_;
 };
 
 #endif // _SSAVEWINDOWLAYOUTACTION_H_
