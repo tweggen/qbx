@@ -5082,7 +5082,7 @@ bool SMainWindow::clickFeelFlowPanel( const QString &trackPath,
 
 // Proposal 09 §15. See the header for why this lives on the shell.
 bool SMainWindow::viewPlayheadFor( const QString &rootName, offset_t &pos,
-                                   bool &sounding ) const
+                                   bool &sounding, bool *inView ) const
 {
     SProject *project = SApplication::app().getCurrentProject();
     SObject *root = splacements::rootNamed( project, rootName );
@@ -5093,6 +5093,15 @@ bool SMainWindow::viewPlayheadFor( const QString &rootName, offset_t &pos,
     const SMVActualView::LocalPlayhead lp = view->contentView()->localPlayhead();
     pos = lp.pos;
     sounding = lp.sounding;
+    if( inView ) *inView = view->contentView()->playheadInView();
+    return true;
+}
+
+bool SMainWindow::advanceArrangerFollowClock( qint64 ms )
+{
+    SStdMixerView *v = ensureArranger_();
+    if( !v || !v->contentView() ) return false;
+    v->contentView()->tkAdvanceFollowClock( ms );
     return true;
 }
 

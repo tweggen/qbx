@@ -329,8 +329,15 @@ public:
     // Here for the same reason collectClipEnvelope is: testkit may not include
     // app/timeline (testkit CONTRACT inv. 5), and the point of the verb is
     // that it reads the REAL view rather than re-deriving the number.
+    //
+    // `inView` (QBX-237), when given, is whether that cursor lies inside the
+    // view's visible span -- what follow-the-playhead keeps true.
     bool viewPlayheadFor( const QString &rootName, offset_t &pos,
-                          bool &sounding ) const;
+                          bool &sounding, bool *inView = nullptr ) const;
+    // QBX-237 TEST ENTRY POINT (`advance-follow-clock`): move the ACTIVE
+    // arranger's follow-hold clock forward by `ms`, so a case steps across
+    // the 5 s hold without waiting for it. False with no arranger.
+    bool advanceArrangerFollowClock( qint64 ms );
 
     // `takeIndex >= 0` reads ONE TAKE of a take column through
     // `SObjectRenderer::collectTakeEnvelope` — the exact call a TAKE LANE

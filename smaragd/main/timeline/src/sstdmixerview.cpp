@@ -33,6 +33,7 @@
 #include "app/objects/mixer/sstdmixer.h"
 #include "app/objects/mixer/strackbroadcast.h"
 #include "app/timeline/sstdmixerview.h"
+#include "app/timeline/sfollowplayhead.h"
 #include "app/timeline/ssubmit.h"
 #include "app/timeline/strackgestures.h"
 #include "app/shell/sviewtabs.h"
@@ -446,58 +447,63 @@ void SMVActualView::globalLocatorMoved( offset_t newPos, offset_t oldPos )
     }
 }
 
+qint64 SMVActualView::followNowMs_()
+{
+    if( !followClock_.isValid() ) followClock_.start();
+    return followClock_.elapsed() + followClockSkewMs_;
+}
+
 void SMVActualView::armFollowHold()
 {
     followHoldArmed_ = true;
-    followHoldTimer_.restart();
+    followHoldStartMs_ = followNowMs_();
+}
+
+offset_t SMVActualView::visibleSpanFrames() const
+{
+    const int w = width();
+    if( w <= 0 || secondWidth_ <= 0.0 ) return 0;
+    const int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
+    return (offset_t)( (double) w / secondWidth_ * srate );
+}
+
+bool SMVActualView::playheadInView() const
+{
+    const offset_t pos = localPlayhead().pos;
+    return pos >= upperLeftOffset_ && pos < upperLeftOffset_ + visibleSpanFrames();
 }
 
 void SMVActualView::followLocator( offset_t newPos, offset_t oldPos )
 {
-    // Only when enabled, and only for a real advance under playback/recording
-    // (this slot is wired to locatorAdvanced, so a manual seek never lands here).
-    if( !followPlayhead_ ) return;
+    // Only for a real advance under playback/recording (this slot is wired to
+    // locatorAdvanced, so a manual seek never lands here).
     if( newPos == oldPos ) return;
+    static_assert( FOLLOW_HOLD_MS == sfollow::HOLD_MS,
+                   "the contract's FOLLOW_HOLD_MS is sfollow's HOLD_MS" );
 
-    // AC-g1: a manual scroll suspends re-paging for FOLLOW_HOLD_MS after the
-    // last one. followHoldTimer_ is only ever armed from a USER-initiated pan
-    // (wheelEvent, the scrollbar's own user-driven signal, drag-scroll-past-
-    // the-edge) — never from here or from setLeftOffset() itself, which would
-    // let the very re-page the hold exists to delay immediately disarm it.
-    if( followHoldArmed_ ) {
-        if( followHoldTimer_.elapsed() < FOLLOW_HOLD_MS ) return;
-        followHoldArmed_ = false;   // the hold has expired; resume following
-    }
-
-    int w = width();
-    if( w <= 0 ) return;
-    // In an arrangement tab the cursor is at the DERIVED position (proposal 09
-    // §15), so following newPos — a MASTER frame — would scroll to a column the
-    // cursor is nowhere near. Follow what is actually drawn, and do not follow
-    // at all while this root is not being heard: the cursor is resting, and a
-    // view that scrolled while nothing moved would be chasing a still line.
+    // QBX-237: the decision is sfollow::decide; this only gathers its state.
+    // The playhead is the DRAWN one (proposal 09 §15): in an arrangement tab
+    // newPos is a MASTER frame and names a column the cursor is nowhere near,
+    // which is why the re-page used to land the view past the cursor there.
     const LocalPlayhead lp = localPlayhead();
-    if( !lp.sounding ) return;
-    int x = getXPosOfOffset( lp.pos );   // cursor position in view-space pixels
+    sfollow::State st;
+    st.enabled     = followPlayhead_;
+    st.sounding    = lp.sounding;
+    st.advancing   = newPos > oldPos;
+    st.interacting = pointerGesture_ || dndOver_;
+    // AC-g1: armed ONLY from a user-initiated pan (wheelEvent, the scrollbar's
+    // own user-driven signal, drag-scroll-past-the-edge) -- never from here or
+    // from setLeftOffset() itself, which would let the very re-page the hold
+    // exists to delay immediately re-arm it.
+    st.holdArmed   = followHoldArmed_;
+    st.msSinceManualScroll = followHoldArmed_ ? followNowMs_() - followHoldStartMs_ : 0;
+    st.playhead    = lp.pos;
+    st.leftOffset  = upperLeftOffset_;
+    st.visibleSpan = visibleSpanFrames();
 
-    // Leading-edge zones: last 20% moving forward, first 20% winding backward.
-    // Re-page so the cursor lands back near the far side (10% / 90%), leaving
-    // room ahead of it. Anything outside these zones is left untouched.
-    const double forwardEdge  = 0.80 * w;
-    const double backwardEdge = 0.20 * w;
-    double targetPx;
-    if( newPos > oldPos && x >= forwardEdge )        targetPx = 0.10 * w;
-    else if( newPos < oldPos && x <= backwardEdge )  targetPx = 0.90 * w;
-    else return;
-
-    // Solve for the left time offset that puts newPos at targetPx:
-    //   getXPosOfOffset(newPos) == targetPx
-    // (same shape as the zoom-to-cursor re-anchoring in wheelEvent()).
-    int srate = smv_.model_ ? smv_.model_->getProject().getSRate() : 48000;
-    double ahead = targetPx / secondWidth_ * srate;
-    offset_t newLeft = ( (double) newPos > ahead )
-                           ? (offset_t)( (double) newPos - ahead ) : 0;
-    setLeftOffset( newLeft );   // recomputes upperLeftX_, syncs scrollbar, repaints
+    const sfollow::Decision d = sfollow::decide( st );
+    if( d.holdExpired ) followHoldArmed_ = false;   // resume following
+    if( d.scroll ) setLeftOffset( d.newLeft );   // recomputes upperLeftX_, syncs scrollbar, repaints
 }
 
 void SMVActualView::resizeEvent( QResizeEvent * )
@@ -2721,6 +2727,7 @@ void SMVActualView::syncDuplicateGroup()
 
 void SMVActualView::mouseReleaseEvent( QMouseEvent *ev )
 {
+    if( !( ev->buttons() & Qt::LeftButton ) ) pointerGesture_ = false;   // QBX-237
     // ...and finishes it: revert the live preview, then commit ONE action (P6).
     if( smv_.automationUi().release( *this, ev->pos() ) ) return;
 
@@ -3806,6 +3813,7 @@ void SMVActualView::mouseMoveEvent( QMouseEvent *ev )
 
     // No button held: this is a hover — just update the gesture cursor.
     if( !( ev->buttons() & Qt::LeftButton ) ) {
+        pointerGesture_ = false;   // QBX-237: a release some popup swallowed
         updateHoverCursor( ev->pos(), ev->modifiers() );
         return;
     }
@@ -4652,6 +4660,7 @@ void SMVActualView::reportContainerDeadEnd( SObject &content )
 
 void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
 {
+    if( ev->button() == Qt::LeftButton ) pointerGesture_ = true;   // QBX-237
     // W2: double-click in a clip's marker strip adds a warp marker. LEFT
     // EXACTLY AS IS: the strip wins even over a container clip, so opening
     // one means double-clicking lower on its body.
@@ -4726,6 +4735,9 @@ void SMVActualView::mouseDoubleClickEvent( QMouseEvent *ev )
 
 void SMVActualView::mousePressEvent( QMouseEvent *ev )
 {
+    // QBX-237: a gesture is under way until the left button is let go, and
+    // the view must not follow the playhead under it.
+    if( ev->button() == Qt::LeftButton ) pointerGesture_ = true;
     qWarning( "mousePressEvent() called button=%d.\n",
 	      ev->button() );
     updateLastClickVars( ev->pos() );
@@ -6847,6 +6859,7 @@ bool SMVActualView::applyWheel( QWheelEvent *ev, int anchorX )
 
 void SMVActualView::dragEnterEvent(QDragEnterEvent *e)
 {
+    dndOver_ = true;   // QBX-237: no following while a drop is being aimed
     // Our own resource drags, plus OS file drops (proposal 37 6.1: a .mid
     // dragged in from a file manager is the natural way to get one in).
     if (e->mimeData()->hasFormat(QStringLiteral("application/x-smaragd-resource"))
@@ -6862,8 +6875,14 @@ void SMVActualView::dragMoveEvent(QDragMoveEvent *e)
     }
 }
 
+void SMVActualView::dragLeaveEvent( QDragLeaveEvent * )
+{
+    dndOver_ = false;   // QBX-237
+}
+
 void SMVActualView::dropEvent(QDropEvent *e)
 {
+    dndOver_ = false;   // QBX-237
     const QMimeData *mimeData = e->mimeData();
     QString payload;
     if (mimeData->hasFormat(QStringLiteral("application/x-smaragd-resource"))) {

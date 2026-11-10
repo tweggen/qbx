@@ -175,6 +175,12 @@ public:
     // THREAD_DETACH at thread exit and deadlocks the join() in stopOutput(). The
     // UI playhead is instead driven by a main-thread QTimer (see pumpLocator()).
     void setGlobalLocatorPosRealtime( offset_t );
+    // QBX-237 TEST ENTRY POINT (`advance-locator`): ONE tick of the playback
+    // poll, with the position the audio thread would have stored -- the
+    // realtime store, then pumpLocator(), so globalLocatorMoved AND
+    // locatorAdvanced fire exactly as they do under playback, with no device
+    // and no wall clock. Main thread only.
+    void tkPumpLocatorTo( offset_t o ) { setGlobalLocatorPosRealtime( o ); pumpLocator(); }
     bool isPlaying() const;
     bool isRenderingActive() const override;
     bool isRecordingActive() const;

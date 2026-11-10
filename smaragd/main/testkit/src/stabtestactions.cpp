@@ -156,8 +156,8 @@ SApplyResult SAssertViewPlayheadAction::apply( SProject *project )
     }
     win->ensureViewShell();
 
-    struct { offset_t pos = 0; bool sounding = false; } lp;
-    if( !win->viewPlayheadFor( root_, lp.pos, lp.sounding ) ) {
+    struct { offset_t pos = 0; bool sounding = false; bool inView = false; } lp;
+    if( !win->viewPlayheadFor( root_, lp.pos, lp.sounding, &lp.inView ) ) {
         qWarning() << "assert-view-playhead FAILED: no open view for root" << root_
                    << "(open-arrangement-tab first; this verb opens nothing)";
         return { false, nullptr };
@@ -168,6 +168,15 @@ SApplyResult SAssertViewPlayheadAction::apply( SProject *project )
         if( lp.sounding != want ) {
             qWarning() << "assert-view-playhead FAILED: root" << root_
                        << "sounding is" << lp.sounding << "expected" << want
+                       << "(pos" << (qint64) lp.pos << ")";
+            return { false, nullptr };
+        }
+    }
+    if( !inView_.isEmpty() ) {
+        const bool want = ( inView_ == QStringLiteral("true") );
+        if( lp.inView != want ) {
+            qWarning() << "assert-view-playhead FAILED: root" << root_
+                       << "inView is" << lp.inView << "expected" << want
                        << "(pos" << (qint64) lp.pos << ")";
             return { false, nullptr };
         }
@@ -189,6 +198,7 @@ void SAssertViewPlayheadAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "root", root_ );
     if( frameGiven_ ) elem.setAttribute( "frame", QString::number( frame_ ) );
     if( !sounding_.isEmpty() ) elem.setAttribute( "sounding", sounding_ );
+    if( !inView_.isEmpty() ) elem.setAttribute( "inView", inView_ );
     // Always written: the roundtrip gate compares attribute sets, and a
     // conditional write of a value the fixture spells is a mismatch.
     elem.setAttribute( "tolerance", QString::number( tolerance_ ) );
@@ -200,6 +210,12 @@ bool SAssertViewPlayheadAction::readXml( const QDomElement &elem, int )
     frameGiven_ = elem.hasAttribute( "frame" );
     frame_      = elem.attribute( "frame", "0" ).toLongLong();
     sounding_   = elem.attribute( "sounding" );
+    inView_     = elem.attribute( "inView" );
+    if( !inView_.isEmpty() && inView_ != QStringLiteral("true")
+        && inView_ != QStringLiteral("false") ) {
+        qWarning() << "assert-view-playhead: inView must be true or false, got" << inView_;
+        return false;
+    }
     tolerance_  = elem.attribute( "tolerance", "0" ).toLongLong();
     return true;
 }
