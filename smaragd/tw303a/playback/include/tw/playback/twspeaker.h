@@ -8,6 +8,7 @@
 #include "tw/playback/playback_context.h"
 #include "tw/playback/twliveclock.h"
 #include "tw/playback/twlivering.h"
+#include "tw/playback/twrtquiescence.h"
 
 #include <atomic>
 #include <chrono>
@@ -125,12 +126,25 @@ class twSpeaker
     virtual void reset() override;
 private:
     std::unique_ptr<audio::AudioBackend> backend_;
-    // CRITICAL: Changed from unique_ptr to shared_ptr to prevent use-after-free.
-    // The render callback captures 'this' and must access audioEngine_ safely even after
-    // stopOutput() is called. With shared_ptr, stopping the backend stops the callback
-    // thread, but local copies of the shared_ptr in flight keep the engine alive.
-    // This prevents crashes when stopOutput() is called concurrently with setCycle().
+    // THE ENGINE HANDLES (QBX-297; playback CONTRACT invariant 12).
+    //  * audioEngine_ is the OWNING handle, guarded by engineMutex_. Non-RT
+    //    callers (setCycle, requestSeek, the monitor thread) take an owning
+    //    copy through engineSnapshot(), so a concurrent stop cannot free the
+    //    engine under them.
+    //  * rtEngine_ is what the RENDER CALLBACK reads: a raw pointer, loaded once
+    //    per callback inside a callbackSeq_ block. It cannot be the last
+    //    reference, so an engine is never destroyed on the RT, and reading it
+    //    takes no lock (libstdc++'s atomic_load on a shared_ptr takes one).
+    //  * publishEngine() is the ONE writer of both. It releases the engine it
+    //    replaced only after callbackSeq_ shows the block that may have read it
+    //    is over (bounded); past the bound the engine is parked in
+    //    retiredEngines_ and released by a later publish, or with the speaker.
     std::shared_ptr<audio::AudioEngine> audioEngine_;
+    std::atomic<audio::AudioEngine *> rtEngine_{nullptr};
+    twRtQuiescence callbackSeq_;
+    // Guarded by enginePublishMutex_.
+    std::vector<std::shared_ptr<audio::AudioEngine>> retiredEngines_;
+    std::atomic<std::size_t> retiredEngineCount_{0};   // its size, for the test seam
     // Atomic so isPlaying() is a lock-free read. The check-and-act transitions
     // (start/stop) are serialised by outputMutex_ below — atomicity of the flag
     // alone doesn't make "if (!isPlaying_) return; …flip + drive the backend"
@@ -149,9 +163,12 @@ private:
     // places is what previously made the order inverted (latent AB-BA); the leaf rule
     // removes the inversion by construction.
     //
-    // Render callback accesses audioEngine_ via a shared_ptr copy (holds a ref even if
-    // audioEngine_ is reset); the backend is always stopped before the handle is cleared.
+    // The render callback never takes it: it reads rtEngine_ (see above).
     mutable std::mutex engineMutex_;
+    // Serialises the engine's WRITERS (publishEngine). Taken before
+    // engineMutex_, never inside it, never by the callback; held across the
+    // bounded quiescence wait, which is why it is not engineMutex_ itself.
+    mutable std::mutex enginePublishMutex_;
 
     // Task lifecycle: protects bufferingTask_ creation/joining. Brief hold.
     // Prevents race on std::thread assignment between startOutput() and stopOutput().
@@ -229,8 +246,12 @@ private:
     // clears audioEngine_ meanwhile.
     std::shared_ptr<audio::AudioEngine> engineSnapshot() const;
 
-    // Detach audioEngine_ under engineMutex_, then destroy it *outside* the lock
+    // Install `next` (null to clear) as the engine, for both handles, and release
+    // the replaced one once the callback cannot be using it -- outside every lock
     // (~AudioEngine joins the readahead thread — see the lock-order note above).
+    void publishEngine(std::shared_ptr<audio::AudioEngine> next);
+
+    // publishEngine(nullptr), plus the clock invalidation a vanished engine needs.
     void releaseEngine();
 
 protected:
@@ -284,7 +305,18 @@ public:
     audio::AudioBackend *getBackend() const { return backend_.get(); }
 
     // Get the audio engine for readahead control and playback state management
-    audio::AudioEngine *getAudioEngine() const { return audioEngine_.get(); }
+    // A raw, NON-OWNING read of the published engine (QBX-297): it may be
+    // released by the next stop. For a test or a status check; anything that
+    // uses the engine across a call must not rely on it staying alive.
+    audio::AudioEngine *getAudioEngine() const
+    { return rtEngine_.load(std::memory_order_acquire); }
+
+    // Test seam (QBX-297): engines publishEngine() could not yet prove the
+    // callback had stopped using, and so still keeps alive.
+    // Lock-free on purpose: a reader that took enginePublishMutex_ would wait
+    // out the very publish it is asking about.
+    std::size_t retiredEngineCountForTest() const
+    { return retiredEngineCount_.load(std::memory_order_acquire); }
 
     // Get current output state (for UI status line display)
     OutputState getOutputState() const { return outputState_.load(std::memory_order_relaxed); }

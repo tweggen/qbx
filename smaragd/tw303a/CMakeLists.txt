@@ -617,6 +617,7 @@ tw_module(playback
         playback/include/tw/playback/twliveplan.h
         playback/include/tw/playback/twlivepump.h
         playback/include/tw/playback/twmetronome.h
+        playback/include/tw/playback/twrtquiescence.h
         playback/src/twspeaker.cc
         playback/src/audio_engine.cc
         playback/src/twlivering.cc

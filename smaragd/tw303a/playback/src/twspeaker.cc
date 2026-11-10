@@ -45,23 +45,59 @@ twSpeaker::~twSpeaker()
 std::shared_ptr<audio::AudioEngine> twSpeaker::engineSnapshot() const
 {
     std::lock_guard<std::mutex> lock(engineMutex_);
-    return std::atomic_load(&audioEngine_);
+    return audioEngine_;
+}
+
+void twSpeaker::publishEngine(std::shared_ptr<audio::AudioEngine> next)
+{
+    // HOW THE ENGINE IS PUBLISHED (QBX-297; playback CONTRACT invariant 12).
+    // The callback reads `rtEngine_`, a raw pointer, inside a callbackSeq_
+    // block; it never owns an engine. So the engine this call replaces may be
+    // released only once no callback block can still be using it -- and its
+    // destructor joins the readahead thread, so it runs here, with no lock
+    // held, and never on the RT.
+    std::vector<std::shared_ptr<audio::AudioEngine>> dying;
+    {
+        // Writers are serialised (startOutput's publish, and releaseEngine
+        // from stopOutput and from the monitor thread's teardown), so that the
+        // quiescence one of them observes covers everything it releases. The
+        // callback never takes either lock; engineSnapshot() takes only the
+        // leaf, which is never held across the wait.
+        std::lock_guard<std::mutex> publish(enginePublishMutex_);
+        std::shared_ptr<audio::AudioEngine> old;
+        {
+            std::lock_guard<std::mutex> lock(engineMutex_);
+            old = std::move(audioEngine_);
+            audioEngine_ = next;
+        }
+        rtEngine_.store(next.get(), std::memory_order_seq_cst);
+        if (!old && retiredEngines_.empty()) return;   // nothing to release
+
+        if (callbackSeq_.awaitQuiescent()) {
+            // Everything parked earlier was replaced before this store, and the
+            // callback is now past a block boundary after it.
+            dying = std::move(retiredEngines_);
+            retiredEngines_.clear();
+            if (old) dying.push_back(std::move(old));
+        } else {
+            TWSPK_LOG( "the callback did not leave its block within the bound; "
+                       "the replaced engine is kept alive until a later publish "
+                       "or the speaker's end (QBX-297)" );
+            if (old) retiredEngines_.push_back(std::move(old));
+        }
+        retiredEngineCount_.store(retiredEngines_.size(), std::memory_order_release);
+    }
+    // ~AudioEngine joins the readahead thread; run it with no lock held.
+    dying.clear();
 }
 
 void twSpeaker::releaseEngine()
 {
-    std::shared_ptr<audio::AudioEngine> dying;
-    {
-        std::lock_guard<std::mutex> lock(engineMutex_);
-        dying = std::atomic_load(&audioEngine_);
-        std::atomic_store(&audioEngine_, std::shared_ptr<audio::AudioEngine>());
-    }
+    publishEngine(nullptr);
     // The frozen lane is gone; what the clock last published describes a
     // playhead that no longer exists (design D2). The pump falls back to its
     // virtual counter on the next block.
     engineClock_.invalidate();
-    // ~AudioEngine joins the readahead thread; run it with no lock held.
-    dying.reset();
 }
 
 bool twSpeaker::startOutput()
@@ -178,15 +214,12 @@ bool twSpeaker::startOutput()
 
     // Publish the handle (leaf-lock write).
 
-    {
-        // THE HANDLE SWAP UNDER A RUNNING CALLBACK (design D5). engineMutex_
-        // stays a LEAF and is never taken by the callback; the store is atomic
-        // so the callback's atomic_load either sees the old engine or the new
-        // one, never a torn pointer. Before L1a this was a plain assignment,
-        // which was safe only because the device could not be running yet.
-        std::lock_guard<std::mutex> lock(engineMutex_);
-        std::atomic_store(&audioEngine_, engine);
-    }
+    // THE HANDLE SWAP UNDER A RUNNING CALLBACK (design D5). The callback may
+    // be running (the live lane opened the device), so the engine is PUBLISHED
+    // to it (QBX-297, see publishEngine): it reads a raw pointer and either
+    // sees no engine or this one. Before L1a this was a plain assignment,
+    // which was safe only because the device could not be running yet.
+    publishEngine(engine);
 
     // Rate diagnostics
     {
@@ -358,7 +391,7 @@ void twSpeaker::setLiveMasterClosure(
     const bool entering = closure && !liveMasterClosure_.load(std::memory_order_acquire);
     if (entering) {
         liveFrozenRootUnderMaster_ = frozenRootUnderMaster;
-        if (auto e = std::atomic_load(&audioEngine_))
+        if (auto e = engineSnapshot())
             e->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
         liveMasterClosure_.store(closure, std::memory_order_release);
         return;
@@ -366,7 +399,7 @@ void twSpeaker::setLiveMasterClosure(
     liveMasterClosure_.store(closure, std::memory_order_release);
     liveFrozenRootUnderMaster_ = closure ? frozenRootUnderMaster
                                          : std::shared_ptr<twComponent>();
-    if (auto e = std::atomic_load(&audioEngine_))
+    if (auto e = engineSnapshot())
         e->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
 }
 
@@ -769,10 +802,17 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
     // `frames`, so it is counted here, once.
     outFramesDelivered_.fetch_add( (std::uint64_t) frames, std::memory_order_relaxed );
 
-    // The engine handle, atomically: since proposal 21 L1a a NEW engine can be
-    // minted while this callback is running (Play attaching to a device the
-    // live lane opened), so a plain read of the shared_ptr would be a race.
-    std::shared_ptr<audio::AudioEngine> engine = std::atomic_load(&audioEngine_);
+    // THE ENGINE, ONCE PER CALLBACK, AND NEVER OWNED (QBX-297). Since proposal
+    // 21 L1a a NEW engine can be minted -- and the old one released -- while
+    // this callback is running (Play/Stop under a device the live lane keeps
+    // open). It used to be an owning std::atomic_load of the shared_ptr: a
+    // pooled mutex in libstdc++, and a copy that could be the LAST reference,
+    // destroying a whole AudioEngine (and joining its readahead) right here.
+    // Now a raw pointer, read inside a callbackSeq_ block that lasts the whole
+    // callback; publishEngine() releases a replaced engine only after the
+    // block that may have read it is over. No lock, no refcount, no free.
+    twRtQuiescence::Block engineBlock(callbackSeq_);
+    audio::AudioEngine *const engine = rtEngine_.load(std::memory_order_seq_cst);
     const bool liveOn = liveActive();
 
     // PROPOSAL 45 M3 / D4b: under a CLOSURE plan the pump renders the master
