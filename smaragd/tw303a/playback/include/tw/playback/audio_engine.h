@@ -236,19 +236,59 @@ public:
      * frontier belong to the OLD root, so a change drops both through the same
      * seek-pending seam a locator jump uses; without that the RT would go on
      * serving rewire pages while the readahead filled the mixer's.
+     *
+     * It is called on a RUNNING engine, so the root is PUBLISHED, not assigned
+     * (QBX-287; see frozenDemandRoot_ below): the call may wait -- bounded --
+     * for the RT pull to finish the one block that may still be reading the old
+     * root, so that the old root is never released under it.
      */
     void setFrozenDemandRoot( const std::shared_ptr<twComponent> &root );
 
-    /// The component the FROZEN lane demands and reads. See
-    /// setFrozenDemandRoot; `synthOutput_` unless one was installed.
-    const std::shared_ptr<twComponent> &frozenRoot() const
-    { return frozenDemandRoot_ ? frozenDemandRoot_ : synthOutput_; }
+    /// The component the FROZEN lane demands and reads, as an owning handle:
+    /// `synthOutput_` unless setFrozenDemandRoot installed another. NOT for the
+    /// RT thread -- it goes through std::atomic_load, which libstdc++ answers
+    /// with a pooled mutex. The pull reads `rtFrozenRoot_` instead (QBX-287).
+    std::shared_ptr<twComponent> frozenRoot() const;
+
+    /// Test seam (QBX-287): how many roots setFrozenDemandRoot() could not yet
+    /// prove the pull thread had stopped reading, and so still keeps alive.
+    /// Main thread only.
+    std::size_t retiredRootCountForTest() const { return retiredRoots_.size(); }
 
 private:
     std::shared_ptr<twComponent> synthOutput_;
-    // See setFrozenDemandRoot(). Null means "synthOutput_", which is what every
-    // path did unconditionally before proposal 45 M3.
+    // HOW THE FROZEN ROOT IS PUBLISHED (QBX-287; playback CONTRACT, "The frozen
+    // lane RE-ROOTS"). setFrozenDemandRoot() runs on the main thread while the
+    // RT pull and the readahead are running, so the root is read by three
+    // threads and written by one:
+    //
+    //  * frozenDemandRoot_ is the OWNING handle. Null means "synthOutput_",
+    //    which is what every path did unconditionally before proposal 45 M3.
+    //    Written with std::atomic_store, read with std::atomic_load -- by the
+    //    main thread and by the readahead, which takes ONE owning copy per pass.
+    //    Neither is the RT, so the lock libstdc++ hides in those calls is fine.
+    //  * rtFrozenRoot_ is what the RT pull reads, ONCE per block: a raw pointer
+    //    with the synthOutput_ fallback already resolved, so it is non-null
+    //    whenever synthOutput_ is. A raw pointer cannot be the last reference,
+    //    so the RT never destroys a root and never touches a refcount.
+    //  * pullSeq_ is odd while pullBlock() is inside a block. The setter
+    //    publishes the new raw pointer and then waits (bounded) for the pull to
+    //    leave any block that may have read the old one, BEFORE the old owning
+    //    handle is dropped. If the bound runs out the old root is parked in
+    //    retiredRoots_ (main thread only) and released at the next setter call
+    //    that does observe a quiescent pull, or with the engine.
     std::shared_ptr<twComponent> frozenDemandRoot_;
+    std::atomic<twComponent *> rtFrozenRoot_{nullptr};
+    std::atomic<std::uint32_t> pullSeq_{0};
+    std::vector<std::shared_ptr<twComponent>> retiredRoots_;
+    // Pull thread only: the root currentFrozenPage_ was read from. A block that
+    // reads a different root drops the held page itself, so no block can serve
+    // one root's page under another root's epoch, whatever order it observes
+    // the root and the seek seam in.
+    twComponent *rtHeldRoot_ = nullptr;
+    // Main thread: true once the pull was seen outside any block that began
+    // before the caller's store to rtFrozenRoot_ (bounded wait).
+    bool awaitPullQuiescent();
     uint32_t engineSampleRate_;  // The engine's native sample rate
 
     // Frozen page rendering state (Tier 1 enhancement)
@@ -300,7 +340,8 @@ private:
     // currentPageStartPos_, cachedPageValidFrames_) are settled here, derived
     // from desiredPos — no caller may carry the cursor across a position jump.
 
-    void updateFrozenPage(uint64_t desiredPos);
+    // `root` is the block's one read of rtFrozenRoot_ (QBX-287).
+    void updateFrozenPage(uint64_t desiredPos, twComponent *root);
     // The content epoch of the page updateFrozenPage() ended up holding, or 0.
     std::atomic<uint64_t> servedEpoch_{0};
     // Read-ahead thread: pre-computes pages to keep ahead of playhead

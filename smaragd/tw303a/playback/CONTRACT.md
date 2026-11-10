@@ -548,7 +548,7 @@ plug for the closure exclusion to work through.
 
 `AudioEngine::setFrozenDemandRoot()` installs the mixer's `twMixer` — the bus
 sum, BELOW the master chain — and every frozen-lane use of `synthOutput_` goes
-through one `frozenRoot()` accessor. Five properties are contractual:
+through the published root (property 6). Six properties are contractual:
 
 1. **`graphChannels()` still reports `synthOutput_`'s width.** That number is
    the PROJECT's width and feeds twSpeaker's device rule. A re-rooting says
@@ -587,6 +587,73 @@ through one `frozenRoot()` accessor. Five properties are contractual:
    left rooted at the bus sum keeps reading pages that stop short of the master
    chain, so ordinary playback would lose the master's inserts and fader
    entirely, silently, for the rest of the session.
+6. **The root is PUBLISHED, never assigned under a reader (QBX-287).** The
+   setter runs on the main thread while the RT pull and the readahead are
+   running, so a plain `shared_ptr` member read by reference on those threads
+   was a data race — a torn control-block read, and a refcount drop on the old
+   root that could land under a reader. The pending-seek seam of property 3
+   orders the readers' *pages*, not the pointer. There are three handles:
+   - **`frozenDemandRoot_`, the owning one**, written with `std::atomic_store`
+     and read with `std::atomic_load` by the main thread and the readahead.
+     `frozenRoot()` returns an owning COPY with the `synthOutput_` fallback
+     applied; it is not for the RT.
+   - **`rtFrozenRoot_`, what the RT reads**: an `std::atomic<twComponent*>` with
+     the fallback already resolved at publish time (so non-null whenever
+     `synthOutput_` is). It is loaded ONCE per `pullBlock()` and handed to
+     `updateFrozenPage()`, so one block cannot mix roots. A block whose root
+     differs from the one its held page came from drops that page itself, so
+     the order in which it observes the pointer and the seek seam cannot
+     matter.
+   - **`pullSeq_`**, odd while `pullBlock()` is inside a block. After the
+     seq_cst store of the new raw pointer the setter reads it seq_cst: even
+     means no block is in flight and the next one reads the new pointer; odd
+     means it waits — yielding, bounded at 250 ms — for that block to end, and
+     only THEN drops the old owning handle. Past the bound the old root is
+     parked in `retiredRoots_` (main thread only) and released at the next swap
+     that finds the pull quiescent, or with the engine.
+
+   **Why not `std::atomic_load` on the RT, as `audioEngine_` does.** In
+   libstdc++ the free `atomic_load`/`atomic_store` on a `shared_ptr` take one of
+   a pool of mutexes (`_Sp_locker`), and C++20's `atomic<shared_ptr>` is a
+   lock bit with a futex wait — neither is lock-free. Worse, the RT's copy can
+   be the LAST reference once the main thread has swapped, and the RT would then
+   destroy a whole component subgraph mid-callback. A raw pointer touches no
+   refcount and cannot be the last owner; the cost moves to the main thread,
+   which waits at most one block, and only when a swap actually happens.
+
+   The readahead is not the RT, so it takes one owning copy per PASS through
+   `frozenRoot()`. If that copy is the last one, the root dies on the readahead
+   thread — never on the RT. A pass whose root differs from the previous pass's
+   (compared by control block through a `weak_ptr`, so a reused address cannot
+   hide a change) restarts its chain: predecessor pages, frontier and both
+   in-flight demands were built against the old root, and the setter's seek
+   targets the position the playhead is already at, so the jump detector does
+   not fire for it. Before QBX-287 a demand for the old root, issued at a
+   coincidentally equal content epoch, counted as covering the new root's
+   window.
+
+   Gate: `playback_test`'s QBX-287 case. A gated root parks the pull inside
+   `getOutputChannels()` mid-block; (a) a swap held under the bound must not
+   return and must not release the old root until the block ends; (b) past the
+   bound the swap returns, the root is parked alive, and the next quiescent
+   swap releases it; (c) 600 swaps of engine-owned fresh roots under a running
+   pull: none destroyed on the pull thread, none leaked, no block carrying two
+   roots' audio. Measured by sabotage (QBX-287):
+   - setter's wait removed: (a) reports the root released under the parked
+     pull and stops (deterministic, no sanitizer needed);
+   - the rejected design — `std::atomic_load` of the `shared_ptr` on the RT, no
+     wait: (a), (b) and (c)'s "destroyed on the pull thread" all FAIL;
+   - the RT reading the owning member plainly: every assertion still passes —
+     a plain build cannot see the race itself. Only TSan can: a
+     `-fsanitize=thread` build of `playback_test` reports three races in the
+     QBX-287 section under that sabotage and none with the fix. (It reports
+     pre-existing races elsewhere in `playback_test`: `readaheadComputedUpTo_`
+     is a plain `uint64_t` shared by the readahead, `pullBlock` and
+     `startPlayback`. Not this property's.)
+   - NOT gated: the pull's held-page drop on a root change and the readahead's
+     chain restart. Removing either leaves every assertion green; both cover an
+     ordering window (pointer seen before the seek, a demand at an equal epoch)
+     that the case does not force.
 
 **Ownership order is asymmetric**, because the guard fires on whoever is not the
 pump: **entering** a closure re-roots FIRST and then takes ownership; **leaving**

@@ -96,6 +96,40 @@ public:
     const char *getOutputName(idx_t) const override { return "tone"; }
 };
 
+// QBX-287: a tone that knows which thread destroyed it, and that can HOLD the
+// pull thread inside a block. getOutputChannels() is what updateFrozenPage()
+// asks the block's root on every batch, so arming the gate parks the RT pull
+// mid-block with the root in use -- the one window in which releasing that
+// root would be a use-after-free. Everything the gate touches is static, so a
+// sabotaged engine that frees the root under the parked pull is caught by the
+// assertions below rather than by reading freed memory.
+static std::atomic<std::thread::id> gRootPullThread{};
+static std::atomic<bool> gRootGateArmed{false};
+static std::atomic<bool> gRootGateEntered{false};
+static std::atomic<int>  gRootsDestroyedOnPull{0};
+static std::atomic<int>  gRootsDestroyed{0};
+
+class TrackedTone : public ToneComponent {
+public:
+    explicit TrackedTone(tw303aEnvironment &e, bool gated = false)
+        : ToneComponent(e), gated_(gated) {}
+    ~TrackedTone() override {
+        if (std::this_thread::get_id() == gRootPullThread.load())
+            gRootsDestroyedOnPull.fetch_add(1);
+        gRootsDestroyed.fetch_add(1);
+    }
+    idx_t getOutputChannels() const override {
+        if (gated_ && std::this_thread::get_id() == gRootPullThread.load()) {
+            gRootGateEntered.store(true);
+            while (gRootGateArmed.load())
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        return 1;
+    }
+private:
+    const bool gated_;
+};
+
 // A WIDE tone whose declared width can be changed at runtime, for AC B4.5's
 // RT half. `widestPageSeen` records the widest page it was ever asked to fill,
 // so a test can prove the re-freeze really happened at the new width rather
@@ -3080,6 +3114,190 @@ int main()
                   "M3 T-w: EVERY channel carries child x masterGain "
                   "(the master node applies its own fader, AC3.2)");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // QBX-287: THE FROZEN ROOT IS PUBLISHED, NOT ASSIGNED. setFrozenDemandRoot()
+    // runs on the main thread while the RT pull and the readahead run (a live
+    // plan flipping Linear <-> Closure during playback). Three claims:
+    //   (a) the setter does not release the old root while a pull block may
+    //       still be reading it -- it waits, bounded, for the block to end;
+    //   (b) past the bound it PARKS the old root instead of freeing it, and the
+    //       next swap that sees a quiescent pull releases it;
+    //   (c) under a storm of swaps no root is ever destroyed on the pull thread
+    //       and no block mixes two roots' audio.
+    // (a) and (b) are deterministic: a gated root parks the pull inside
+    // getOutputChannels(). (c) is the stress half, and the case TSan reads
+    // (see the playback CONTRACT for what a non-TSan run can and cannot see).
+    {
+        constexpr length_t BLOCK = 256;
+        auto base = std::make_shared<ToneComponent>(env);   // amp 0.25
+        base->init();
+        audio::AudioEngine engine(base, (uint32_t)env.getSRate());
+        engine.startReadahead();
+        {
+            std::vector<float> L(BLOCK), R(BLOCK);
+            bool audible = false;
+            for (int i = 0; i < 500 && !audible; ++i) {
+                if (pullLR(engine, L, R, BLOCK) == BLOCK && L[0] == 0.25f) audible = true;
+                else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            CHECK(audible, "QBX-287: the base root plays");
+        }
+
+        // One gated pull: install `gatedRoot`, park the pull inside its block,
+        // run `swap` on another thread, and report what happened while parked.
+        auto parkedSwap = [&](int holdMs, bool &swapReturnedWhileParked,
+                              bool &rootAliveWhileParked, std::weak_ptr<twComponent> &w) {
+            auto gatedRoot = std::make_shared<TrackedTone>(env, /*gated*/ true);
+            gatedRoot->amp.store(0.5f);
+            gatedRoot->init();
+            engine.setFrozenDemandRoot(gatedRoot);   // no pull running: no wait
+            w = gatedRoot;
+            gatedRoot.reset();                       // the engine is the owner now
+
+            gRootGateEntered.store(false);
+            gRootGateArmed.store(true);
+            std::thread puller([&] {
+                gRootPullThread.store(std::this_thread::get_id());
+                std::vector<float> L(BLOCK), R(BLOCK);
+                pullLR(engine, L, R, BLOCK);
+            });
+            for (int i = 0; i < 2000 && !gRootGateEntered.load(); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            CHECK(gRootGateEntered.load(), "QBX-287: the pull is parked inside a block of the gated root");
+
+            std::atomic<bool> swapped{false};
+            std::thread swapper([&] {
+                engine.setFrozenDemandRoot(nullptr);   // back to the base root
+                swapped.store(true);
+            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
+            swapReturnedWhileParked = swapped.load();
+            rootAliveWhileParked = !w.expired();
+            if (!rootAliveWhileParked) {
+                // The engine released the root the parked pull is reading.
+                // Un-parking it now would be a use-after-free, so report and
+                // stop here: a deterministic FAIL rather than undefined
+                // behaviour (QBX-287 sabotage: the setter's wait removed).
+                printf("FAIL QBX-287: the old root was RELEASED under a pull block "
+                       "still reading it (swap returned: %s); aborting before the "
+                       "pull resumes on freed memory\n",
+                       swapReturnedWhileParked ? "yes" : "no");
+                fflush(stdout);
+                std::_Exit(1);
+            }
+            gRootGateArmed.store(false);
+            swapper.join();
+            puller.join();
+            gRootPullThread.store(std::thread::id{});
+        };
+
+        // (a) held for less than the bound: the swap waits for the block.
+        {
+            const int destroyedBefore = gRootsDestroyed.load();
+            bool returned = true, alive = false;
+            std::weak_ptr<twComponent> w;
+            parkedSwap(100, returned, alive, w);
+            CHECK(!returned,
+                  "QBX-287 (a): the swap does not return while a pull block may still read the old root");
+            CHECK(alive,
+                  "QBX-287 (a): the old root is not released under the parked pull block");
+            CHECK(engine.retiredRootCountForTest() == 0,
+                  "QBX-287 (a): a block that ends within the bound leaves nothing parked");
+            for (int i = 0; i < 2000 && !w.expired(); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            CHECK(w.expired() && gRootsDestroyed.load() == destroyedBefore + 1,
+                  "QBX-287 (a): ...and the old root IS released once the block is over");
+        }
+
+        // (b) held past the bound: the swap returns, the root is parked alive,
+        // and the next swap that finds the pull quiescent releases it.
+        {
+            bool returned = false, alive = false;
+            std::weak_ptr<twComponent> w;
+            parkedSwap(600, returned, alive, w);
+            CHECK(returned,
+                  "QBX-287 (b): past the bound the swap returns rather than hang on a stalled pull");
+            CHECK(alive,
+                  "QBX-287 (b): ...and the old root is still alive while the pull is parked");
+            CHECK(engine.retiredRootCountForTest() == 1,
+                  "QBX-287 (b): ...because it was parked, not dropped");
+            auto other = std::make_shared<TrackedTone>(env);
+            other->init();
+            engine.setFrozenDemandRoot(other);       // pull idle: quiescent at once
+            CHECK(engine.retiredRootCountForTest() == 0,
+                  "QBX-287 (b): the next quiescent swap releases what was parked");
+            engine.setFrozenDemandRoot(nullptr);
+            // `other` too must be gone before (c) counts: the readahead's
+            // per-pass owning copy can outlive the swap by a pass, and a late
+            // death landing inside (c) read as 301 of 300 (QBX-297, measured).
+            std::weak_ptr<twComponent> wOther = other;
+            other.reset();
+            for (int i = 0; i < 2000 && (!w.expired() || !wOther.expired()); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            CHECK(w.expired(), "QBX-287 (b): ...and the parked root is gone");
+        }
+
+        // (c) the storm: fresh roots swapped in and out while the pull runs flat
+        // out. Each fresh root is owned by the engine alone, so every swap away
+        // from one is a candidate for its destruction.
+        {
+            std::atomic<bool> stop{false};
+            std::atomic<int> blocks{0}, mixed{0}, baseBlocks{0}, freshBlocks{0};
+            std::thread puller([&] {
+                gRootPullThread.store(std::this_thread::get_id());
+                std::vector<float> L(BLOCK), R(BLOCK);
+                while (!stop.load()) {
+                    const length_t n = pullLR(engine, L, R, BLOCK);
+                    bool sawBase = false, sawFresh = false;
+                    for (length_t i = 0; i < n; ++i) {
+                        if (L[i] == 0.25f) sawBase = true;
+                        else if (L[i] == 0.5f) sawFresh = true;
+                    }
+                    if (sawBase && sawFresh) mixed.fetch_add(1);
+                    else if (sawBase) baseBlocks.fetch_add(1);
+                    else if (sawFresh) freshBlocks.fetch_add(1);
+                    blocks.fetch_add(1);
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                }
+            });
+            const int destroyedBefore = gRootsDestroyed.load();
+            constexpr int FLIPS = 300;
+            for (int i = 0; i < FLIPS; ++i) {
+                auto fresh = std::make_shared<TrackedTone>(env);
+                fresh->amp.store(0.5f);
+                fresh->init();
+                engine.setFrozenDemandRoot(fresh);
+                fresh.reset();
+                // Mostly too short for the readahead to freeze the fresh root's
+                // pages; every 10th long enough that its audio is HEARD, so the
+                // no-mixing claim below has both roots' audio to tell apart.
+                std::this_thread::sleep_for(std::chrono::microseconds(i % 10 == 0 ? 30000 : 1500));
+                engine.setFrozenDemandRoot(nullptr);
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+            }
+            stop.store(true);
+            puller.join();
+            gRootPullThread.store(std::thread::id{});
+            for (int i = 0; i < 2000 && gRootsDestroyed.load() < destroyedBefore + FLIPS; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+            printf("     QBX-287 (c): %d blocks pulled across %d swaps (%d base, %d fresh), %d roots destroyed\n",
+                   blocks.load(), 2 * FLIPS, baseBlocks.load(), freshBlocks.load(),
+                   gRootsDestroyed.load() - destroyedBefore);
+            CHECK(blocks.load() > FLIPS, "QBX-287 (c): the pull ran throughout the storm");
+            CHECK(gRootsDestroyedOnPull.load() == 0,
+                  "QBX-287 (c): no root was ever destroyed on the pull thread");
+            CHECK(gRootsDestroyed.load() == destroyedBefore + FLIPS,
+                  "QBX-287 (c): every swapped-out root was released (none leaked)");
+            CHECK(baseBlocks.load() > 0 && freshBlocks.load() > 0,
+                  "QBX-287 (c): both roots' audio was heard during the storm");
+            CHECK(mixed.load() == 0, "QBX-287 (c): no pull block mixed two roots' audio");
+            CHECK(engine.retiredRootCountForTest() == 0,
+                  "QBX-287 (c): nothing left parked");
+        }
+        engine.stopReadahead();
     }
 
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",
