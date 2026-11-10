@@ -48,7 +48,8 @@ QString formatLabel( const QString &raw )
     if( raw == QLatin1String( "lv2" ) )  return QStringLiteral( "LV2" );
     // "tw" is the in-house format: the linked-in pass-through and the native
     // 303, which are present in every build and installed from nowhere.
-    if( raw == QLatin1String( "tw" ) )   return QStringLiteral( "Built-in" );
+    if( audio::isBuiltinPluginFormat( raw.toStdString() ) )
+        return QStringLiteral( "Built-in" );
     return raw.toUpper();
 }
 
@@ -98,7 +99,8 @@ SPluginBrowserDialog::SPluginBrowserDialog(QWidget *parent, Kind kind)
     searchLayout->addWidget(new QLabel("Format:"));
     formatCombo_ = new QComboBox();
     formatCombo_->setToolTip(
-        "Show only plugins in one format. Remembered between sessions, so the "
+        "Show only plugins in one format; the built-in plugins are listed "
+        "whichever format is chosen. Remembered between sessions, so the "
         "browser opens on the format you work in — the row count below the "
         "list says how many of the installed plugins that leaves.");
     searchLayout->addWidget(formatCombo_);
@@ -292,8 +294,8 @@ void SPluginBrowserDialog::filterPlugins(const QString &searchText)
         // text: the column is display text a later change could relabel, while
         // the role is the raw string the registry handed over and the same one
         // the combo and the setting carry.
-        if (!format.isEmpty()
-            && item->data(0, kFormatRole).toString() != format) matches = false;
+        if (!formatFilterAdmits(item->data(0, kFormatRole).toString(), format))
+            matches = false;
         item->setHidden(!matches);
         if (matches) ++shown;
     }
@@ -305,6 +307,21 @@ void SPluginBrowserDialog::filterPlugins(const QString &searchText)
         statusLabel_->setText(
             QString("%1 plugin(s)").arg(pluginList_->topLevelItemCount()));
     }
+}
+
+bool SPluginBrowserDialog::formatFilterAdmits(const QString &rowFormat,
+                                              const QString &filterFormat)
+{
+    // All admits everything; a chosen format admits its own rows; and the
+    // BUILT-INS are admitted whatever external format is chosen (QBX-261).
+    // They are installed from nowhere and present in every build, so choosing
+    // the format one works in for INSTALLED plugins must not take away the
+    // pass-through, the 303 or the sampler. Choosing Built-in itself still
+    // narrows to the built-ins alone: that is the one filter whose subject
+    // they are.
+    if (filterFormat.isEmpty()) return true;
+    if (rowFormat == filterFormat) return true;
+    return audio::isBuiltinPluginFormat(rowFormat.toStdString());
 }
 
 void SPluginBrowserDialog::onKindFilterChanged(int)

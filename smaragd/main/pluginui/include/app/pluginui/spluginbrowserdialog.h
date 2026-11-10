@@ -26,8 +26,9 @@ class QTreeWidgetItem;
 //
 // Three filters, and they compose: the Filter text box (every column), the Kind
 // combo (proposal 37 §6.1) and the Format combo (QBX-78), whose choice is
-// REMEMBERED because it is a preference rather than a view state. The Format
-// filter HIDES rows and nothing more — it does not fold one product's formats
+// REMEMBERED because it is a preference rather than a view state. A chosen
+// external format never hides the BUILT-INS (QBX-261, formatFilterAdmits). The
+// Format filter HIDES rows and nothing more — it does not fold one product's formats
 // into a single row and has no say in what a saved project resolves to, both of
 // which need cross-format identity (plan/proposed/54, §4 tiers T3/T4 and §8
 // Q2). CONTRACT.md has the whole rule, including the one writer of the stored
@@ -59,6 +60,17 @@ public:
     // WITHOUT inventing a filter whose only result could be an empty browser.
     // The rebuild and the testkit verb both go through this one.
     bool    selectFormat(const QString &format);
+
+    // THE FORMAT RULE, in one place (QBX-261): does a row of format
+    // `rowFormat` pass the Format filter set to `filterFormat` (raw, empty =
+    // All)? A chosen format admits its own rows AND the built-ins ("tw",
+    // audio::isBuiltinPluginFormat), which are listed whatever external format
+    // is chosen; choosing Built-in itself narrows to the built-ins alone. The
+    // Kind and text filters still apply to built-ins as to any row.
+    // filterPlugins() calls this and nothing else for the format decision, so
+    // describeBrowser()'s visibleFormats= reports the product's own answer.
+    static bool formatFilterAdmits(const QString &rowFormat,
+                                   const QString &filterFormat);
 
     // What the browser currently shows, for the headless gate. One line:
     //   formats=<raw,…>|format=<raw>|kind=<all|instruments|effects>|

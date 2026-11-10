@@ -799,6 +799,32 @@ That read is one unchanged line, and the case's phase 0 checks the combo over
 the real registry as far as any machine allows: it must offer at least one
 format, which the built-ins guarantee.
 
+### The built-ins are listed whatever format is chosen (QBX-261)
+
+A chosen EXTERNAL format (`clap`, `vst3`, `au`, …) hides the other external
+formats and **never the built-ins**: the plugins of the in-house format `tw`,
+linked into the build rather than scanned — the pass-through, the native 303
+and whatever `twPluginRegistry::registerBuiltin()` hands in (NassauDigital).
+They are installed from nowhere and present in every build, so choosing the
+format one works in for installed plugins must not take them away. What counts
+as built in is `audio::isBuiltinPluginFormat()` (`twplugindescriptor.h`); a
+Nassau plugin shipped as `.clap` or `.vst3` is an installed plugin like any
+other vendor's.
+
+The rule is ONE predicate, `SPluginBrowserDialog::formatFilterAdmits(row,
+filter)`, and `filterPlugins()` makes no other format test. There is one
+selector — this dialog, opened by the strip's "+ Add Effect" (Kind Effects)
+and "+ Add Instrument" (Kind Instruments) — so both entry points take it. Two
+things it is NOT: it does not exempt the built-ins from the Kind filter or the
+typed Filter box, which narrow them like any row; and choosing **Built-in**
+itself still narrows to the built-ins alone, rather than becoming All.
+
+Gated in `qxa.plugin_browser_format_filter` phases 2, 5 and 9–12, each
+two-sided (`visibleFormats=` spelled up to the next field, so a hidden external
+showing fails it as surely as a hidden built-in). NOT GATED, as for QBX-78:
+the real registry's built-ins under a real external format, which needs a
+machine with an installed plugin; the supplied list stands in for it.
+
 ## The app-editor registry (proposal 56 §4.11, QBX-279)
 
 An instrument whose MODEL lives in the app — NassauDigital, whose truth is an
