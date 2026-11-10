@@ -415,6 +415,7 @@ set(APP_UI_FILES
     timeline/include/app/timeline/sfeelflowpuppet.h
     timeline/include/app/timeline/sfadercurve.h
     timeline/include/app/timeline/spanscale.h
+    timeline/include/app/timeline/sfollowplayhead.h
     timeline/include/app/timeline/slevelmeter.h
     timeline/include/app/timeline/strackheaderresizer.h
     timeline/include/app/timeline/szoomscrollbar.h
@@ -601,6 +602,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
+    testkit/include/app/testkit/sfollowtestactions.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sfragmentdeleteclipaction.h
     testkit/include/app/testkit/sslipclipaction.h
@@ -658,6 +660,7 @@ set(APP_UI_FILES
     testkit/src/smidirecordtestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sclicklaneaction.cpp
+    testkit/src/sfollowtestactions.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp
@@ -1186,6 +1189,18 @@ target_link_libraries(panscale_test
 )
 add_test(NAME panscale_test COMMAND panscale_test)
 set_tests_properties(panscale_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# QBX-237: follow-the-playhead's ONE decision, app/timeline/sfollowplayhead.h.
+# Header-only and pure; each of its conditions is checked inside the region
+# every other condition allows, so a case can fail for that condition alone.
+add_executable(followplayhead_test timeline/tests/followplayhead_test.cpp)
+target_link_libraries(followplayhead_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME followplayhead_test COMMAND followplayhead_test)
+set_tests_properties(followplayhead_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # THE CAPTURE-NAME TEST (plan 53 §6.3, P6 / QBX-184). A pure function over a

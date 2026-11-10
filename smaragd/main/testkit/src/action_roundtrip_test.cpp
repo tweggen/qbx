@@ -655,7 +655,7 @@ const Fixture kFixtures[] = {
     { "assert-tab-set",
       "<assert-tab-set names='Arrangement,Drums' active='Drums'/>" },
     { "assert-view-playhead",
-      "<assert-view-playhead root='Drums' frame='24000' sounding='true' tolerance='0'/>" },
+      "<assert-view-playhead root='Drums' frame='24000' sounding='true' tolerance='0' inView='true'/>" },
     { "assert-arrangements",
       "<assert-arrangements names='Bass,Drums' trackCounts='1,2'/>" },
     { "assert-ref-count",

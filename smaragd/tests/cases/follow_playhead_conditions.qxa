@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-237: THE ARRANGER FOLLOWS THE PLAYHEAD, EXCEPT DURING A GESTURE AND FOR
+  5 S AFTER A MANUAL SCROLL - through the REAL view, with no playback.
+
+  Author, QBX-237: "It shall follow a cursor, unless a dragging or
+  rubberbanding operation is underway, and give a short latency (I believe
+  5secs where specified) after a manual scrolling operation." The 5 s is
+  AC-g1's (timeline CONTRACT inv. 26, SMVActualView::FOLLOW_HOLD_MS).
+
+  The decision is sfollow::decide, unit-tested condition by condition in
+  followplayhead_test. This case gates the WIRING: that followLocator hands
+  the decision the state the view is really in, and applies the answer.
+
+  NO PLAYBACK. advance-locator is one tick of the playback poll (the
+  realtime store, then pumpLocator), so locatorAdvanced fires exactly as
+  under playback, deterministically. advance-follow-clock moves the hold's
+  clock instead of waiting for it. The only wall-clock exposure is the real
+  time between the wheel notch and the 4000 ms check: a whole second of
+  slack, not a microsecond bound.
+
+  WHAT IS READ. assert-view-playhead inView= is whether the drawn cursor
+  lies inside the visible span; assert-lane-view snapshot/compareTo says
+  whether the view moved. No absolute scrollX: the canvas is never shown,
+  so its width (and with it the span) is whatever the layout gave it, and a
+  wheel notch pans by a USER setting (see follow_scroll_hold's header).
+  Every position below is a whole span or more away from the view, at any
+  plausible width: the span at secondWidth=100 is width/100 s, a few seconds.
+
+  EACH SECTION'S REFUSAL IS ITS OWN. In B and C the playhead is far off
+  screen, so the only thing that can keep the view still is the condition
+  the section names; and each section ends by showing the view follows again
+  once that condition is gone.
+-->
+<SActionScript version="1" name="follow_playhead_conditions">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The master root is always sounding (localPlayhead's early return for
+         an empty root name), so no audible material is needed. -->
+    <add-track index="-1"/>
+    <set-lane-view secondWidth="100" scrollX="0"/>
+    <!-- Gives the never-shown canvas a real width (follow_scroll_hold's
+         header has the measurement). -->
+    <assert-lane-alignment grabPng="follow_conditions_canvas.png"
+                           grabWidth="800" grabHeight="200"/>
+
+    <!-- A. A SEEK IS NOT AN ADVANCE. set-locator moves the cursor 100 s out
+         of the view, and the view stays: only locatorAdvanced follows. -->
+    <set-locator position="4800000"/>
+    <assert-view-playhead root="" frame="4800000" sounding="true" inView="false"/>
+    <assert-lane-view scrollX="0"/>
+
+    <!-- ...and one playback tick later the view has followed it. -->
+    <advance-locator position="4800048"/>
+    <assert-view-playhead root="" frame="4800048" inView="true"/>
+    <assert-lane-view minScrollX="1" snapshot="paged"/>
+
+    <!-- B. A GESTURE IS UNDER WAY: a range drag in the ruler, pressed and
+         moved but not released (both ends inside the view). The playhead
+         jumps 100 s on; the view must not move under the pointer. -->
+    <drag-range from="4790000" to="4800000" phase="press-move"/>
+    <advance-locator position="9600000"/>
+    <assert-view-playhead root="" inView="false"/>
+    <assert-lane-view compareTo="paged"/>
+    <advance-locator position="9600048"/>
+    <assert-lane-view compareTo="paged"/>
+    <!-- Let go, and the next tick follows. -->
+    <drag-range from="4790000" to="4800000" phase="release"/>
+    <advance-locator position="9600096"/>
+    <assert-view-playhead root="" inView="true"/>
+    <assert-lane-view compareTo="paged" expectReject="true"/>
+    <assert-lane-view snapshot="afterDrag"/>
+
+    <!-- C. THE HOLD. A real Shift+wheel notch is a manual pan and arms it. -->
+    <wheel-scroll deltaY="-600" modifiers="shift"/>
+    <assert-lane-view compareTo="afterDrag" expectReject="true"/>
+    <assert-lane-view snapshot="held"/>
+    <!-- 100 s further on, at once: held. -->
+    <advance-locator position="14400000"/>
+    <assert-view-playhead root="" inView="false"/>
+    <assert-lane-view compareTo="held"/>
+    <!-- 4 s after the notch: still held. -->
+    <advance-follow-clock ms="4000"/>
+    <advance-locator position="14400048"/>
+    <assert-view-playhead root="" inView="false"/>
+    <assert-lane-view compareTo="held"/>
+    <!-- 5.1 s after the notch: the hold has run out and the view follows. -->
+    <advance-follow-clock ms="1100"/>
+    <advance-locator position="14400096"/>
+    <assert-view-playhead root="" inView="true"/>
+    <assert-lane-view compareTo="held" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

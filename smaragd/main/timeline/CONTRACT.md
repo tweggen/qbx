@@ -811,13 +811,56 @@ drag-past-the-canvas-edge branch of `mouseMoveEvent`. It must NEVER be called
 from `setLeftOffset()` itself, `followLocator()`, or any other path that is
 not directly a hand gesture, for the identical self-defeat reason.
 
-`followLocator()` checks a monotonic `QElapsedTimer` (`followHoldTimer_`) at
-the top, ahead of every other early-out, and returns without re-paging while
-`followHoldArmed_` is true and less than `FOLLOW_HOLD_MS` (5000) has elapsed
-since the last arm; once expired it clears the flag and behaves exactly as
-before this feature. Gate: `follow_scroll_hold.qxa` (`RUN_SERIAL`, a real
-wall-clock case — see its header for the measured, reproducible canvas
-geometry the closed-form scrollX value depends on).
+The hold is one of the conditions of `sfollow::decide` (inv. 26a below):
+while `followHoldArmed_` is true and less than `FOLLOW_HOLD_MS` (5000, which
+is `sfollow::HOLD_MS` by a `static_assert`) has elapsed since the last arm,
+the view does not move; once expired the decision says so and the view clears
+the flag. Since QBX-237 the clock is `followNowMs_()` — a monotonic
+`QElapsedTimer` PLUS a test skew that `advance-follow-clock` moves — so the
+hold is gated without a wall-clock wait. Gates: `follow_scroll_hold.qxa`
+(`RUN_SERIAL`, real playback, the original wall-clock case) and
+`follow_playhead_conditions.qxa` (no playback, the skewed clock).
+
+### inv. 26a — FOLLOW-THE-PLAYHEAD IS `sfollow::decide`; THE VIEW ONLY GATHERS AND APPLIES (QBX-237)
+
+`SMVActualView::followLocator` (wired to `SApplication::locatorAdvanced`, so
+a SEEK never reaches it) fills an `sfollow::State` and applies the
+`sfollow::Decision` (`app/timeline/sfollowplayhead.h`). Nothing else decides
+whether or where the arranger follows. The conditions, each overriding the
+next:
+
+1. `SOpt::FollowPlayhead` unchecked (Edit -> Options, default on) -> stay.
+2. The view's root is not being heard (`localPlayhead().sounding`, inv. above
+   on proposal 09 §15) -> stay; the cursor is resting.
+3. A gesture is under way on the canvas -> stay. `pointerGesture_` is set by a
+   LEFT press or double click and cleared by the release that lets go of the
+   left button — so every gesture the canvas has (clip move, resize, slip,
+   copy-drag, range drag, marker drag, automation drag and marquee) counts,
+   including any added later, without a list of them to keep current. A hover
+   move (no button) also clears it, as a backstop for a release a popup
+   swallowed. `dndOver_` is the same for a drag-and-drop held over the canvas
+   (`dragEnterEvent` .. `dragLeaveEvent`/`dropEvent`).
+4. The hold (inv. 26) -> stay.
+
+Past those it PAGE-FLIPS: when the drawn cursor is OUTSIDE the visible span
+(either side) or, advancing, has crossed 80 % of it, the left edge moves so
+the cursor sits at 10 % of the span. Before QBX-237 a cursor LEFT of the view
+while advancing was never followed (only a backward step was), so a view the
+user had scrolled ahead stayed ahead after the hold ran out until the
+playhead happened to walk into it; and the re-page solved for `newPos`, the
+MASTER frame, so in an arrangement tab it landed the view at the master
+position — past the derived cursor, which then fell out of the view for good.
+The state's playhead is `localPlayhead().pos`, never `newPos`; `newPos` and
+`oldPos` give only the direction.
+
+Gates: `followplayhead_test` (each condition flipped alone inside the region
+every other condition allows, plus the edges), `follow_playhead_conditions.qxa`
+(the master view: seek vs. advance, a range drag held open, the hold across
+4000 / 5100 ms of skewed clock) and `follow_playhead_arrangement_tab.qxa` (the
+derived playhead, and a resting arrangement does not move). The option
+(condition 1) and `dndOver_` are gated by the unit test only: no verb toggles
+an SOpt without writing the user's smaragd.ini, and no verb holds a drag over
+the canvas.
 
 ### inv. 28 — Z-ORDER IS DETERMINISTIC: LATEST START ON TOP, TIEBREAK CHILD
 INDEX AND NOTHING ELSE (proposal 41 D11, M5)

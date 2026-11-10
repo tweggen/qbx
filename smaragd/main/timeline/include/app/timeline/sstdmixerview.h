@@ -190,6 +190,15 @@ public:
     // and arming the hold from inside it would let the very re-page the hold
     // exists to delay immediately re-arm and disable following forever.
     void armFollowHold();
+    // QBX-237 TEST ENTRY POINT: move the follow-hold clock forward by `ms`
+    // without waiting, so a case can say "4.9 s later" and "5.1 s later"
+    // exactly. Only the hold reads this clock.
+    void tkAdvanceFollowClock( qint64 ms ) { if( ms > 0 ) followClockSkewMs_ += ms; }
+    // The frames from the left edge to the right edge at the current zoom --
+    // the span followLocator() keeps the cursor inside -- and whether the
+    // drawn cursor is inside it now (read by assert-view-playhead inView=).
+    offset_t visibleSpanFrames() const;
+    bool playheadInView() const;
 
     // Time-range selection (shown in the ruler band). Bounds are normalized
     // (start <= end). hasRange() is false when there is no selection.
@@ -255,6 +264,7 @@ protected:
     virtual void wheelEvent( QWheelEvent * );
     virtual void dragEnterEvent( QDragEnterEvent * );
     virtual void dragMoveEvent( QDragMoveEvent * );
+    void dragLeaveEvent( QDragLeaveEvent * ) override;
     virtual void dropEvent( QDropEvent * );
 private slots:
     void globalLocatorMoved( offset_t, offset_t );
@@ -304,9 +314,25 @@ private:
     // (followLocator()). followHoldArmed_ additionally records that arming has
     // happened at all (an unstarted QElapsedTimer::elapsed() is 0, which would
     // otherwise read as "armed 0 ms ago" forever).
+    //
+    // QBX-237: the DECISION is sfollow::decide (app/timeline/sfollowplayhead.h);
+    // followLocator() only gathers its State and applies the answer. The hold
+    // is read off followNowMs_(), a monotonic clock plus a TEST SKEW that
+    // tkAdvanceFollowClock() moves, so a case can step past the 5 s without a
+    // wall-clock wait. FOLLOW_HOLD_MS stays as the name the contract uses.
     static constexpr qint64 FOLLOW_HOLD_MS = 5000;
-    QElapsedTimer followHoldTimer_;
+    qint64 followNowMs_();
+    QElapsedTimer followClock_;
+    qint64 followClockSkewMs_ = 0;
+    qint64 followHoldStartMs_ = 0;
     bool followHoldArmed_ = false;
+    // QBX-237: a gesture is under way on the canvas, so following would move
+    // the content under the pointer mid-edit. Set by a LEFT press (or double
+    // click), cleared by the release that lets go of the left button and, as
+    // a backstop for a release some popup swallowed, by any hover move.
+    // dndOver_ is the same for a drag-and-drop held over the canvas.
+    bool pointerGesture_ = false;
+    bool dndOver_ = false;
     // The x column where paintEvent last drew the playhead (-1 = off-screen /
     // not yet drawn). globalLocatorMoved erases THIS column rather than a
     // position-derived one, so an RT-advanced locator can't leave a ghost line.

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-237: AN ARRANGEMENT TAB FOLLOWS ITS OWN, DERIVED PLAYHEAD.
+
+  In an arrangement tab the cursor is drawn at the DERIVED position
+  (proposal 09 §15, tab_playhead_derived.qxa): the master frame walked down
+  through the placement. followLocator used to decide on that drawn cursor
+  but then solve the new left edge for newPos, the MASTER frame - so the
+  re-page landed the view at the master position, past the cursor, and the
+  cursor fell out of the view for good. Since QBX-237 sfollow::decide is
+  handed the drawn cursor and nothing else.
+
+  THE SHAPE. Track 1 is extracted as "Drums" and its asset clip moved to
+  master 96000, so a master frame M is Drums frame M - 96000 while the clip
+  plays (192000 frames, non-looping). The Drums tab is zoomed in to
+  1000 px/s, a span of well under a second, so Drums frame 150000 (master
+  246000) is far outside it, and master 246000 - what the old code paged to -
+  is a further 96000 frames on.
+
+  THE RESTING ARRANGEMENT does not move: past the clip's end the arrangement
+  is not heard, the cursor rests, and a view that scrolled would be chasing
+  a still line (condition 2 of sfollow::decide). The view is panned away from
+  the resting cursor first, because a resting cursor that is still IN view
+  would not be followed anyway, and the section would not tell.
+
+  No playback: advance-locator is one tick of the playback poll (see
+  follow_playhead_conditions.qxa).
+-->
+<SActionScript version="1" name="follow_playhead_arrangement_tab">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+    <add-sample trackIndex="0" filePath="../test_sawtooth.wav" timePos="0"/>
+    <add-sample trackIndex="1" filePath="../test_sawtooth.wav" timePos="0"/>
+
+    <extract-arrangement trackPaths="1" rangeStart="0" rangeEnd="192000"
+                         name="Drums" window="range" placeAt="0"/>
+    <resize-clip clip="1,0" startTime="96000" startOffset="0"
+                 duration="192000" loopLength="0"/>
+    <assert-clip-window clip="1,0" startTime="96000" duration="192000"/>
+
+    <open-arrangement-tab name="Drums"/>
+    <assert-tab-set names="Arrangement,Drums" active="Drums"/>
+    <set-lane-view secondWidth="1000" scrollX="0"/>
+    <assert-lane-alignment grabPng="follow_tab_canvas.png"
+                           grabWidth="800" grabHeight="200"/>
+
+    <!-- The clip is playing and the derived cursor is in view: nothing to do. -->
+    <set-locator position="100000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="4000" inView="true"/>
+
+    <!-- One tick to Drums 150000: far past the view's right edge. The view
+         follows the DERIVED cursor, which is therefore in view afterwards. -->
+    <advance-locator position="246000"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="150000" inView="true"/>
+    <assert-lane-view minScrollX="1" snapshot="followed"/>
+
+    <!-- Past the clip's end (96000 + 192000): not sounding, resting at the
+         last heard frame. -->
+    <advance-locator position="400000"/>
+    <assert-view-playhead root="Drums" sounding="false" frame="150000"/>
+    <!-- Pan the view away from the resting cursor (set-lane-view arms no
+         hold), then tick again: the arrangement is not heard, so the view
+         stays where it was put although the cursor is out of it. -->
+    <set-lane-view scrollX="0"/>
+    <advance-locator position="400048"/>
+    <assert-view-playhead root="Drums" sounding="false" frame="150000" inView="false"/>
+    <assert-lane-view scrollX="0"/>
+
+    <!-- Back inside the clip: heard again, and followed again. -->
+    <advance-locator position="246048"/>
+    <assert-view-playhead root="Drums" sounding="true" frame="150048" inView="true"/>
+    <assert-lane-view minScrollX="1"/>
+  </actions>
+
+</SActionScript>

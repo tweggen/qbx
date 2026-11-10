@@ -78,12 +78,14 @@ public:
     bool readXml( const QDomElement &elem, int version ) override;
     QStringList knownAttributes() const override
     { return { QStringLiteral("root"), QStringLiteral("frame"),
-               QStringLiteral("sounding"), QStringLiteral("tolerance") }; }
+               QStringLiteral("sounding"), QStringLiteral("tolerance"),
+               QStringLiteral("inView") }; }
 private:
     QString  root_;
     qint64   frame_ = 0;
     bool     frameGiven_ = false;
     QString  sounding_;
+    QString  inView_;   // QBX-237: "true"/"false", checked only when given
     qint64   tolerance_ = 0;
 };
 
