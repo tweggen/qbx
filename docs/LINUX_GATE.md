@@ -206,17 +206,48 @@ RMS margin and at 48000 for a mode-independent proof that the injection is
 real), so the failure reproduces locally and deterministically instead of
 waiting for a runner.
 
-**The two ROOT cases are deliberately NOT anchored**, because anchoring one of
-them made it worse. `master_closure_heard_root` has two modes over six measured
+**The two ROOT cases were deliberately NOT anchored**, because anchoring one of
+them made it worse. `master_closure_heard_root` had two modes over six measured
 runs — onset 2056 reading `0.204219`, and onset ~4075 reading `0.201039` — and
-if the second were the first displaced by the ~2019 frames the onset moved,
-shifting the window by that much would recover `0.204219`. It reads `0.197326`:
-further away, −1.56 % becoming −3.37 % against a floor of `0.1950`. So that
-case's variation is **not** a head displacement, an onset anchor does not
-correct it, and shipping one would have moved it closer to failing while looking
-like a fix. Filed as **QBX-239**. Both root cases keep their absolute window and
-gain an `assert-audio-onset ... maxFrame="40000"` bound, which is pure
-diagnosis.
+shifting the window by the ~2019 frames the onset moved read `0.197326`,
+further away. Filed as **QBX-239**, which measured what it is.
+
+**QBX-239: the root cases' variation is the RELATIVE ALIGNMENT of their two
+sources, not a displacement.** Each capture decomposes exactly (residual
+`0.000018`, gains `0.50000` / `0.50238`) into the ring, `test_sawtooth.wav`,
+which the file input LOOPS every 192000 frames, and the root,
+`test_autosaw.wav`:
+
+| mode | root audible from | ring file frame 0 at | old window | one-loop window |
+|---|---|---|---|---|
+| A (1 of 14 runs) | ~2148 | 6144 | `0.204219` | `0.175791` |
+| B (13 of 14 runs) | ~4148 | 4096 | `0.201039` | `0.176901` |
+
+Between the modes the two sources move about two blocks in OPPOSITE directions.
+A whole-capture sweep of B against A over ±8192 frames finds no offset that
+matches the captures (best residual `0.065` against a signal of `0.17`). The
+onset follows the root, which is loud from its first frame, while the 1 s
+window's reading was decided by the ring: a monitored input has no defined
+phase against the arrangement, and one second of a ramping, looping input
+measures that phase. Modelled over every phase of the loop, that window reads
+anywhere from `0.1205` to `0.2342`. Not a product defect.
+
+**The fix is a window of exactly one input loop**, `[64000, 256000)`. It is a
+multiple of the root's 100-frame period too, so neither source's start moves the
+reading. What is left is a small cross term: 440 Hz's 12th harmonic and 480 Hz's
+11th are both 5280 Hz. Computed from the fixtures over every relative offset, it
+spans `0.175744`..`0.177672` around the closed form `0.176741` (raised:
+`0.265836`..`0.268381` around `0.267151`, a factor of 1.5115). The bands add at
+least 1.2 % to each side of those ranges. The cases now wait 6600 ms instead of
+5200 ms, which captures about 322560 frames.
+
+**Sabotaged, all on one commit:** with the root absent (the pump's frozen-input
+sum skipped), both cases read `0.133322`, the ring alone, and fail. The raised
+case at −12 dB reads `0.176901` and fails, and the root case at −6 dB reads
+`0.267362` and fails. The rejected design was checked as well: the file input's
+cursor was started a quarter loop in (48000, then 48050 so that the cross term
+moves too). The new cases stay green (`0.176138` / `0.267932`). The OLD cases,
+run from saved copies, fail at `0.128151` / `0.237583`.
 
 **If it returns**, the assertion now names where it measured and what it
 anchored on — `over [ 169826 , 217826 ) "anchored on onset 19304 + 150522"` —
