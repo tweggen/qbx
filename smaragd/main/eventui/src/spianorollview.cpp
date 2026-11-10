@@ -612,7 +612,7 @@ void SPianoRollView::mouseDoubleClickEvent( QMouseEvent *ev )
             made.key = key;
             made.channel = 0;
             selectOnly( idStr( made ) );
-            SApplication::app().submitAction(
+            submitForClip(
                 new SAddNoteAction( clipPath_, made.t, d, key, drawVelocity_,
                                     0, 64.0, -1, true ) );
             update();
@@ -782,7 +782,7 @@ void SPianoRollView::commitDrag()
             e.value = drag_.value;
             events.push_back( e );
             std::sort( events.begin(), events.end() );
-            SApplication::app().submitAction(
+            submitForClip(
                 new SSetEventsAction( clipPath_, events, -1 ) );
         }
         drag_ = Drag();

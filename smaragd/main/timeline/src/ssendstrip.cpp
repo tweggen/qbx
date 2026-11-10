@@ -20,12 +20,14 @@
 
 namespace {
 
-SStdMixer *mixerOf( SProject *project )
+// The mixer whose send lanes this strip offers: the ROOT that holds the track
+// (QBX-244). Send lanes are per root -- `add-send-lane arrangement=` -- and a
+// send resolves its destination in the source's own root, so offering the
+// master's lanes on an arrangement's track listed rows that could only be
+// refused, and hid the arrangement's own.
+SStdMixer *mixerOf( SProject *project, STrack *track )
 {
-    return project ? dynamic_cast<SStdMixer *>(
-                         // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-                         splacements::rootContainer( project ) )
-                   : nullptr;
+    return dynamic_cast<SStdMixer *>( splacements::rootHolding( project, track ) );
 }
 
 }  // namespace
@@ -39,14 +41,22 @@ SSendStrip::SSendStrip( STrack *track, QWidget *parent )
     rebuild();
 }
 
-QString SSendStrip::trackSpec() const
+QString SSendStrip::trackSpec( QString &rootOut ) const
 {
+    // THE ROOT THAT HOLDS THE TRACK (QBX-244): specOf() qualifies the path
+    // with it, and the qualifier is split off into the root every action
+    // below is constructed with, so the path resolves in that root and the
+    // inverse inherits it. A bare path against the master -- what this
+    // returned before -- is the same index in a different tree.
+    rootOut.clear();
     SProject *proj = SApplication::app().getCurrentProject();
-    SStdMixer *mixer = mixerOf( proj );
-    if( !mixer || !track_ ) return QString();
-    const QList<int> path = strackpath::pathOf( mixer, track_ );
-    if( path.isEmpty() ) return QString();
-    return strackpath::pathToString( path );
+    if( !proj || !track_ ) return QString();
+    const QString spec = splacements::specOf( proj, track_ );
+    if( spec.isEmpty() ) return QString();
+    const strackpath::QualifiedPath q = strackpath::parseQualified( spec );
+    if( q.idx.isEmpty() ) return QString();
+    rootOut = q.root;
+    return strackpath::pathToString( q.idx );
 }
 
 void SSendStrip::rebuild()
@@ -66,7 +76,7 @@ void SSendStrip::rebuild()
     }
 
     SProject *proj = SApplication::app().getCurrentProject();
-    SStdMixer *mixer = mixerOf( proj );
+    SStdMixer *mixer = track_ ? mixerOf( proj, track_ ) : nullptr;
     if( !mixer || !track_ ) return;
 
     const QList<STrack *> lanes = mixer->sendLanes();
@@ -158,7 +168,8 @@ void SSendStrip::rebuild()
 void SSendStrip::onToggled( int row, bool on )
 {
     if( updating_ || row < 0 || row >= rows_.size() ) return;
-    const QString spec = trackSpec();
+    QString root;
+    const QString spec = trackSpec( root );
     if( spec.isEmpty() ) return;
     const Row &r = rows_[row];
 
@@ -166,16 +177,16 @@ void SSendStrip::onToggled( int row, bool on )
         // Absent -> create at what the controls currently show. Present but
         // disabled -> just re-enable, so its level and mode come back.
         if( track_ && track_->sendTap( r.lane ) ) {
-            auto *a = new SSetSendAction( spec, r.lane );
+            auto *a = new SSetSendAction( spec, r.lane, root );
             a->setEnabled( true );
             SApplication::app().submitAction( a );
         } else {
             SApplication::app().submitAction( new SAddSendAction(
                 spec, r.lane, r.level ? r.level->value() : 0.0,
-                r.mode && r.mode->currentIndex() == 1, true ) );
+                r.mode && r.mode->currentIndex() == 1, true, root ) );
         }
     } else {
-        auto *a = new SSetSendAction( spec, r.lane );
+        auto *a = new SSetSendAction( spec, r.lane, root );
         a->setEnabled( false );
         SApplication::app().submitAction( a );
     }
@@ -189,11 +200,12 @@ void SSendStrip::onToggled( int row, bool on )
 void SSendStrip::onLevelChanged( int row, double db )
 {
     if( updating_ || row < 0 || row >= rows_.size() ) return;
-    const QString spec = trackSpec();
+    QString root;
+    const QString spec = trackSpec( root );
     if( spec.isEmpty() || !track_ ) return;
     const Row &r = rows_[row];
     if( !track_->sendTap( r.lane ) ) return;   // nothing to level yet
-    auto *a = new SSetSendAction( spec, r.lane );
+    auto *a = new SSetSendAction( spec, r.lane, root );
     a->setLevelDb( db );
     SApplication::app().submitAction( a );
 }
@@ -201,11 +213,12 @@ void SSendStrip::onLevelChanged( int row, double db )
 void SSendStrip::onModeChanged( int row, int index )
 {
     if( updating_ || row < 0 || row >= rows_.size() ) return;
-    const QString spec = trackSpec();
+    QString root;
+    const QString spec = trackSpec( root );
     if( spec.isEmpty() || !track_ ) return;
     const Row &r = rows_[row];
     if( !track_->sendTap( r.lane ) ) return;
-    auto *a = new SSetSendAction( spec, r.lane );
+    auto *a = new SSetSendAction( spec, r.lane, root );
     a->setPreFader( index == 1 );
     SApplication::app().submitAction( a );
 }

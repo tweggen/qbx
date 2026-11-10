@@ -12,6 +12,7 @@
 #include "tw/core/twfraction.h"
 #include "tw/core/twtypes.h"
 
+class SAction;
 class SEventTimeAxis;
 class SLink;
 class SMidiCut;
@@ -51,9 +52,16 @@ public:
     /** Registry key ("pianoroll"), and the label the kind switch shows. */
     virtual QString kind() const = 0;
 
-    /** The clip this view edits, as an index path from the root mixer. */
-    void setClip( const QList<int> &clipPath );
+    /**
+     * The clip this view edits: an index path inside the ROOT that holds it
+     * (QBX-244). `root` is a root NAME as splacements::rootNamed() reads one
+     * -- empty for the master, an arrangement's or an asset's name otherwise.
+     * Until QBX-244 the path was resolved against the master unconditionally,
+     * so an event clip inside an arrangement could not be edited here at all.
+     */
+    void setClip( const QString &root, const QList<int> &clipPath );
     const QList<int> &clipPath() const { return clipPath_; }
+    const QString &clipRoot() const { return clipRoot_; }
 
     /** The shared axis. Not owned; the dock outlives every view. */
     void setTimeAxis( SEventTimeAxis *axis );
@@ -143,6 +151,16 @@ protected:
     void commitNotes( const Resolved &r, const std::vector<SEvent> &notes,
                       quint64 gesture = 0 );
 
+    /**
+     * Every edit this view (or a subclass) commits goes through here: the
+     * action is STAMPED with the clip's root before it is submitted, so a
+     * bare `clipPath_` resolves in the tree it was taken from and its inverse
+     * inherits the same root (applyPropagatingRoot). Never submitAction()
+     * directly from a view.
+     */
+    void submitForClip( SAction *a ) const;
+
+    QString         clipRoot_;   // empty == the master (rootNamed's reading)
     QList<int>      clipPath_;
     SEventTimeAxis *axis_ = nullptr;
     QString         grid_ = QStringLiteral( "1/16" );

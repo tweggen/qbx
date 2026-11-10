@@ -41,6 +41,7 @@
 #include <QRect>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 
 #include <cstdint>
 #include <map>
@@ -122,6 +123,15 @@ public:
     // middle of a suite. A case that wants to assert the flag round-trips reads
     // the MODEL (SPluginSlot::getEditorOpen), never a window.
     static void restoreOpenEditors( SProject *project, QWidget *parentForPosition );
+
+    // WHAT restoreOpenEditors() WOULD OPEN, without opening anything: one
+    // "<track spec>/<slot index>" per flagged slot, the track spelled by
+    // splacements::specOf() ("0/1" in the master, "Drums:0/0" in an
+    // arrangement). FOR THE TESTKIT (QBX-244) -- the restore itself returns
+    // at once under --test-case, so this is the only way a case can see
+    // WHICH roots the walk reaches. It reads the very list the restore walks
+    // (restorableSlots, one function), never a second copy of the walk.
+    static QStringList restorePlan( SProject *project );
 
     // Put a remembered rectangle somewhere the user can actually reach.
     //

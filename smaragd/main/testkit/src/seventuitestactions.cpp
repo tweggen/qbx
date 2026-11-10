@@ -431,7 +431,7 @@ QStringList SAssertEventEditorAction::knownAttributes() const
     return { QStringLiteral( "clip" ),     QStringLiteral( "kind" ),
              QStringLiteral( "contains" ), QStringLiteral( "absent" ),
              QStringLiteral( "grabPng" ),  QStringLiteral( "grabWidth" ),
-             QStringLiteral( "grabHeight" ) };
+             QStringLiteral( "grabHeight" ), QStringLiteral( "rebind" ) };
 }
 
 SApplyResult SAssertEventEditorAction::apply( SProject * )
@@ -442,7 +442,12 @@ SApplyResult SAssertEventEditorAction::apply( SProject * )
         return { false, nullptr };
     }
 
-    const QString desc = win->describeEventEditor( clip_, kind_ );
+    if( !rebind_ && !clip_.isEmpty() ) {
+        qWarning() << "assert-event-editor: rebind=\"0\" describes what is"
+                      " bound already, so it cannot also name a clip";
+        return { false, nullptr };
+    }
+    const QString desc = win->describeEventEditor( clip_, kind_, rebind_ );
     if( desc.isEmpty() ) {
         qWarning() << "assert-event-editor FAILED: the dock described nothing"
                    << "(kind" << kind_ << ")";
@@ -491,6 +496,7 @@ void SAssertEventEditorAction::writeXml( QDomElement &elem ) const
     elem.setAttribute( "grabPng", grabPng_ );
     elem.setAttribute( "grabWidth", grabWidth_ );
     elem.setAttribute( "grabHeight", grabHeight_ );
+    if( !rebind_ ) elem.setAttribute( "rebind", "0" );
 }
 
 bool SAssertEventEditorAction::readXml( const QDomElement &elem, int )
@@ -502,6 +508,7 @@ bool SAssertEventEditorAction::readXml( const QDomElement &elem, int )
     grabPng_    = elem.attribute( "grabPng" );
     grabWidth_  = elem.attribute( "grabWidth", "720" ).toInt();
     grabHeight_ = elem.attribute( "grabHeight", "360" ).toInt();
+    rebind_     = elem.attribute( "rebind", "1" ) != QLatin1String( "0" );
     return true;
 }
 

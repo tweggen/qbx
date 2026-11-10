@@ -291,6 +291,9 @@ private:
     QString grabPng_;
     int     grabWidth_ = 720;
     int     grabHeight_ = 360;
+    // QBX-244: "0" describes the dock as it stands, binding nothing (see
+    // SMainWindow::describeEventEditor). Written only when "0".
+    bool    rebind_ = true;
 };
 
 /**

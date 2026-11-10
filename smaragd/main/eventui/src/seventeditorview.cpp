@@ -21,10 +21,18 @@ SEventEditorView::SEventEditorView( QWidget *parent )
 
 SEventEditorView::~SEventEditorView() = default;
 
-void SEventEditorView::setClip( const QList<int> &clipPath )
+void SEventEditorView::setClip( const QString &root, const QList<int> &clipPath )
 {
+    clipRoot_ = root;
     clipPath_ = clipPath;
     refresh();
+}
+
+void SEventEditorView::submitForClip( SAction *a ) const
+{
+    if( !a ) return;
+    a->setPathRoot( clipRoot_ );
+    SApplication::app().submitAction( a );
 }
 
 void SEventEditorView::setTimeAxis( SEventTimeAxis *axis )
@@ -77,8 +85,10 @@ SEventEditorView::Resolved SEventEditorView::resolve() const
 
     SProject *project = SApplication::app().getCurrentProject();
     if( !project ) return r;
-    // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-    SObject *mixer = splacements::rootContainer( project );
+    // THE ROOT THE CLIP WAS BOUND IN (QBX-244), never the master by default:
+    // index {0,0} exists in every root, so resolving an arrangement's path
+    // against the master edits a DIFFERENT clip and succeeds.
+    SObject *mixer = splacements::rootNamed( project, clipRoot_ );
     if( !mixer ) return r;
 
     SLink *link = splacements::placementAt( mixer, clipPath_ );
@@ -190,8 +200,7 @@ void SEventEditorView::commitNotes( const Resolved &r,
     // the action's merge key was the clip, so the undo stack folded every
     // gesture on a clip into one entry (QBX-203). A caller that commits once
     // passes no token and stands alone.
-    SApplication::app().submitAction(
-        new SSetNotesAction( clipPath_, notes, -1, true, gesture ) );
+    submitForClip( new SSetNotesAction( clipPath_, notes, -1, true, gesture ) );
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include <cassert>
+#include <QComboBox>
 #include <QDebug>
 #include <QHash>
 #include <QMetaObject>
@@ -899,8 +900,9 @@ void SMainWindow::showEventEditor( const QString &clipPath )
     // headless test run never calls (SActionRunner sets the project straight
     // on SApplication), and even in the interactive app "open the dock" must
     // show what is ALREADY selected, not wait for the NEXT selection change.
+    // `clipPath` is ROOT-QUALIFIED (QBX-244); bindClip parses the qualifier.
     if( !clipPath.isEmpty() )
-        eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+        eventEditor_->bindClip( clipPath );
     else
         eventEditor_->refresh();
 
@@ -5130,6 +5132,19 @@ bool SMainWindow::clickFeelFlowPanel( const QString &trackPath,
     STrack *track = seamTrack( proj, trackPath );
     if( !track ) return false;
 
+    // The MODE COMBO (QBX-244): setCurrentIndex() on the real control, so its
+    // currentIndexChanged -> onModeChanged() wiring is what submits
+    // set-feel-flow-mode, addressed through the panel's own root resolution.
+    if( button == QLatin1String( "mode-adaptive" )
+        || button == QLatin1String( "mode-trained" ) ) {
+        SFeelFlowPanel panel( track, nullptr );
+        QComboBox *combo =
+            panel.findChild<QComboBox *>( QStringLiteral( "feelFlowMode" ) );
+        if( !combo ) return false;
+        combo->setCurrentIndex( button == QLatin1String( "mode-trained" ) ? 1 : 0 );
+        return true;
+    }
+
     const char *slot;
     if( button == QLatin1String( "analyze" ) )      slot = "onAnalyzeClicked";
     else if( button == QLatin1String( "learn" ) )   slot = "onLearnClicked";
@@ -5865,7 +5880,7 @@ bool SMainWindow::grabArrangerLanes( const QString &path, int w, int h )
 }
 
 QString SMainWindow::describeEventEditor( const QString &clipPath,
-                                          const QString &kind )
+                                          const QString &kind, bool rebind )
 {
     if( !eventEditor_ ) return QString();
     // The editor's axis mirrors the arranger's zoom/scroll, so the arranger has
@@ -5876,8 +5891,14 @@ QString SMainWindow::describeEventEditor( const QString &clipPath,
 
     // Empty clipPath = whatever the SELECTION resolves to, which is the
     // production behaviour. A named path binds the dock explicitly, so a case
-    // can describe a clip it has not selected.
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    // can describe a clip it has not selected. ROOT-QUALIFIED (QBX-244):
+    // "Drums:0,0" is the arrangement's clip, a bare "0,0" the master's.
+    //
+    // `rebind = false` describes the dock AS IT STANDS, binding nothing: the
+    // only way to see what a GESTURE bound (the double-click), since the
+    // selection-follow above would otherwise re-resolve it and hide a wrong
+    // binding behind a right selection.
+    if( rebind ) eventEditor_->bindClip( clipPath );
     return eventEditor_->describe();
 }
 
@@ -5913,7 +5934,7 @@ bool SMainWindow::dragNote( const QString &clipPath, qint64 tick, int key,
     ensureArranger_();
     linkEventEditorAxis();
 
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    eventEditor_->bindClip( clipPath );
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkDragNote( tick, key, channel, toTick, toKey, edge, lane,
@@ -5929,7 +5950,7 @@ bool SMainWindow::eventEditorKey( const QString &clipPath,
     ensureArranger_();
     linkEventEditorAxis();
 
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    eventEditor_->bindClip( clipPath );
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkPressKey( keyName, repeats );
@@ -5942,7 +5963,7 @@ bool SMainWindow::eventEditorDoubleClick( const QString &clipPath,
     ensureArranger_();
     linkEventEditorAxis();
 
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    eventEditor_->bindClip( clipPath );
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkDoubleClick( tick, key );
@@ -5955,7 +5976,7 @@ bool SMainWindow::scrollEventEditorTime( const QString &clipPath,
     ensureArranger_();
     linkEventEditorAxis();
 
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    eventEditor_->bindClip( clipPath );
     return eventEditor_->tkScrollTime( to );
 }
 
@@ -5966,7 +5987,7 @@ bool SMainWindow::dragNotePastEdge( const QString &clipPath, qint64 tick,
     ensureArranger_();
     linkEventEditorAxis();
 
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    eventEditor_->bindClip( clipPath );
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return false;
     return roll->tkDragPastEdge( tick, key, edge, steps );
@@ -5978,7 +5999,7 @@ int SMainWindow::scrollEventEditorKeys( const QString &clipPath, int topKey )
     ensureArranger_();
     linkEventEditorAxis();
 
-    eventEditor_->bindClip( strackpath::stringToPath( clipPath ) );
+    eventEditor_->bindClip( clipPath );
     SPianoRollView *roll = eventEditor_->pianoRoll();
     if( !roll ) return -1;
     return roll->tkScrollKeys( topKey );

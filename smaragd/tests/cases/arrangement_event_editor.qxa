@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-244. THE EVENT EDITOR AND THE VIRTUAL KEYBOARD WORK IN AN ARRANGEMENT TAB.
+
+  Until this change an event clip inside an arrangement could not be opened in
+  the event editor at all: SEventEditorDock::bindClip took a BARE index path,
+  the shell parsed every clip= with stringToPath, the view resolved its path
+  against the MASTER, and the selection follower asked the master to spell the
+  active tab's selection (which it cannot: the clips are not in its tree).
+  tools/check_pathroot.py carried the gap as an EXEMPT entry. The virtual
+  keyboard had the same two halves: its target came from the master's
+  selection or the master's selected track, and its add-note was unstamped.
+
+  THE FIXTURE IS CONFUSABLE ON PURPOSE: the master and the arrangement Drums
+  both hold an event clip at {0,0}, so every master-rooted resolution finds a
+  REAL clip and succeeds on the wrong one. They differ in their notes: the
+  master's clip holds ONE note (key 60), the arrangement's TWO (key 72, at
+  ticks 0 and 1920). So "notes=2" can only be the arrangement's, and every
+  edit section asserts BOTH clips: the change landed in Drums and the master
+  is exactly as it was.
+
+  SECTIONS
+    A. bindClip takes a root-qualified spec (the shell's seams, the dock's
+       parse, SEventEditorView::resolve).
+    B. the selection follower asks the ACTIVE TAB's root
+       (resolveSelectedEventClip).
+    C. a drag commits set-notes STAMPED with the clip's root
+       (SEventEditorView::commitNotes / submitForClip).
+    D. a double-click on the grid commits add-note, stamped the same way
+       (SPianoRollView, through submitForClip).
+    E. a double-click on the clip in the ARRANGER opens the editor on the
+       arrangement's clip: the arranger qualifies the path with its own root
+       (SMVActualView::mouseDoubleClickEvent). rebind="0" reads what the
+       gesture bound, which the selection follow would otherwise re-resolve.
+    F. the virtual keyboard's selected-TRACK fallback, in the tab's root.
+    G. the virtual keyboard's SELECTION target, in the tab's root, and its
+       add-note stamped with it.
+
+  NOT GATED HERE: the toolbar's Quantize button. It is stamped exactly as
+  commitNotes is, but no verb reaches SEventEditorDock::onQuantizeClicked (the
+  Q shortcut is a QAction, and no seam drives it).
+-->
+<SActionScript version="1" name="arrangement_event_editor">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- The master: one event clip, one note. -->
+    <add-track index="-1"/>
+    <insert-midi-clip trackPath="0" timePos="0" duration="7680" name="MasterNotes"/>
+    <add-note clip="0,0" tick="0" dur="480" key="60" velocity="100" channel="0"/>
+
+    <!-- The arrangement: one event clip at the SAME index, two notes. -->
+    <create-arrangement name="Drums"/>
+    <add-track arrangement="Drums" index="-1"/>
+    <insert-midi-clip trackPath="Drums:0" timePos="0" duration="7680" name="DrumNotes"/>
+    <add-note clip="Drums:0,0" tick="0" dur="480" key="72" velocity="100" channel="0"/>
+    <add-note clip="Drums:0,0" tick="1920" dur="480" key="72" velocity="100" channel="0"/>
+
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" count="2"/>
+
+    <!-- ========== A. AN EXPLICIT, QUALIFIED BINDING =================== -->
+    <assert-event-editor clip="Drums:0,0" kind="pianoroll"
+                         contains="notes=2" absent="empty=1"/>
+    <assert-event-editor clip="Drums:0,0" kind="pianoroll"
+                         contains="|clip=Drums:0,0"/>
+    <!-- A bare spelling still means the master. -->
+    <assert-event-editor clip="0,0" kind="pianoroll" contains="notes=1"/>
+    <assert-event-editor clip="0,0" kind="pianoroll" contains="|clip=0,0"/>
+
+    <!-- ========== F. THE KEYBOARD'S SELECTED-TRACK FALLBACK =========== -->
+    <!-- Before any clip is selected in Drums, so the fallback is what runs:
+         the tab's own selected track, never the master's (which has none
+         here, so a master-rooted fallback has no target and refuses). -->
+    <open-arrangement-tab name="Drums"/>
+    <select-track trackPath="0"/>
+    <set-locator position="0"/>
+    <virtual-key key="81" velocity="100" durationTicks="480"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="81" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="81" count="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <undo count="1"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="81" count="0"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" count="2"/>
+
+    <!-- ========== B. THE SELECTION FOLLOWER, IN THE TAB'S ROOT ======== -->
+    <set-selection paths="Drums:0,0"/>
+    <assert-event-editor kind="pianoroll" contains="notes=2" absent="empty=1"/>
+    <assert-event-editor kind="pianoroll" contains="|clip=Drums:0,0"/>
+
+    <!-- ========== G. THE KEYBOARD'S SELECTION TARGET ================== -->
+    <virtual-key key="80" velocity="100" durationTicks="480"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="80" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="80" count="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <undo count="1"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="80" count="0"/>
+
+    <!-- ========== C. A DRAG LANDS IN THE ARRANGEMENT'S CLIP =========== -->
+    <!-- Transpose the tick-0 note up a whole tone. The gesture submits ONE
+         set-notes on release; unstamped, its bare {0,0} is the master's clip,
+         which would then hold the arrangement's notes. -->
+    <drag-note clip="Drums:0,0" tick="0" key="72" toTick="0" toKey="74"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="74" count="1"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="72" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <undo count="1"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="72" count="2"/>
+    <assert-midi-events clip="0,0" kind="note" key="60" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+
+    <!-- ========== D. A GRID DOUBLE-CLICK ADDS A NOTE THERE ============ -->
+    <event-editor-double-click clip="Drums:0,0" tick="3840" key="76"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="76" count="1"/>
+    <assert-midi-events clip="0,0" kind="note" key="76" count="0"/>
+    <assert-midi-events clip="0,0" kind="note" count="1"/>
+    <undo count="1"/>
+    <assert-midi-events clip="Drums:0,0" kind="note" key="76" count="0"/>
+
+    <!-- ========== E. THE ARRANGER'S DOUBLE-CLICK OPENS IT ============= -->
+    <!-- Bind the MASTER's clip first, so the gesture has something to move
+         the editor AWAY from. -->
+    <assert-event-editor clip="0,0" kind="pianoroll" contains="|clip=0,0"/>
+    <double-click-clip track="0" clip="0"/>
+    <assert-event-editor rebind="0" kind="pianoroll"
+                         contains="|clip=Drums:0,0"/>
+    <assert-event-editor rebind="0" kind="pianoroll"
+                         contains="notes=2" absent="empty=1"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+    <assert-track-count root="Drums" equals="1"/>
+  </assertions>
+
+</SActionScript>

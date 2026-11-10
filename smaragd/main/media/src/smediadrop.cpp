@@ -114,14 +114,15 @@ bool finishPlacement( const Pending &p, const QString &localPath )
     //     removal by design. Reachability from the root is therefore the
     //     question, not liveness.
     //
-    // pathOf() returns {} for "the root itself" as well as "not found", and a
-    // drop target is never the root — so empty means unreachable, exactly as
-    // SMVActualView::dropEvent already reads it.
+    // Reachable from ANY root (QBX-244), not from the master: a drop onto an
+    // arrangement's lane is a drop onto a track the master does not hold, so
+    // asking the master alone reported every such target "removed" and the
+    // fetched file was discarded. rootHolding() is null exactly when no root
+    // reaches the track -- the removed-but-pinned case below -- and it is the
+    // same walk specOf() runs, which is what the placement hook then asks.
     const bool reachable =
         !p.track.isNull() &&
-        // check_root_resolution: suspect QBX-244 -- this surface must address the root that HOLDS its object (splacements::specOf)
-        !strackpath::pathOf( splacements::rootContainer( current ),
-                             p.track.data() ).isEmpty();
+        splacements::rootHolding( current, p.track.data() ) != nullptr;
     if( !reachable ) {
         ++g_abandoned;
         TW_LOGW( "media", "drop: the target track was removed while '%s' was "

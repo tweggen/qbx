@@ -662,6 +662,54 @@ static const bool s_reg_pluginnativeeditor =
           [] { return new SPluginNativeEditorAction; } ),
       true );
 
+// --- assert-editor-restore-plan (QBX-244) ----------------------------------
+
+SApplyResult SAssertEditorRestorePlanAction::apply( SProject *project )
+{
+    const QStringList plan = SPluginNativeEditor::restorePlan( project );
+    const QString desc = plan.join( QLatin1Char( ';' ) );
+    // Logged always, so a case can read the plan it is about to pin.
+    qWarning().noquote() << "assert-editor-restore-plan: plan" << desc;
+    if( count_ >= 0 && plan.size() != count_ ) {
+        qWarning().noquote() << "assert-editor-restore-plan FAILED: expected"
+                             << count_ << "entries, got" << plan.size()
+                             << "(" << desc << ")";
+        return { false, nullptr };
+    }
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning().noquote() << "assert-editor-restore-plan FAILED: plan" << desc
+                             << "lacks" << contains_;
+        return { false, nullptr };
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning().noquote() << "assert-editor-restore-plan FAILED: plan" << desc
+                             << "unexpectedly contains" << absent_;
+        return { false, nullptr };
+    }
+    return { true, nullptr };
+}
+
+void SAssertEditorRestorePlanAction::writeXml( QDomElement &elem ) const
+{
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
+    elem.setAttribute( "count", count_ );
+}
+
+bool SAssertEditorRestorePlanAction::readXml( const QDomElement &elem, int )
+{
+    contains_ = elem.attribute( "contains" );
+    absent_   = elem.attribute( "absent" );
+    count_    = elem.attribute( "count", "-1" ).toInt();
+    return true;
+}
+
+static const bool s_reg_asserteditorrestoreplan =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-editor-restore-plan" ),
+          [] { return new SAssertEditorRestorePlanAction; } ),
+      true );
+
 // --- plugin-generic-editor -------------------------------------------------
 
 SApplyResult SPluginGenericEditorAction::apply( SProject *project )
