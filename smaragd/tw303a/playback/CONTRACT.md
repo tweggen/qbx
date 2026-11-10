@@ -638,9 +638,22 @@ through the published root (property 6). Six properties are contractual:
    bound the swap returns, the root is parked alive, and the next quiescent
    swap releases it; (c) 600 swaps of engine-owned fresh roots under a running
    pull: none destroyed on the pull thread, none leaked, no block carrying two
-   roots' audio. (a) and (b) are deterministic and catch the missing wait
-   without a sanitizer; (c)'s race itself is visible only to TSan (see the
-   QBX-287 PR for the TSan run and its sabotage).
+   roots' audio. Measured by sabotage (QBX-287):
+   - setter's wait removed: (a) reports the root released under the parked
+     pull and stops (deterministic, no sanitizer needed);
+   - the rejected design — `std::atomic_load` of the `shared_ptr` on the RT, no
+     wait: (a), (b) and (c)'s "destroyed on the pull thread" all FAIL;
+   - the RT reading the owning member plainly: every assertion still passes —
+     a plain build cannot see the race itself. Only TSan can: a
+     `-fsanitize=thread` build of `playback_test` reports three races in the
+     QBX-287 section under that sabotage and none with the fix. (It reports
+     pre-existing races elsewhere in `playback_test`: `readaheadComputedUpTo_`
+     is a plain `uint64_t` shared by the readahead, `pullBlock` and
+     `startPlayback`. Not this property's.)
+   - NOT gated: the pull's held-page drop on a root change and the readahead's
+     chain restart. Removing either leaves every assertion green; both cover an
+     ordering window (pointer seen before the seek, a demand at an equal epoch)
+     that the case does not force.
 
 **Ownership order is asymmetric**, because the guard fires on whoever is not the
 pump: **entering** a closure re-roots FIRST and then takes ownership; **leaving**
