@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  THE PLUGIN BROWSER'S FORMAT FILTER (QBX-78).
+  THE PLUGIN BROWSER'S FORMAT FILTER (QBX-78), AND THE BUILT-INS IT
+  NEVER HIDES (QBX-261, phases 2, 5 and 9 to 12).
 
   One product is legitimately installed in several formats — that is why the
   browser is a tree with a Format column and why a selection resolves by
@@ -83,14 +84,16 @@
         contains="formats=au,clap,vst3|format=|kind=all|filter=|rows=4|visible=4|visibleFormats=au,clap,vst3|status=4 plugin(s)"
         absent="tw"/>
 
-    <!-- PHASE 2 — choosing a format hides the other formats and keeps its own
-         rows. Two of the five, and the status line says so: a filter that hid
-         everything and one that hid nothing would both fail here, and they
-         fail in opposite directions. -->
+    <!-- PHASE 2 — choosing a format hides the other EXTERNAL formats and keeps
+         its own rows and the built-in Looper (QBX-261: the built-ins are
+         listed whatever format is chosen). Three of the five, and the status
+         line says so: a filter that hid everything and one that hid nothing
+         would both fail here, and they fail in opposite directions; the
+         pre-QBX-261 filter, which hid Looper too, fails with visible=2. -->
     <assert-plugin-browser
         plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
         format="vst3"
-        contains="format=vst3|kind=all|filter=|rows=5|visible=2|visibleFormats=vst3|status=2 of 5 plugin(s)"/>
+        contains="format=vst3|kind=all|filter=|rows=5|visible=3|visibleFormats=tw,vst3|status=3 of 5 plugin(s)"/>
 
     <!-- PHASE 3 — the Format and Kind filters COMPOSE. `vst3` alone gives two
          rows (phase 2) and `instruments` alone gives one row of a different
@@ -123,7 +126,7 @@
     <assert-plugin-browser
         plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
         format="au" reopen="1" stored="au"
-        contains="format=au|kind=all|filter=|rows=5|visible=1|visibleFormats=au|status=1 of 5 plugin(s)"/>
+        contains="format=au|kind=all|filter=|rows=5|visible=2|visibleFormats=au,tw|status=2 of 5 plugin(s)"/>
 
     <!-- PHASE 6 — A STORED FORMAT THIS MACHINE HAS NOTHING IN SHOWS ALL, AND
          IS NOT OVERWRITTEN. The first dialog stores `au`; the reopened one is
@@ -159,6 +162,65 @@
         plugins="Mangrove:clap:Nassau:2/2:fx;Mangrove:vst3:Nassau:2/2:fx;Dexed:vst3:DigitalSuburban:0/2:instrument;Castello:au:Luciano:2/2:fx;Looper:tw:Nassau:2/2:fx"
         format="all" reopen="1" stored="all"
         contains="format=|kind=all|filter=|rows=5|visible=5|visibleFormats=au,clap,tw,vst3|status=5 plugin(s)"/>
+
+    <!-- THE BUILT-INS ARE ALWAYS LISTED (QBX-261). "In all plugin selectors,
+         only the plugin type selected is shown. Internal plugins always should
+         be listed." The internal plugins are the format `tw`: linked into the
+         build, never scanned (the pass-through, the native 303, and what
+         registerBuiltin hands in, such as NassauDigital). A Nassau plugin
+         shipped as .clap or .vst3 is an installed plugin like any other.
+
+         There is ONE selector, SPluginBrowserDialog, opened from two places:
+         the FX strip's "+ Add Effect" on kind effects and its "+ Add
+         Instrument" on kind instruments. Phases 9 and 10 build it as each of
+         them does. The rule is SPluginBrowserDialog::formatFilterAdmits(),
+         the only format test filterPlugins() makes, and visibleFormats= is
+         read off the rows that predicate left visible.
+
+         THE LIST. Seven plugins: one built-in effect and one built-in
+         instrument, and for each kind one clap and one vst3 external, so
+         every phase has an external of ANOTHER format that must stay hidden
+         beside the built-in that must stay listed:
+
+           Mangrove   clap  effect        Surge      clap  INSTRUMENT
+           Valhalla   vst3  effect        Dexed      vst3  INSTRUMENT
+           Looper     tw    effect        Synth303   tw    INSTRUMENT
+           Castello   au    effect
+
+         Each `contains` spells visibleFormats= up to the next field, so a
+         hidden external showing (`clap,tw,vst3`) fails it as surely as a
+         hidden built-in (`clap`). -->
+
+    <!-- PHASE 9 — "+ Add Effect" over CLAP: the clap effect and the built-in
+         effect; the vst3 and au effects and every instrument hidden. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Valhalla:vst3:Valhalla:2/2:fx;Looper:tw:Nassau:2/2:fx;Castello:au:Luciano:2/2:fx;Surge:clap:Surge:0/2:instrument;Dexed:vst3:DigitalSuburban:0/2:instrument;Synth303:tw:Nassau:0/1:instrument"
+        kind="effects" format="clap"
+        contains="format=clap|kind=effects|filter=|rows=7|visible=2|visibleFormats=clap,tw|status=2 of 7 plugin(s)"/>
+
+    <!-- PHASE 10 — "+ Add Instrument" over VST3: Dexed and the built-in
+         instrument; Surge (clap) hidden. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Valhalla:vst3:Valhalla:2/2:fx;Looper:tw:Nassau:2/2:fx;Castello:au:Luciano:2/2:fx;Surge:clap:Surge:0/2:instrument;Dexed:vst3:DigitalSuburban:0/2:instrument;Synth303:tw:Nassau:0/1:instrument"
+        kind="instruments" format="vst3"
+        contains="format=vst3|kind=instruments|filter=|rows=7|visible=2|visibleFormats=tw,vst3|status=2 of 7 plugin(s)"/>
+
+    <!-- PHASE 11 — the rule is about the FORMAT filter only. The typed Filter
+         box still narrows the built-ins like any row: "mangrove" over CLAP
+         leaves Mangrove alone, not Mangrove plus Looper. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Valhalla:vst3:Valhalla:2/2:fx;Looper:tw:Nassau:2/2:fx;Castello:au:Luciano:2/2:fx;Surge:clap:Surge:0/2:instrument;Dexed:vst3:DigitalSuburban:0/2:instrument;Synth303:tw:Nassau:0/1:instrument"
+        kind="all" format="clap" filter="mangrove"
+        contains="format=clap|kind=all|filter=mangrove|rows=7|visible=1|visibleFormats=clap|status=1 of 7 plugin(s)"/>
+
+    <!-- PHASE 12 — choosing Built-in itself still narrows, to the built-ins
+         alone: the always-listed rule widens an EXTERNAL choice and does not
+         turn the tw entry into All. -->
+    <assert-plugin-browser
+        plugins="Mangrove:clap:Nassau:2/2:fx;Valhalla:vst3:Valhalla:2/2:fx;Looper:tw:Nassau:2/2:fx;Castello:au:Luciano:2/2:fx;Surge:clap:Surge:0/2:instrument;Dexed:vst3:DigitalSuburban:0/2:instrument;Synth303:tw:Nassau:0/1:instrument"
+        kind="all" format="tw"
+        contains="format=tw|kind=all|filter=|rows=7|visible=2|visibleFormats=tw|status=2 of 7 plugin(s)"/>
+
   </actions>
 
   <assertions>

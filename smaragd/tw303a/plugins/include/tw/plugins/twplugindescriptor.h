@@ -51,6 +51,18 @@ struct twPluginDescriptor {
     std::vector<std::uint16_t> inBusChannels;
 };
 
+// The in-house format: every plugin LINKED INTO the build rather than found by
+// the scanner -- the pass-through, the native 303 and whatever a module above
+// hands in through twPluginRegistry::registerBuiltin() (NassauDigital). A
+// Nassau plugin shipped as a .clap or .vst3 is NOT built in: it is installed,
+// scanned and can be missing, like any other vendor's.
+inline constexpr const char *kBuiltinPluginFormat = "tw";
+
+inline bool isBuiltinPluginFormat( const std::string &format )
+{
+    return format == kBuiltinPluginFormat;
+}
+
 // What the scanner learned about ONE module file (proposal 08 M2).
 //
 // Failed and Timeout are REMEMBERED, not retried: a plugin that crashes or
