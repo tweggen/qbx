@@ -177,23 +177,29 @@ foreach(_case ${_QXA_CASES})
     )
 endforeach()
 
-# --- the POISONED-HEAP variants (QBX-300; the same block as QBX-288's) -------
+# --- the POISONED-HEAP variants (QBX-288, QBX-300) -------------------------
 #
-# A read of FREED memory passes every ordinary run whenever the freed block
-# still holds its old bytes, which on glibc it usually does. glibc's
-# malloc.perturb=65 fills every freed block (and every new one) in the NORMAL
-# build, so such a read returns garbage and, as a rule, crashes; tcache_count=0
-# is needed with it, since glibc's tcache fast path skips the perturb. Linux
-# only: the tunable is glibc's. Under ENABLE_ASAN it is inert (ASan owns malloc)
-# and ASan's own report is the stronger gate. Cases are listed by hand: each is
-# one a perturbed heap is known to turn red on the defect it names.
+# A member the code reads before it writes passes every ordinary run, because a
+# fresh glibc heap is zero, and fails the moment the chunk is reused or the
+# allocator fills it: ENABLE_ASAN (which fills new blocks with 0xbe) turned
+# these four cases red with no sanitizer report, because STimeGridSpec's two
+# members were read by SMVActualView's constructor before SStdMixerView's had
+# set them. glibc's malloc.perturb=65 fills every new block with ~65 = 0xbe,
+# the same byte, in the NORMAL build; tcache_count=0 is needed with it, since
+# glibc's tcache fast path returns a block without perturbing it. Linux only:
+# the tunable is glibc's, and macOS's MallocPreScribble byte (0xaa) happens to
+# make this particular read round to an empty range, so it would gate nothing.
+# Under ENABLE_ASAN the tunable is inert (ASan owns malloc) and ASan's own fill
+# poisons instead. Cases are listed by hand: each is one whose assertion sees
+# what an uninitialised read paints or reports, or a read of FREED memory
+# turns into a crash (the perturb fills freed blocks too):
 #   live_skip_reasons  QBX-300: open-project deleted the old project under the
 #                      window's master view; that view's heads stayed wired to
 #                      SLiveMonitor::skipsChanged and read the freed STrack.
-# QBX-288 (PR #369) adds this same block for four other cases; whichever lands
-# second merges its names into the one list.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    foreach(_name live_skip_reasons)
+    foreach(_name transport_readout transport_readout_width_is_stable
+                  folder_sum_preview take_comp_backdrop
+                  live_skip_reasons)
         if(TEST qxa.${_name})
             add_test(NAME qxa.poisoned_heap.${_name}
                 COMMAND $<TARGET_FILE:smaragd>
@@ -370,8 +376,11 @@ endif()
 # They are NOT wall-clock tests: every verb waits for the panel to go idle
 # rather than sleeping, so RUN_SERIAL here is about the shared INI and nothing
 # else.
+# arrangement_arranger_gestures (QBX-243) drives media-browser-drag onto an
+# arrangement lane, so it owns and restores the same four keys.
 foreach(_media media_browser_browse media_browser_search
-                media_browser_drag_local media_browser_drag_belowlast)
+                media_browser_drag_local media_browser_drag_belowlast
+                arrangement_arranger_gestures)
     if(TEST qxa.${_media})
         set_tests_properties(qxa.${_media} PROPERTIES RUN_SERIAL TRUE)
     endif()

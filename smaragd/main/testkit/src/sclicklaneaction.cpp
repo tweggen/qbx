@@ -365,3 +365,87 @@ static const bool s_reg_deselectall =
           QStringLiteral( "deselect-all" ),
           [] { return new SDeselectAllAction; } ),
       true );
+
+// --- nudge-clip-pitch (QBX-243) --------------------------------------------
+
+SApplyResult SNudgeClipPitchAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "nudge-clip-pitch: no main window";
+        return { false, nullptr };
+    }
+    if( !win->nudgeClipPitchGesture( cents_ ) ) {
+        qWarning() << "nudge-clip-pitch: no arranger, or no transpose key for"
+                   << cents_ << "cents";
+        return { false, nullptr };
+    }
+    // The gesture submits its own composite of `set-pitch` (or nothing, when no
+    // target resolved); undoing THAT reverses it.
+    return { true, nullptr };
+}
+
+void SNudgeClipPitchAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "cents", cents_ );
+}
+
+bool SNudgeClipPitchAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    bool ok = false;
+    cents_ = elem.attribute( "cents", "100" ).toInt( &ok );
+    return ok;
+}
+
+static const bool s_reg_nudge_clip_pitch =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "nudge-clip-pitch" ),
+          [] { return new SNudgeClipPitchAction; } ),
+      true );
+
+// --- assert-clip-properties (QBX-243) --------------------------------------
+
+SApplyResult SAssertClipPropertiesAction::apply( SProject * /*project*/ )
+{
+    SMainWindow *win = mainWindow_();
+    if( !win ) {
+        qWarning() << "assert-clip-properties: no main window";
+        return { false, nullptr };
+    }
+    const QString desc = win->describeClipProperties();
+    if( desc.isEmpty() ) {
+        qWarning() << "assert-clip-properties: no clip properties panel";
+        return { false, nullptr };
+    }
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning().noquote() << "assert-clip-properties FAILED: expected"
+                             << contains_ << "in" << desc;
+        return { false, nullptr };
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning().noquote() << "assert-clip-properties FAILED: did not expect"
+                             << absent_ << "in" << desc;
+        return { false, nullptr };
+    }
+    qDebug().noquote() << "assert-clip-properties: OK -" << desc;
+    return { true, nullptr };
+}
+
+void SAssertClipPropertiesAction::writeXml( QDomElement &elem ) const
+{
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertClipPropertiesAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    contains_ = elem.attribute( "contains" );
+    absent_   = elem.attribute( "absent" );
+    return true;
+}
+
+static const bool s_reg_assert_clip_properties =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "assert-clip-properties" ),
+          [] { return new SAssertClipPropertiesAction; } ),
+      true );

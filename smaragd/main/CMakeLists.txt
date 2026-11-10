@@ -1091,6 +1091,23 @@ add_test(NAME action_roundtrip_test COMMAND action_roundtrip_test)
 set_tests_properties(action_roundtrip_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The same binary on a POISONED heap (QBX-299, the pattern of QBX-288's
+# qxa.poisoned_heap.* cases in smaragd/CMakeLists.txt). glibc's
+# malloc.perturb=65 fills every freed block with 0x41 and every new one with
+# 0xbe; tcache_count=0 is needed with it, because the tcache fast path hands a
+# block back without perturbing it. isLaneAddressed() wrote a QDom refcount into
+# a document private that had already been freed, and this run aborted on it
+# every time ("malloc(): unsorted double linked list corrupted") while the plain
+# run passed, and so did an ENABLE_ASAN build: the write is inside libQt6Xml,
+# which ASan does not instrument. A use-after-free whose writer is a system
+# library is caught by this variant and by nothing else in the suite. Linux
+# only: the tunable is glibc's.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME poisoned_heap.action_roundtrip_test COMMAND action_roundtrip_test)
+    set_tests_properties(poisoned_heap.action_roundtrip_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;GLIBC_TUNABLES=glibc.malloc.perturb=65:glibc.malloc.tcache_count=0")
+endif()
+
 # External-file path encoding (project-relative / "~" / absolute). Pure path
 # arithmetic over app_model, so it needs no project, no audio and no display —
 # but it links all four layers because app_model is an OBJECT library whose
