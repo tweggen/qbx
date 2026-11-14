@@ -1967,7 +1967,9 @@ void SMVActualView::ctGlobalShow()
         }
         qGlobalPopup_->addSeparator();
         // Make a live asset from this track over the current ruler range. Needs
-        // a range; disabled (with a hint) when none is selected.
+        // a range; disabled (with a hint) when none is selected. A new project
+        // HAS one (loadRangeFromProject's default, QBX-236), so the hint shows
+        // only after the user cleared the range, which is when it helps.
         QAction *aAsset = qGlobalPopup_->addAction(
             "Create &asset from range", this, SLOT( ctCreateAssetFromTrack() ) );
         // A STABLE KEY (QBX-211), so the assertion does not rest on the
@@ -3427,6 +3429,14 @@ void SMVActualView::loadRangeFromProject()
     rangeStart_ = (offset_t) p.prop( SProjectProps::RangeStart, (qulonglong) 0 ).toULongLong();
     rangeEnd_   = (offset_t) p.prop( SProjectProps::RangeEnd,   (qulonglong) 0 ).toULongLong();
 
+    // A project that carries no range (a new one, or one saved before the
+    // range was persisted) gets a DEFAULT one: four bars from the start of
+    // bar 5. This is intended (the author's decision, QBX-236): a fresh
+    // document shows a range to grab and drag rather than an empty ruler, so
+    // "Create asset from range" is enabled on it. Its greyed "(select a range
+    // first)" form is the state after an EXPLICIT clear, and is right there.
+    // saveRangeToProject persists RangeValid=false after a clear, and this
+    // re-invents the default on the next open; that is accepted with it.
     if (!rangeValid_) {
         STimeGridSpec tgs = smv_.getTimeGridSpec();
         double beatSec = tgs.getTimeGridWidth();
