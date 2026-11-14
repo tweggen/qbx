@@ -110,6 +110,21 @@ State handoff UI→audio is snapshot/double-buffer based:
   `twRtQuiescence` — `tw/playback/twrtquiescence.h`, the one implementation of
   this handshake; use it for the next RT-published object rather than a copy). Details in
   `smaragd/tw303a/playback/CONTRACT.md`, re-rooting property 6.
+- `AudioEngine`'s readahead frontiers (QBX-298): `readaheadComputedUpTo_` and
+  `readaheadPostWrapComputedUpTo_` are `std::atomic<uint64_t>`. One writer, the
+  readahead thread (the resets in `seekTo()`/`startReadahead()` run before it
+  starts); stores are `release` and come only after the page is confirmed
+  frozen. Foreign readers load `acquire`: `pullBlock` on the RT (its gap
+  diagnostics) and `startPlayback()` on the main thread (the priming gate). The
+  readahead's own reads are `relaxed`. They were plain `uint64_t`, and a TSan
+  build of `playback_test` named them on all three threads.
+- `twLivePlan`'s scratch (QBX-298): the plan is immutable once published, and
+  its one mutable member — the pump's working buffers — is NOT copied with it.
+  A copy (the usual way to derive the next plan) is unfinalized until its own
+  `finalize()`, so copying a plan a running pump holds reads only immutable
+  fields. The plan itself is handed over by `LiveGraphPump::setPlan()` under
+  `planMutex_` and adopted at the top of a pump block; the pump thread is a
+  live thread, not the device callback, and frees the old plan there.
 
 ## Rule 3 — lock discipline
 

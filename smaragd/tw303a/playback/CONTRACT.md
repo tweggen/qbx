@@ -681,8 +681,10 @@ through the published root (property 6). Six properties are contractual:
      `-fsanitize=thread` build of `playback_test` reports three races in the
      QBX-287 section under that sabotage and none with the fix. (It reports
      pre-existing races elsewhere in `playback_test`: `readaheadComputedUpTo_`
-     is a plain `uint64_t` shared by the readahead, `pullBlock` and
-     `startPlayback`. Not this property's.)
+     was a plain `uint64_t` shared by the readahead, `pullBlock` and
+     `startPlayback`, and a `twLivePlan` copy read the scratch a running
+     pump writes. Not this property's; both fixed by QBX-298, and the TSan
+     build now reports none — see `docs/contracts/THREADING.md` rule 2.)
    - NOT gated: the pull's held-page drop on a root change and the readahead's
      chain restart. Removing either leaves every assertion green; both cover an
      ordering window (pointer seen before the seek, a demand at an equal epoch)

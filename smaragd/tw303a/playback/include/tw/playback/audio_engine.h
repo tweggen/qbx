@@ -361,7 +361,15 @@ private:
     std::condition_variable readaheadCv_;
     std::condition_variable playbackReadyCv_;  // Signals twSpeaker when buffer ready for playback
     std::shared_ptr<twOutputPage> readaheadPrevPage_;   // State chain for read-ahead
-    uint64_t readaheadComputedUpTo_{0};                 // Last page start pos computed
+    // THE READAHEAD FRONTIER: everything below it is confirmed frozen. ONE
+    // writer, the readahead thread (plus the resets in seekTo() and
+    // startReadahead(), which run before that thread starts); READ by pullBlock
+    // on the RT (its gap diagnostics) and by startPlayback() on the main thread
+    // (the priming gate). Atomic since QBX-298 -- it was a plain uint64_t and
+    // TSan named it on all three threads. Stores are release and come only
+    // after the page is confirmed frozen; the two foreign readers load acquire;
+    // the readahead's own reads are relaxed (it is the writer).
+    std::atomic<uint64_t> readaheadComputedUpTo_{0};
 
     // Stage 5: scheduler consumer state (readahead thread only). The pending
     // demand handle stops the 20ms tick from re-issuing an identical demand
@@ -398,7 +406,10 @@ private:
     // detected and its value is adopted as the new readaheadComputedUpTo_ —
     // see readaheadLoop()'s jump detector — so it always describes "ahead of
     // the wrap that has not happened YET", never a stale prior pass's.
-    uint64_t readaheadPostWrapComputedUpTo_{0};
+    //
+    // Same publication as readaheadComputedUpTo_ (QBX-298): written by the
+    // readahead thread only, read acquire by startPlayback() on the main thread.
+    std::atomic<uint64_t> readaheadPostWrapComputedUpTo_{0};
     std::shared_ptr<CaptureRevalidator::GraphDemand> pendingDemand2_;
     uint64_t pendingDemandStart2_{0};
     uint64_t pendingDemandEnd2_{0};

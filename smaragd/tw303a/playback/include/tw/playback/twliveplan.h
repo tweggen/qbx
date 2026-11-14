@@ -30,14 +30,23 @@ class twRewire;
 // position.
 //
 // LIFETIME. The pump holds it as `shared_ptr<const twLivePlan>` and adopts a
-// new one with a single atomic_store; the OLD plan is released after the pump's
-// next block, so nothing is destroyed underneath a render in flight (design §3).
+// new one under planMutex_ at the top of a block (setPlan(); this said "a
+// single atomic_store" until QBX-298); the OLD plan is released after the
+// pump's next block, so nothing is destroyed underneath a render in flight (design §3).
 //
 // SCRATCH. The plan owns the pump's working buffers, allocated ONCE by
 // finalize() for the widest track x the device block. They are `mutable` and
 // belong to whichever pump holds the plan — which is exactly one, because a
 // plan is built for one pump. That is what makes the pump's steady state
 // allocation-free without giving the pump a resize path on its own hot loop.
+//
+// A COPY DOES NOT CARRY THE SCRATCH (QBX-298). Copying a plan is how a caller
+// derives the next one ("the same, but playing"), and the plan it copies may
+// already be held by a running pump, which writes that scratch on every block.
+// A member-wise copy READ it there: TSan named the copy constructor against
+// LiveGraphPump::renderTrack. So the scratch is a member whose copy is EMPTY:
+// a copy is an unfinalized plan (scratch() returns nullptr) until its own
+// finalize(), and copying a published plan touches only what is immutable.
 
 // Where a live track's audio comes in. L1a defines the seam; L1b hands it an
 // input device's SPSC ring, L2 an instrument (no audio input at all).
@@ -179,8 +188,25 @@ public:
     std::size_t scratchStride() const { return (std::size_t)blockFrames; }
 
 private:
-    mutable std::vector<float> arena_;
-    std::vector<std::size_t>   base_;   // per track, index of its buffer 0
+    // The pump's working memory; see SCRATCH and A COPY DOES NOT CARRY THE
+    // SCRATCH above. Copy-constructing or copy-assigning yields an EMPTY
+    // scratch and never reads the source's; moving is member-wise.
+    struct Scratch {
+        std::vector<float>       arena;
+        std::vector<std::size_t> base;   // per track, index of its buffer 0
+
+        Scratch() = default;
+        Scratch( const Scratch & ) {}
+        Scratch &operator=( const Scratch & )
+        {
+            arena.clear();
+            base.clear();
+            return *this;
+        }
+        Scratch( Scratch && ) = default;
+        Scratch &operator=( Scratch && ) = default;
+    };
+    mutable Scratch scratch_;
 };
 
 namespace twlive {

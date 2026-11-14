@@ -9,8 +9,8 @@
 
 bool twLivePlan::finalize()
 {
-    base_.clear();
-    arena_.clear();
+    scratch_.base.clear();
+    scratch_.arena.clear();
 
     if( blockFrames <= 0 ) {
         TW_LOGE( "playback", "[live] plan has no block size; refusing to finalize" );
@@ -47,13 +47,13 @@ bool twLivePlan::finalize()
     // Two planar blocks per track: the insert chain ping-pongs between them,
     // because twPluginSlotProcessor::render() forbids `in` and `out` aliasing.
     std::size_t total = 0;
-    base_.reserve( tracks.size() );
+    scratch_.base.reserve( tracks.size() );
     for( twLiveTrackPlan &t : tracks ) {
         if( t.channels < 1 ) t.channels = 1;
-        base_.push_back( total );
+        scratch_.base.push_back( total );
         total += (std::size_t)t.channels * 2u * (std::size_t)blockFrames;
     }
-    arena_.assign( total, 0.0f );
+    scratch_.arena.assign( total, 0.0f );
 
     // TWO blocks by default: one for the block the RT is on, one of slack for
     // a late pump wake-up. 0 is a legal explicit value (see the header).
@@ -63,11 +63,11 @@ bool twLivePlan::finalize()
 
 float *twLivePlan::scratch( int track, int which ) const
 {
-    if( track < 0 || track >= (int)base_.size() ) return nullptr;
+    if( track < 0 || track >= (int)scratch_.base.size() ) return nullptr;
     if( which != 0 && which != 1 ) return nullptr;
     const twLiveTrackPlan &t = tracks[(std::size_t)track];
     const std::size_t half = (std::size_t)t.channels * (std::size_t)blockFrames;
-    return const_cast<float *>( arena_.data() ) + base_[(std::size_t)track]
+    return scratch_.arena.data() + scratch_.base[(std::size_t)track]
            + (std::size_t)which * half;
 }
 
