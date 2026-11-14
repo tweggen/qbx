@@ -196,10 +196,13 @@ endforeach()
 #   live_skip_reasons  QBX-300: open-project deleted the old project under the
 #                      window's master view; that view's heads stayed wired to
 #                      SLiveMonitor::skipsChanged and read the freed STrack.
+#   mixerview_outliving_connections  QBX-301: the same window kept the old
+#                      master VIEW wired to SApplication's locator signals; a
+#                      locator tick read the freed mixer through rootName().
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     foreach(_name transport_readout transport_readout_width_is_stable
                   folder_sum_preview take_comp_backdrop
-                  live_skip_reasons)
+                  live_skip_reasons mixerview_outliving_connections)
         if(TEST qxa.${_name})
             add_test(NAME qxa.poisoned_heap.${_name}
                 COMMAND $<TARGET_FILE:smaragd>

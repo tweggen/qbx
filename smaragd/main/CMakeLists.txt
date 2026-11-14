@@ -603,6 +603,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
     testkit/include/app/testkit/sfollowtestactions.h
+    testkit/include/app/testkit/sassertsignalreceiversaction.h
     testkit/include/app/testkit/ssidecartestactions.h
     testkit/include/app/testkit/sfragmentdeleteclipaction.h
     testkit/include/app/testkit/sslipclipaction.h
@@ -661,6 +662,7 @@ set(APP_UI_FILES
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sclicklaneaction.cpp
     testkit/src/sfollowtestactions.cpp
+    testkit/src/sassertsignalreceiversaction.cpp
     testkit/src/sdragclipedgeaction.cpp
     testkit/src/seventuitestactions.cpp
     testkit/src/sdumpplaybackcaptureaction.cpp

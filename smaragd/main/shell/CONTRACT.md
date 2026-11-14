@@ -2609,7 +2609,54 @@ read it (`armTooltipText_`, from `reportSkips_()` in the next
   ordinary heap. `qxa.poisoned_heap.live_skip_reasons` (Linux, glibc perturb)
   turns the master-tab half red: `describeTrackHead`'s `rootName()` on the
   freed mixer.
-- NOT DONE: `SStdMixerView` itself keeps two `SApplication` connections and
-  one `SSettings` connection to its content after its model dies; no case
-  reaches one between the model's death and the view's deferred delete, and
-  ASan over the five open/close-project cases is clean.
+- NOT DONE until QBX-301 (below): `SStdMixerView` itself kept two
+  `SApplication` connections and one `SSettings` connection to its content
+  after its model died.
+
+**The VIEW cuts its own outliving connections when its MODEL is destroyed
+(QBX-301)** (`SStdMixerView::outlivingConnections_`): `SApplication::
+globalLocatorMoved` and `locatorAdvanced` to the lane area, and
+`SSettings::changed` to the lane area's wheel config, which `SMVActualView`
+appends to the view's list. A census of every `connect()` in
+`sstdmixerview.cpp` found these three and no other sender that outlives the
+mixer; every other one is the mixer, its project, or a child of the view. The
+two locator slots were a live use-after-free, not a theory: in the window
+after `open-project`, one locator tick ran `SMVActualView::localPlayhead()`,
+whose `smv_.rootName()` read the freed `SStdMixer` (SIGSEGV in
+`SObject::getProjectSafe` under the glibc perturb, measured). The settings slot
+reads only `SSettings`, so it was a dead view hearing rather than a read of
+freed memory; it is cut with the rest because the rule is the sender's
+lifetime, not what today's handler happens to touch.
+
+**The window is ONE action wide in a scripted run, not the rest of the run.**
+open-project and close-project delete the project inside a QUEUED handler, so
+the editor's `deleteLater()` is posted from inside event processing, and the
+runner's `processEvents()` after the NEXT action delivers it (measured: the
+view's destructor ran there). A gate for this class must observe every sender
+in that one action, which is why `assert-signal-receivers` takes a list. (A
+`deleteLater()` issued directly by an action at loop level 0 is still never
+delivered, which is what `drain-pending-deletes` exists for.)
+
+- GATED: `mixerview_outliving_connections` records, with the master view up,
+  how many listeners the six outliving senders reach (the view's three and the
+  head's three), and asserts in the window after open-project and after
+  close-project that each reaches exactly one fewer, and after the new project
+  is shown that each is back. Sabotage, one at a time: leaving
+  `globalLocatorMoved`, `locatorAdvanced` or `settings.changed` out of the list
+  fails that signal alone; dropping the head's track-destroyed cut (QBX-300)
+  fails `meterTick`, `meterReset` and `skipsChanged`; with the whole view half
+  reverted, `qxa.poisoned_heap.mixerview_outliving_connections` SEGFAULTs on
+  the locator tick its section D sends in the window.
+- FILE → OPEN (QBX-301's second question). `closeProject()` detaches the shell
+  and `deleteLater()`s it, then deletes the project; `openProjectFile()` then
+  emits `SSettings::changed` (`setLastDir`), calls `setCurrentProject` twice
+  (the second emits `skipsChanged` for an armed track), and only then returns
+  to the loop that deletes the old shell. Not gated through the menu:
+  `fileOpen()`'s modal dialog has no seam, and a `--test-case` run never binds
+  its project into the window, so `closeProject()` would return at once and
+  gate a different path. It is covered by the equivalent window instead: the
+  case above shows that in it NONE of the six outliving senders reaches the old
+  view or its heads, whatever File → Open's synchronous tail emits, and its
+  project is armed so the reopen's second `setCurrentProject` does emit
+  `skipsChanged`. ASan was not run for this ticket; the poisoned-heap variant
+  is the memory evidence.
