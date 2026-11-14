@@ -6693,8 +6693,11 @@ SMVActualView::SMVActualView( QWidget *parent, SStdMixerView &smv )
     // Mouse-wheel navigation config: cache now and refresh whenever the user
     // changes it in the options dialog.
     loadWheelConfig();
-    QObject::connect( &SSettings::instance(), &SSettings::changed,
-                      this, [this]( const QString & ){ loadWheelConfig(); } );
+    // QBX-301: SSettings outlives the model, so this one is cut with the
+    // view's other outliving connections when the mixer dies.
+    smv_.outlivingConnections_ << QObject::connect(
+        &SSettings::instance(), &SSettings::changed,
+        this, [this]( const QString & ){ loadWheelConfig(); } );
 }
 
 void SMVActualView::loadWheelConfig()
@@ -7194,11 +7197,23 @@ SStdMixerView::SStdMixerView( QWidget *parent, SStdMixer *model )
 
     QObject::connect( model_, SIGNAL( durationChanged( length_t ) ), 
                       this, SLOT( contentDurationChanged( length_t ) ) );
-    QObject::connect( &(SApplication::app()), SIGNAL( globalLocatorMoved( offset_t, offset_t ) ),
-                      qContent_, SLOT( globalLocatorMoved( offset_t, offset_t ) ) );
+    outlivingConnections_ << QObject::connect(
+        &(SApplication::app()), SIGNAL( globalLocatorMoved( offset_t, offset_t ) ),
+        qContent_, SLOT( globalLocatorMoved( offset_t, offset_t ) ) );
     // View-follows-playhead: only the poll-driven advance (never a manual seek).
-    QObject::connect( &(SApplication::app()), SIGNAL( locatorAdvanced( offset_t, offset_t ) ),
-                      qContent_, SLOT( followLocator( offset_t, offset_t ) ) );
+    outlivingConnections_ << QObject::connect(
+        &(SApplication::app()), SIGNAL( locatorAdvanced( offset_t, offset_t ) ),
+        qContent_, SLOT( followLocator( offset_t, offset_t ) ) );
+    // QBX-301: those two and SMVActualView's SSettings::changed go when the
+    // MODEL goes, not when this view does (see outlivingConnections_).
+    // Measured before this: open-project deleted the old project, the old
+    // master view waited for its deferred delete still wired to the app, and
+    // advance-locator's globalLocatorMoved reached its lane area, whose
+    // localPlayhead() reads smv_.rootName() -- the freed mixer. The handler
+    // reads nothing of the model: when destroyed() is emitted, the SStdMixer
+    // part of it has already been destroyed.
+    QObject::connect( model_, &QObject::destroyed,
+                      this, &SStdMixerView::onModelDestroyed_ );
     QObject::connect( model_, SIGNAL( trackInserted( int, STrack & ) ), 
                       SLOT( nTracksChanged() ) );
     QObject::connect( model_, SIGNAL( trackRemoved( int, STrack & ) ), 
@@ -7425,6 +7440,13 @@ SStdMixerView::~SStdMixerView()
     delete currentSnapSpec_;
     delete controlArray_;
     delete autoUi_;
+}
+
+void SStdMixerView::onModelDestroyed_()
+{
+    for( const QMetaObject::Connection &c : outlivingConnections_ )
+        QObject::disconnect( c );
+    outlivingConnections_.clear();
 }
 
 // Detail-editor registration (proposal 14, Phase 6): the model asks the

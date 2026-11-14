@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-301: A RETIRED ARRANGER HEARS NOTHING FROM A SENDER THAT OUTLIVES ITS
+  MODEL (shell CONTRACT inv. 72).
+
+  open-project and close-project delete the project synchronously, inside a
+  queued handler, while the old master view only gets a deleteLater(). The
+  runner's processEvents() delivers that deferred delete after the NEXT
+  action (measured: the view's destructor ran inside the processEvents that
+  follows the first action after the open), so exactly ONE action sees the
+  old view alive with its mixer freed. The real File, Open has the same
+  window between closeProject() and the next turn of the event loop.
+
+  Every connection from the mixer, its project or its tracks goes when that
+  sender dies. The ones whose sender is app-wide do not, and before QBX-301
+  the VIEW kept three:
+    app.globalLocatorMoved   to the lane area (playhead repaint)
+    app.locatorAdvanced      to the lane area (follow playhead)
+    settings.changed         to the lane area (wheel config)
+  Its heads keep three more (app.meterTick, app.meterReset,
+  liveMonitor.skipsChanged), cut since QBX-300 when their track dies.
+
+  An app-wide signal has listeners that are not views, so the case RECORDS
+  every count with the master view up and asserts a DELTA in the window: one
+  listener less per view signal, and one less per head (one track, so one
+  head). The six are counted in ONE action because the window is one action.
+
+    A. the master view up, one track, armed (so the reopen's second
+       setCurrentProject emits skipsChanged, as File, Open's does): record
+    B. open-project, then the window: every count one lower
+    C. the new project shown (assert-track-head installs its arranger):
+       every count back where A left it
+    D. open-project again, and in the window a locator tick: a dead lane
+       area answers it with localPlayhead(), which reads smv_.rootName(),
+       the FREED mixer. qxa.poisoned_heap.mixerview_outliving_connections
+       turns that read into a crash
+    E. close-project, then the window: every count one lower than C
+-->
+<SActionScript version="1" name="mixerview_outliving_connections">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- ================================ A. master view up, record -->
+    <add-track index="-1"/>
+    <arm-track trackPath="0" armed="1"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED: it has no input selected"/>
+    <assert-signal-receivers record="up"
+        signals="app.globalLocatorMoved,app.locatorAdvanced,settings.changed,app.meterTick,app.meterReset,liveMonitor.skipsChanged"/>
+
+    <!-- =============================== B. open-project: the window -->
+    <save-project path="../../build/test-output/mixerview_outliving_connections/armed.qxp"/>
+    <open-project path="../../build/test-output/mixerview_outliving_connections/armed.qxp"/>
+    <assert-signal-receivers since="up" delta="-1"
+        signals="app.globalLocatorMoved,app.locatorAdvanced,settings.changed,app.meterTick,app.meterReset,liveMonitor.skipsChanged"/>
+
+    <!-- ============================= C. the new project shown -->
+    <assert-track-head trackPath="0" contains="NOT MONITORED"/>
+    <assert-signal-receivers since="up" delta="0"
+        signals="app.globalLocatorMoved,app.locatorAdvanced,settings.changed,app.meterTick,app.meterReset,liveMonitor.skipsChanged"/>
+
+    <!-- ===================== D. open again: a locator tick in the window -->
+    <open-project path="../../build/test-output/mixerview_outliving_connections/armed.qxp"/>
+    <advance-locator position="48000"/>
+    <assert-track-head trackPath="0" contains="NOT MONITORED"/>
+
+    <!-- ================================= E. close-project: the window -->
+    <close-project/>
+    <assert-signal-receivers since="up" delta="-1"
+        signals="app.globalLocatorMoved,app.locatorAdvanced,settings.changed,app.meterTick,app.meterReset,liveMonitor.skipsChanged"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="0"/>
+  </assertions>
+</SActionScript>

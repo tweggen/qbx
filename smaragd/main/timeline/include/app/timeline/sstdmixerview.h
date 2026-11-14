@@ -1260,6 +1260,21 @@ private:
 
     SStdMixer *model_;
 
+    // QBX-301 (shell CONTRACT inv. 72): the connections whose SENDER OUTLIVES
+    // THE MODEL -- SApplication's globalLocatorMoved and locatorAdvanced (to
+    // qContent_) and SSettings::changed (to qContent_'s wheel config). Every
+    // other sender this view and its lane area listen to is the mixer, its
+    // project, or one of the view's own children, and those connections go
+    // when that sender dies. These do not: a view is retired with
+    // deleteLater() (SViewTabs::onRootDestroyed, SMainWindow::closeProject),
+    // a --test-case run never delivers DeferredDelete, and the project is
+    // deleted synchronously -- so a retired view outlived its mixer and the
+    // next locator tick read the freed mixer through rootName(). They are cut
+    // when the MODEL is destroyed, the one moment that ends what model_
+    // refers to. SMVActualView appends its own (it is a friend).
+    QList<QMetaObject::Connection> outlivingConnections_;
+    void onModelDestroyed_();
+
     // Persistent actions so their keyboard shortcuts work whenever the arranger
     // is up (a context-menu-only action's shortcut never fires). Also shown in
     // the right-click menu.
