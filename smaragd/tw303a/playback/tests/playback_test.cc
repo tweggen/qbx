@@ -2978,7 +2978,14 @@ int main()
         CHECK(cap->capturedFrames() >= framesBeforePlay,
               "L1a T3: ...with no re-open, so the recording has no hole");
 
+        // Copying the plan the pump is rendering from (QBX-298): the copy must
+        // NOT read the source's scratch, which the pump writes every block. It
+        // comes out unfinalized; a TSan build names the copy constructor
+        // against renderTrack if it reads the arena.
         auto plan2 = std::make_shared<twLivePlan>(*plan);
+        CHECK(plan2->scratch(0, 0) == nullptr && plan->scratch(0, 0) != nullptr,
+              "L1a T3: a copy of a published plan carries no scratch until its "
+              "own finalize() (QBX-298)");
         plan2->transport.playing = true;
         plan2->leadFrames        = 2 * BLOCK;
         plan2->finalize();

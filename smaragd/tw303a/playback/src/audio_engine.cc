@@ -164,7 +164,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
             const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
             const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
             const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
-            const uint64_t readaheadPos = readaheadComputedUpTo_;
+            const uint64_t readaheadPos = readaheadComputedUpTo_.load(std::memory_order_acquire);
 
             // Handle loop wrapping
             if (loopValid && pos >= loopEnd) {
@@ -268,7 +268,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
                         currentFrozenPage_ ? currentFrozenPage_->validFrames : 0u,
                         currentFrozenPage_ ? (unsigned long long)currentFrozenPage_->contentEpoch.load() : 0ULL,
                         (unsigned long long)root->contentEpochNow(),
-                        (unsigned long long)readaheadComputedUpTo_,
+                        (unsigned long long)readaheadComputedUpTo_.load(std::memory_order_acquire),
                         (int)cycleEnabled_.load(std::memory_order_relaxed),
                         (unsigned long long)loopEnd_.load(std::memory_order_relaxed) );
             }
@@ -322,10 +322,10 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
         if (isSilent && outProduced > 0) {
             static int silenceCount = 0;
             uint64_t playPos = currentPos_.load(std::memory_order_relaxed);
-            int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)playPos;
+            int64_t gap = (int64_t)readaheadComputedUpTo_.load(std::memory_order_acquire) - (int64_t)playPos;
             if (++silenceCount == 1 || silenceCount % 100 == 0) {
                 TW_LOGD( "playback", "[SILENCE] Callback #%d producing %lld silent frames at playback=%llu, readahead=%llu, gap=%.2f sec",
-                        silenceCount, (long long)outProduced, playPos, readaheadComputedUpTo_, (double)gap / 48000.0 );
+                        silenceCount, (long long)outProduced, playPos, readaheadComputedUpTo_.load(std::memory_order_acquire), (double)gap / 48000.0 );
             }
         }
 
@@ -343,7 +343,7 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
         const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
         const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
         const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
-        const uint64_t readaheadPos = readaheadComputedUpTo_;
+        const uint64_t readaheadPos = readaheadComputedUpTo_.load(std::memory_order_acquire);
 
         // Handle loop wrapping (before page load)
         if (loopValid && pos >= loopEnd) {
@@ -505,9 +505,9 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos, twComponent *root) {
 
             // DEBUG: Page found
             if (gapLogCounter++ % 500 == 0) {
-                int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
+                int64_t gap = (int64_t)readaheadComputedUpTo_.load(std::memory_order_acquire) - (int64_t)pageStartPos;
                 TW_LOGD( "playback", "[AUDIO] Page FOUND: playback=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k)",
-                        pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0 );
+                        pageStartPos, readaheadComputedUpTo_.load(std::memory_order_acquire), gap, (double)gap / 48000.0 );
             }
         } else if (currentFrozenPage_ &&
                    currentFrozenPage_->startPosition == pageStartPos &&
@@ -547,7 +547,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos, twComponent *root) {
             }
         } else {
             // Page not ready; check if within underrun threshold or too far behind
-            int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)pageStartPos;
+            int64_t gap = (int64_t)readaheadComputedUpTo_.load(std::memory_order_acquire) - (int64_t)pageStartPos;
 
             // Phase 6b: Underrun detection
             if (gap >= 0 && gap < (int64_t)underrunThresholdFrames_) {
@@ -560,7 +560,7 @@ void AudioEngine::updateFrozenPage(uint64_t desiredPos, twComponent *root) {
                 // Gap is large or negative: serious issue
                 if (gapLogCounter++ % 10 == 0 || gap < 0) {
                     TW_LOGW( "playback", "[AUDIO] Page MISSING: playback wants=%llu, readahead computed=%llu, gap=%lld frames (%.2f sec at 48k) ***SILENCE***",
-                            pageStartPos, readaheadComputedUpTo_, gap, (double)gap / 48000.0 );
+                            pageStartPos, readaheadComputedUpTo_.load(std::memory_order_acquire), gap, (double)gap / 48000.0 );
                 }
             }
 
@@ -618,7 +618,7 @@ void AudioEngine::seekTo(uint64_t offsetSamples) {
 
     // Reset read-ahead state chain on seek (may skip pages)
     readaheadPrevPage_ = nullptr;
-    readaheadComputedUpTo_ = 0;
+    readaheadComputedUpTo_.store(0, std::memory_order_release);
 
     // Reconfigure resamplers for new position
     resetResamplers();
@@ -741,7 +741,11 @@ void AudioEngine::setFrozenDemandRoot( const std::shared_ptr<twComponent> &root 
 
 PlaybackState AudioEngine::startPlayback() {
     // Phase 6b: Delay playback start until readahead has built minimum buffer
-    uint64_t readaheadPos = readaheadComputedUpTo_;  // Plain uint64_t, no .load() needed
+    // The readahead thread's frontiers, read once each (QBX-298: they were plain
+    // uint64_t and this is the main thread). Acquire pairs with the readahead's
+    // release store, which it makes only after the page is confirmed frozen.
+    const uint64_t readaheadPos = readaheadComputedUpTo_.load(std::memory_order_acquire);
+    const uint64_t postWrapPos = readaheadPostWrapComputedUpTo_.load(std::memory_order_acquire);
     uint64_t playPos = currentPos_.load(std::memory_order_relaxed);
 
     // fix/loop-behaviour, issue h: WHILE CYCLING, readaheadComputedUpTo_ is
@@ -760,8 +764,7 @@ PlaybackState AudioEngine::startPlayback() {
         if (le > ls) {
             const uint64_t cap = std::min(readaheadPos, le);
             const uint64_t thisPass = (cap > playPos) ? (cap - playPos) : 0;
-            const uint64_t nextPass = (readaheadPostWrapComputedUpTo_ > ls)
-                ? (readaheadPostWrapComputedUpTo_ - ls) : 0;
+            const uint64_t nextPass = (postWrapPos > ls) ? (postWrapPos - ls) : 0;
             covered = thisPass + nextPass;
         }
     }
@@ -796,7 +799,7 @@ void AudioEngine::startReadahead() {
     // Reset state and start new thread
     readaheadRunning_ = true;
     readaheadPrevPage_ = nullptr;
-    readaheadComputedUpTo_ = 0;
+    readaheadComputedUpTo_.store(0, std::memory_order_release);
     readaheadThread_ = std::thread([this] { readaheadLoop(); });
 }
 
@@ -853,11 +856,11 @@ void AudioEngine::readaheadLoop() {
         if (rootChanged && !firstRoot) {
             TW_LOGI( "playback", "[READAHEAD] Frozen root changed: restarting chain at page %llu "
                     "(frontier was %llu)",
-                    (unsigned long long)pageStart, (unsigned long long)readaheadComputedUpTo_ );
+                    (unsigned long long)pageStart, (unsigned long long)readaheadComputedUpTo_.load(std::memory_order_relaxed) );
             readaheadPrevPage_ = nullptr;
-            readaheadComputedUpTo_ = (uint64_t) pageStart;
+            readaheadComputedUpTo_.store((uint64_t) pageStart, std::memory_order_release);
             readaheadPostWrapPrevPage_ = nullptr;
-            readaheadPostWrapComputedUpTo_ = 0;
+            readaheadPostWrapComputedUpTo_.store(0, std::memory_order_release);
             pendingDemand_.reset();
             pendingDemand2_.reset();
         }
@@ -881,7 +884,7 @@ void AudioEngine::readaheadLoop() {
         // this never fires. (Comparing pageStart against the frontier itself fires
         // on every iteration — the readahead is *supposed* to run ahead.)
         if (lastPlayheadPage != UINT64_MAX &&
-            (pageStart < lastPlayheadPage || pageStart > readaheadComputedUpTo_)) {
+            (pageStart < lastPlayheadPage || pageStart > readaheadComputedUpTo_.load(std::memory_order_relaxed))) {
             // A CYCLE WRAP is a jump that lands EXACTLY on the loop-start
             // page while cycling. Unlike a real seek, it was ANTICIPATED —
             // the range-B loop below pre-fetches loop-start pages ahead of
@@ -892,28 +895,28 @@ void AudioEngine::readaheadLoop() {
             // it is still the position the playhead is actually at.
             const bool isWrap = loopValidNow
                 && (uint64_t) pageStart == loopStartPage
-                && readaheadPostWrapComputedUpTo_ > (uint64_t) pageStart;
+                && readaheadPostWrapComputedUpTo_.load(std::memory_order_relaxed) > (uint64_t) pageStart;
             if (isWrap) {
                 TW_LOGI( "playback", "[READAHEAD] Cycle wrap: page %llu -> %llu, "
                         "adopting pre-fetched frontier %llu (was %llu)",
                         (unsigned long long)lastPlayheadPage, (unsigned long long)pageStart,
-                        (unsigned long long)readaheadPostWrapComputedUpTo_,
-                        (unsigned long long)readaheadComputedUpTo_ );
+                        (unsigned long long)readaheadPostWrapComputedUpTo_.load(std::memory_order_relaxed),
+                        (unsigned long long)readaheadComputedUpTo_.load(std::memory_order_relaxed) );
                 readaheadPrevPage_ = readaheadPostWrapPrevPage_;
-                readaheadComputedUpTo_ = readaheadPostWrapComputedUpTo_;
+                readaheadComputedUpTo_.store(readaheadPostWrapComputedUpTo_.load(std::memory_order_relaxed), std::memory_order_release);
             } else {
                 TW_LOGI( "playback", "[READAHEAD] Playhead jump: page %llu -> %llu (frontier=%llu), restarting chain",
                         (unsigned long long)lastPlayheadPage, (unsigned long long)pageStart,
-                        (unsigned long long)readaheadComputedUpTo_ );
+                        (unsigned long long)readaheadComputedUpTo_.load(std::memory_order_relaxed) );
                 readaheadPrevPage_ = nullptr;
                 // The chain restarts at the playhead; the first page frozen from here
                 // is a discontinuity, which freezePage() answers with reset()+seekTo().
-                readaheadComputedUpTo_ = pageStart;
+                readaheadComputedUpTo_.store(pageStart, std::memory_order_release);
             }
             // Consumed either way: a fresh pre-fetch is earned for whichever
             // wrap comes NEXT, never carried over from one that just happened.
             readaheadPostWrapPrevPage_ = nullptr;
-            readaheadPostWrapComputedUpTo_ = 0;
+            readaheadPostWrapComputedUpTo_.store(0, std::memory_order_release);
             pendingDemand2_.reset();
         }
         lastPlayheadPage = pageStart;
@@ -954,12 +957,12 @@ void AudioEngine::readaheadLoop() {
                 existing->contentEpoch.load() >= epochNow) {
                 // Already frozen and current; update prevPage and move on
                 readaheadPrevPage_ = existing;
-                if (pos + pageSize > readaheadComputedUpTo_)
-                    readaheadComputedUpTo_ = pos + pageSize;
+                if (pos + pageSize > readaheadComputedUpTo_.load(std::memory_order_relaxed))
+                    readaheadComputedUpTo_.store(pos + pageSize, std::memory_order_release);
                 if (readaheadLogCounter++ % 100 == 0) {
-                    int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)currentPos;
+                    int64_t gap = (int64_t)readaheadComputedUpTo_.load(std::memory_order_relaxed) - (int64_t)currentPos;
                     TW_LOGW( "playback", "[READAHEAD] Page already exists: computed up to=%llu, playhead=%llu, gap=%.2f sec",
-                            readaheadComputedUpTo_, currentPos, (double)gap / 48000.0 );
+                            readaheadComputedUpTo_.load(std::memory_order_relaxed), currentPos, (double)gap / 48000.0 );
                 }
                 continue;
             }
@@ -1027,14 +1030,14 @@ void AudioEngine::readaheadLoop() {
                 readaheadPrevPage_ = page;
                 // CRITICAL: Only update readaheadComputedUpTo_ AFTER page is confirmed frozen
                 // This ensures audio callback never finds validAspects == 0
-                if (pos + pageSize > readaheadComputedUpTo_)
-                    readaheadComputedUpTo_ = pos + pageSize;
+                if (pos + pageSize > readaheadComputedUpTo_.load(std::memory_order_relaxed))
+                    readaheadComputedUpTo_.store(pos + pageSize, std::memory_order_release);
 
                 // DEBUG: Log completed page
-                int64_t gap = (int64_t)readaheadComputedUpTo_ - (int64_t)currentPos;
+                int64_t gap = (int64_t)readaheadComputedUpTo_.load(std::memory_order_relaxed) - (int64_t)currentPos;
                 if (readaheadLogCounter++ % 50 == 0 || elapsed > 50) {
                     TW_LOGD( "playback", "[READAHEAD] Froze page at=%llu, computed up to=%llu, playhead=%llu, gap=%.2f sec, time=%.1fms",
-                            pos, readaheadComputedUpTo_, currentPos, (double)gap / 48000.0, (double)elapsed );
+                            pos, readaheadComputedUpTo_.load(std::memory_order_relaxed), currentPos, (double)gap / 48000.0, (double)elapsed );
                 }
             } else {
                 // Phase 6b: Sequential freeze blocked; try skip-ahead with fresh state
@@ -1053,7 +1056,7 @@ void AudioEngine::readaheadLoop() {
                     if (skipPage && skipPage->validAspects != 0) {
                         // Success: start new independent chain from skipPos
                         readaheadPrevPage_ = skipPage;
-                        readaheadComputedUpTo_ = skipPos + pageSize;
+                        readaheadComputedUpTo_.store(skipPos + pageSize, std::memory_order_release);
                         TW_LOGD( "playback", "[READAHEAD] Skip-ahead: pos %llu -> %llu (5 pages forward, fresh state), time=%.1fms",
                                 pos, skipPos, (double)elapsed_skip );
                         continue;  // Continue loop, next iteration tries skipPos+pageSize
@@ -1079,7 +1082,7 @@ void AudioEngine::readaheadLoop() {
             // or a legacy freeze blocked/failed).
             auto tryPage = [&]( uint64_t pos, uint64_t windowStart, int windowPages,
                                 std::shared_ptr<twOutputPage> &prevPage,
-                                uint64_t &computedUpTo,
+                                std::atomic<uint64_t> &computedUpTo,
                                 std::shared_ptr<CaptureRevalidator::GraphDemand> &pending,
                                 uint64_t &pendingStart, uint64_t &pendingEnd,
                                 uint64_t &pendingEpoch ) -> bool {
@@ -1088,7 +1091,8 @@ void AudioEngine::readaheadLoop() {
                 if (existing && existing->validAspects != 0 &&
                     existing->contentEpoch.load() >= epochNow) {
                     prevPage = existing;
-                    if (pos + pageSize > computedUpTo) computedUpTo = pos + pageSize;
+                    if (pos + pageSize > computedUpTo.load(std::memory_order_relaxed))
+                        computedUpTo.store(pos + pageSize, std::memory_order_release);
                     return true;
                 }
                 if (scheduler_) {
@@ -1113,7 +1117,8 @@ void AudioEngine::readaheadLoop() {
                     pos, nullptr, 0, (length_t)pageSize, engineSampleRate_, prevPage);
                 if (page && page->validAspects != 0) {
                     prevPage = page;
-                    if (pos + pageSize > computedUpTo) computedUpTo = pos + pageSize;
+                    if (pos + pageSize > computedUpTo.load(std::memory_order_relaxed))
+                        computedUpTo.store(pos + pageSize, std::memory_order_release);
                     return true;
                 }
                 if (prevPage != nullptr) {
@@ -1122,7 +1127,7 @@ void AudioEngine::readaheadLoop() {
                         skipPos, nullptr, 0, (length_t)pageSize, engineSampleRate_, nullptr);
                     if (skipPage && skipPage->validAspects != 0) {
                         prevPage = skipPage;
-                        computedUpTo = skipPos + pageSize;
+                        computedUpTo.store(skipPos + pageSize, std::memory_order_release);
                         return true;
                     }
                 }
@@ -1178,13 +1183,13 @@ void AudioEngine::readaheadLoop() {
                 // loopStartPage when range A's own walk already reached it
                 // (a short loop, or a wrap that just happened), never from a
                 // stale chain left over from the pre-fetch two wraps ago.
-                if (readaheadPostWrapComputedUpTo_ <= loopStartPage) {
+                if (readaheadPostWrapComputedUpTo_.load(std::memory_order_relaxed) <= loopStartPage) {
                     readaheadPostWrapPrevPage_ = nullptr;
-                    readaheadPostWrapComputedUpTo_ = loopStartPage;
+                    readaheadPostWrapComputedUpTo_.store(loopStartPage, std::memory_order_release);
                 }
                 for (uint64_t i = 0; i < pagesAfterWrap; i++) {
                     const uint64_t pos = loopStartPage + i * pageSize;
-                    if (pos + pageSize <= readaheadPostWrapComputedUpTo_)
+                    if (pos + pageSize <= readaheadPostWrapComputedUpTo_.load(std::memory_order_relaxed))
                         continue;   // already pre-fetched by an earlier tick
                     if (!tryPage( pos, loopStartPage, (int) pagesAfterWrap,
                                  readaheadPostWrapPrevPage_, readaheadPostWrapComputedUpTo_,
