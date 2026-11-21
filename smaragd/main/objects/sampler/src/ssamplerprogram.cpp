@@ -14,6 +14,7 @@
 #include "tw/sampler/twsamplerstretch.h"
 #include "tw/sampler/twsamplertypes.h"
 #include "tw/core/twcontenthash.h"
+#include "tw/core/twqtfree.h"
 #include "tw/sidecar/twanalyzers.h"
 #include "tw/sidecar/twaspects.h"
 #include "tw/sidecar/twqaf.h"
@@ -164,6 +165,11 @@ struct SSamplerProgram::Job {
 
     void run()
     {
+        // The claim, made checkable (QBX-305): nothing below constructs a
+        // QObject. A QFile in twSampleSource once did, so Qt adopted this
+        // thread and its Qt-TLS cleanup crashed the thread's exit on Windows.
+        // Gated by sampler_qt_free_workers (watch-qt-free / assert-qt-free).
+        twQtFreeScope qtFree;
         waitOnGate( gate, cancelled );
         std::shared_ptr<const audio::twSamplerSample> out;
         std::shared_ptr<const Source> srcBuf = sourceIn;
@@ -312,6 +318,7 @@ struct SSamplerProgram::AnalysisJob {
 
     void run()
     {
+        twQtFreeScope qtFree;   // as Job::run (QBX-305)
         waitOnGate( gate, cancelled );
         std::shared_ptr<std::vector<std::uint64_t>> out;
         if( !cancelled.load( std::memory_order_acquire ) ) {

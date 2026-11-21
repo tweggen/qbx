@@ -1,6 +1,7 @@
 #include "tw/schedule/capture_revalidator.h"
 #include "tw/pages/capture_page_pool.h"
 #include "tw/core/twlog.h"
+#include "tw/core/twqtfree.h"
 #include "tw/schedule/revalidatable.h"    // engine-side object contract (proposal 14, Phase 0)
 #include "tw/schedule/capture_aspects.h"  // Preview / Playback / Metadata / Export bits
 #include "tw/graph/twcomponent.h"  // For twComponent::freezePage() and freezePreviewPage()
@@ -128,6 +129,11 @@ CaptureRevalidator::GraphStats CaptureRevalidator::graphStats() const {
 }
 
 void CaptureRevalidator::workerLoop() {
+    // A raw std::thread, so Qt-free by THREADING rule 1; the claim is
+    // checkable under watch-qt-free / assert-qt-free (QBX-305). Everything a
+    // job runs on this worker is inside it, the app's IRevalidatable hooks
+    // included.
+    twQtFreeScope qtFree;
     while (true) {
         CaptureRevalidationJob revalJob;
         std::shared_ptr<PageNode> graphNode;

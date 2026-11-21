@@ -9,6 +9,7 @@
 #include "tw/schedule/capture_revalidator.h"   // Stage 4: watermark demands
 #include "tw/sources/twresampler.h"
 #include "tw/core/twlog.h"
+#include "tw/core/twqtfree.h"
 
 namespace audio {
 
@@ -179,6 +180,9 @@ bool RenderSession::lastSuccess() const {
 }
 
 void RenderSession::renderThreadMain() {
+    // A raw std::thread: Qt-free by THREADING rule 1, checkable under
+    // watch-qt-free / assert-qt-free (QBX-305) for everything the render thread, its onPosition/onComplete callbacks included runs.
+    twQtFreeScope qtFree;
     bool success = true;
     std::string errorMsg;
 
