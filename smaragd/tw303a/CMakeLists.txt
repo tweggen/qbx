@@ -40,6 +40,8 @@ tw_module(core
         core/include/tw/core/twcontenthash.h
         core/include/tw/core/twwarpmap.h
         core/include/tw/core/position_code.h
+        core/include/tw/core/twqtfree.h
+        core/src/twqtfree.cc
         core/src/twcontenthash.cc
         core/src/twwarpmap.cc
         core/src/generation_promise.cc
@@ -1282,6 +1284,15 @@ target_compile_definitions(wide_reader_test PRIVATE
     TW_STEREO_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_stereo.wav"
     TW_MONO_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_position.wav")
 tw_module_test(vocoder_test                 sources/tests/vocoder_test.cc               tw_sources)
+# QBX-305: twSampleSource decodes on a RAW std::thread without Qt adopting it
+# (THREADING rule 1). The sampler's generation job decodes a dropped file on
+# one; a QFile in the loader made Qt adopt the worker, whose Qt-TLS cleanup at
+# thread exit then crashed on Windows. The witness counts QObjects constructed
+# inside a twQtFreeScope (adoption builds one, the QAdoptedThread), and two
+# control sections prove it bites. Also: a non-ASCII path still decodes.
+tw_module_test(sample_source_thread_test    sources/tests/sample_source_thread_test.cc  tw_sources)
+target_compile_definitions(sample_source_thread_test PRIVATE
+    TW_MONO_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_position.wav")
 # NOT a gate: timing benchmark for the W5 SIMD work (run manually).
 add_executable(warp_bench sources/tests/warp_bench.cc)
 target_link_libraries(warp_bench PRIVATE tw_sources tw_sidecar)

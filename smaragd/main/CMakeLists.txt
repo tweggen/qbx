@@ -598,6 +598,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/smiditestactions.h
     testkit/include/app/testkit/spluginuitestactions.h
     testkit/include/app/testkit/ssamplertestactions.h
+    testkit/include/app/testkit/sqtfreetestactions.h
     testkit/include/app/testkit/ssampleruitestactions.h
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
@@ -678,6 +679,7 @@ set(APP_UI_FILES
     testkit/src/smiditestactions.cpp
     testkit/src/spluginuitestactions.cpp
     testkit/src/ssamplertestactions.cpp
+    testkit/src/sqtfreetestactions.cpp
     testkit/src/ssampleruitestactions.cpp
     testkit/src/sreportpagememoryaction.cpp
     testkit/src/sscreenshotaction.cpp

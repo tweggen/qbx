@@ -2,7 +2,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <qfile.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#include <qfile.h>      // QFile::encodeName() only: a static, no QFile object
 #include <qfileinfo.h>
 #include <mutex>
 #include <vector>
@@ -12,6 +17,92 @@
 #include "tw/sources/twsamplesource.h"
 #include "tw/sources/twresampledsource.h"
 #include "tw/core/twlog.h"
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// The loader's file handle: C stdio, NEVER a QFile (QBX-305).
+//
+// twSampleSource decodes on raw std::threads -- the sampler's generation job
+// (SSamplerProgram::Job) is one, and calls itself Qt-free. A QFile is a
+// QObject, and the first QObject constructed on a raw std::thread makes Qt
+// ADOPT it; the adopted thread's Qt-TLS cleanup then runs at DLL THREAD_DETACH
+// when the thread exits. On Windows that cleanup crashed the generation worker
+// (SIGSEGV under _endthreadex, in Qt6Core.dll); in twSpeaker::stopOutput the
+// same cleanup once deadlocked a join (docs/contracts/THREADING.md rule 1).
+// The gate is tw/sources/tests/sample_source_thread_test.cc, which counts the
+// QObjects constructed during a load on a raw thread and requires zero.
+//
+// Non-ASCII paths: on Windows the file is opened with _wfopen on the path's
+// UTF-16 form, which a narrow fopen (the ANSI code page) cannot open; on
+// every other platform with fopen on QFile::encodeName(), the same bytes a
+// QFile would have handed the OS. QString stays a value throughout.
+// ---------------------------------------------------------------------------
+class twStdFile
+{
+public:
+    explicit twStdFile( const QString &path )
+    {
+#ifdef _WIN32
+        f_ = _wfopen( reinterpret_cast<const wchar_t *>( path.utf16() ), L"rb" );
+#else
+        f_ = std::fopen( QFile::encodeName( path ).constData(), "rb" );
+#endif
+        if( !f_ ) err_ = errno;
+    }
+    ~twStdFile() { close(); }
+    twStdFile( const twStdFile & ) = delete;
+    twStdFile &operator=( const twStdFile & ) = delete;
+
+    bool isOpen() const { return f_ != nullptr; }
+    const char *errorString() const { return std::strerror( err_ ); }
+
+    void close()
+    {
+        if( f_ ) std::fclose( f_ );
+        f_ = nullptr;
+    }
+
+    bool seek( std::int64_t pos )
+    {
+        if( !f_ || pos < 0 ) return false;
+#ifdef _WIN32
+        return _fseeki64( f_, pos, SEEK_SET ) == 0;
+#else
+        return fseeko( f_, (off_t)pos, SEEK_SET ) == 0;
+#endif
+    }
+
+    std::int64_t size()
+    {
+        if( !f_ ) return 0;
+#ifdef _WIN32
+        const std::int64_t here = _ftelli64( f_ );
+        if( _fseeki64( f_, 0, SEEK_END ) != 0 ) return 0;
+        const std::int64_t end = _ftelli64( f_ );
+        _fseeki64( f_, here, SEEK_SET );
+#else
+        const std::int64_t here = (std::int64_t)ftello( f_ );
+        if( fseeko( f_, 0, SEEK_END ) != 0 ) return 0;
+        const std::int64_t end = (std::int64_t)ftello( f_ );
+        fseeko( f_, (off_t)here, SEEK_SET );
+#endif
+        return end < 0 ? 0 : end;
+    }
+
+    // Bytes read, 0 at EOF or on an error (like QFile::read, never negative).
+    std::int64_t read( void *dst, std::int64_t n )
+    {
+        if( !f_ || n <= 0 ) return 0;
+        return (std::int64_t)std::fread( dst, 1, (std::size_t)n, f_ );
+    }
+
+private:
+    std::FILE *f_  = nullptr;
+    int        err_ = 0;
+};
+
+}  // namespace
 
 twSampleSource::twSampleSource( tw303aEnvironment &env, const QString &fileName )
     : env_( env ),
@@ -150,10 +241,10 @@ int twSampleSource::loadWav()
 #define EX_SHORT(x) ((x)[0]|((x)[1]<<8))
 #define EX_LONG(x) ((x)[0]|((x)[1]<<8)|((x)[2]<<16)|((x)[3]<<24))
 
-    QFile file( fileName_ );
-    if( !file.open( QIODevice::ReadOnly ) ) {
-        qWarning( "twSampleSource: error opening file \"%s\".\n",
-                  (const char *) fileName_.toUtf8().constData() );
+    twStdFile file( fileName_ );
+    if( !file.isOpen() ) {
+        TW_LOGW( "sources", "twSampleSource: error opening file \"%s\": %s.",
+                 (const char *) fileName_.toUtf8().constData(), file.errorString() );
         return -1;
     }
 
@@ -170,9 +261,9 @@ int twSampleSource::loadWav()
     bits_ = EX_SHORT( fmtHdr->wBitsPerSample );
     if( bits_ < 8 ) return -6;
 
-    qWarning( "twSampleSource: \"%s\": %d channels, %d Hz, %d bits per sample.\n",
-              (const char *) fileName_.toUtf8().constData(),
-              channels_, rate_, bits_ );
+    TW_LOGI( "sources", "twSampleSource: \"%s\": %d channels, %d Hz, %d bits per sample.",
+             (const char *) fileName_.toUtf8().constData(),
+             (int) channels_, rate_, bits_ );
 
     s[SLEN - 1] = 0;
     unsigned char *data = NULL;
@@ -189,8 +280,8 @@ int twSampleSource::loadWav()
     nFrames_ = ( (length_t) dataLen / channels_ ) / ( bits_ / 8 );
 
     if( bits_ != 16 ) {
-        qWarning( "twSampleSource: only 16-bit PCM is supported (\"%s\" is %d-bit).\n",
-                  (const char *) fileName_.toUtf8().constData(), bits_ );
+        TW_LOGD( "sources", "twSampleSource: the fast path reads 16-bit PCM only (\"%s\" is %d-bit); trying libsndfile.",
+                 (const char *) fileName_.toUtf8().constData(), bits_ );
         return -8;
     }
     if( nFrames_ <= 0 ) return -9;
@@ -199,24 +290,24 @@ int twSampleSource::loadWav()
     if( !file.seek( dataStart ) ) return -10;
     length_t rawBytes = (length_t) nFrames_ * channels_ * 2;
     std::vector<unsigned char> raw( (size_t) rawBytes );
-    // QFile::read() is NOT guaranteed to fill a large buffer in a single call,
-    // so loop until we have every byte (or hit a real EOF). The previous
-    // single-shot read could come up short on big files, silently zero-filling
-    // the rest while the header-derived length stayed full — which made preview
-    // and audio go flat partway through the clip.
-    qint64 total = 0;
-    while( total < (qint64) rawBytes ) {
-        qint64 got = file.read( (char *) raw.data() + total, (qint64) rawBytes - total );
+    // A read is NOT relied on to fill a large buffer in a single call, so loop
+    // until we have every byte (or hit a real EOF). A single-shot read could
+    // come up short on big files, silently zero-filling the rest while the
+    // header-derived length stayed full — which made preview and audio go flat
+    // partway through the clip.
+    std::int64_t total = 0;
+    while( total < (std::int64_t) rawBytes ) {
+        std::int64_t got = file.read( (char *) raw.data() + total, (std::int64_t) rawBytes - total );
         if( got <= 0 ) break;   // EOF or error
         total += got;
     }
     length_t gotFrames = ( total / 2 ) / channels_;
     if( gotFrames > nFrames_ ) gotFrames = nFrames_;
     if( gotFrames < nFrames_ ) {
-        qWarning( "twSampleSource: short read on \"%s\": %lld of %lld frames; "
-                  "clamping to the data actually present.\n",
-                  (const char *) fileName_.toUtf8().constData(),
-                  (long long) gotFrames, (long long) nFrames_ );
+        TW_LOGW( "sources", "twSampleSource: short read on \"%s\": %lld of %lld frames; "
+                 "clamping to the data actually present.",
+                 (const char *) fileName_.toUtf8().constData(),
+                 (long long) gotFrames, (long long) nFrames_ );
         nFrames_ = gotFrames;   // size buffer + clip to real data, no phantom tail
     }
 
@@ -273,14 +364,15 @@ int twSampleSource::loadWav()
 // gone. What is lost is iTunes' iTunSMPB gapless padding; mpg123 takes gapless
 // from the Xing/LAME header inside the first AUDIO frame, which survives.
 //
-// Using QFile rather than the platform's own handle also retires the
-// #ifdef _WIN32 sf_wchar_open split: QFile speaks UTF-16 on Windows natively, so
-// a non-ASCII sample path now decodes through one code path everywhere.
+// The view reads through twStdFile (above), which opens a Windows path as
+// UTF-16 with _wfopen, so a non-ASCII sample path decodes through one code
+// path everywhere without sf_wchar_open -- and without a QFile, which would
+// make Qt adopt the decoding thread (QBX-305).
 // ---------------------------------------------------------------------------
 namespace {
 
 struct SndFileView {
-    QFile      file;
+    twStdFile  file;
     sf_count_t base = 0;   // offset of the first byte libsndfile may see
     sf_count_t len  = 0;   // bytes from base to EOF
     sf_count_t pos  = 0;   // cursor, relative to base
@@ -312,7 +404,7 @@ sf_count_t sfvRead( void *ptr, sf_count_t count, void *user )
     if( count > v->len - v->pos ) count = v->len - v->pos;
     if( count <= 0 ) return 0;
     v->file.seek( v->base + v->pos );
-    const qint64 got = v->file.read( static_cast<char *>( ptr ), count );
+    const std::int64_t got = v->file.read( static_cast<char *>( ptr ), count );
     if( got <= 0 ) return 0;
     v->pos += got;
     return got;
@@ -332,7 +424,7 @@ sf_count_t sfvTell( void *user )
  * validate them, so a file that merely happens to start with those three
  * letters is left alone rather than silently truncated.
  */
-qint64 leadingId3v2Size( QFile &f )
+std::int64_t leadingId3v2Size( twStdFile &f )
 {
     unsigned char h[ 10 ];
     if( !f.seek( 0 ) ) return 0;
@@ -340,9 +432,9 @@ qint64 leadingId3v2Size( QFile &f )
     if( h[ 0 ] != 'I' || h[ 1 ] != 'D' || h[ 2 ] != '3' ) return 0;
     if( h[ 3 ] == 0xff || h[ 4 ] == 0xff ) return 0;                 // bogus version
     if( ( h[ 6 ] | h[ 7 ] | h[ 8 ] | h[ 9 ] ) & 0x80 ) return 0;     // not syncsafe
-    const qint64 body = ( (qint64) h[ 6 ] << 21 ) | ( (qint64) h[ 7 ] << 14 )
-                      | ( (qint64) h[ 8 ] <<  7 ) |   (qint64) h[ 9 ];
-    const qint64 total = 10 + body + ( ( h[ 5 ] & 0x10 ) ? 10 : 0 );  // footer flag
+    const std::int64_t body = ( (std::int64_t) h[ 6 ] << 21 ) | ( (std::int64_t) h[ 7 ] << 14 )
+                            | ( (std::int64_t) h[ 8 ] <<  7 ) |   (std::int64_t) h[ 9 ];
+    const std::int64_t total = 10 + body + ( ( h[ 5 ] & 0x10 ) ? 10 : 0 );  // footer flag
     return ( total > 0 && total < f.size() ) ? total : 0;
 }
 
@@ -360,10 +452,9 @@ int twSampleSource::loadSndfile()
     // The view must outlive the SNDFILE: libsndfile calls back into it for
     // every read and seek, including from inside sf_close.
     SndFileView view( fileName_ );
-    if( !view.file.open( QIODevice::ReadOnly ) ) {
-        qWarning( "twSampleSource: cannot open %s: %s.",
-                  (const char *) fileName_.toUtf8().constData(),
-                  (const char *) view.file.errorString().toUtf8().constData() );
+    if( !view.file.isOpen() ) {
+        TW_LOGW( "sources", "twSampleSource: cannot open %s: %s.",
+                 (const char *) fileName_.toUtf8().constData(), view.file.errorString() );
         return -1;
     }
     view.base = leadingId3v2Size( view.file );
@@ -386,14 +477,14 @@ int twSampleSource::loadSndfile()
 
     SNDFILE *snd = sf_open_virtual( &vio, SFM_READ, &info, &view );
     if( !snd ) {
-        qWarning( "twSampleSource: libsndfile cannot open \"%s\": %s.\n",
-                  (const char *) fileName_.toUtf8().constData(), sf_strerror( nullptr ) );
+        TW_LOGW( "sources", "twSampleSource: libsndfile cannot open \"%s\": %s.",
+                 (const char *) fileName_.toUtf8().constData(), sf_strerror( nullptr ) );
         return -1;
     }
 
     if( info.channels <= 0 || info.samplerate <= 0 || info.frames <= 0 ) {
-        qWarning( "twSampleSource: libsndfile reports empty/invalid stream for \"%s\".\n",
-                  (const char *) fileName_.toUtf8().constData() );
+        TW_LOGW( "sources", "twSampleSource: libsndfile reports empty/invalid stream for \"%s\".",
+                 (const char *) fileName_.toUtf8().constData() );
         sf_close( snd );
         return -2;
     }
@@ -405,9 +496,9 @@ int twSampleSource::loadSndfile()
     bits_     = 32;
     nFrames_  = (length_t) info.frames;
 
-    qWarning( "twSampleSource: \"%s\" (libsndfile): %d channels, %d Hz, %lld frames.\n",
-              (const char *) fileName_.toUtf8().constData(),
-              (int) channels_, rate_, (long long) nFrames_ );
+    TW_LOGI( "sources", "twSampleSource: \"%s\" (libsndfile): %d channels, %d Hz, %lld frames.",
+             (const char *) fileName_.toUtf8().constData(),
+             (int) channels_, rate_, (long long) nFrames_ );
 
     // Read interleaved float frames, looping until the whole stream is resident
     // (sf_readf_float need not satisfy a large request in one call), then
@@ -424,10 +515,10 @@ int twSampleSource::loadSndfile()
     sf_close( snd );
 
     if( total < info.frames ) {
-        qWarning( "twSampleSource: short decode on \"%s\": %lld of %lld frames; "
-                  "clamping to the data actually present.\n",
-                  (const char *) fileName_.toUtf8().constData(),
-                  (long long) total, (long long) info.frames );
+        TW_LOGW( "sources", "twSampleSource: short decode on \"%s\": %lld of %lld frames; "
+                 "clamping to the data actually present.",
+                 (const char *) fileName_.toUtf8().constData(),
+                 (long long) total, (long long) info.frames );
         nFrames_ = (length_t) total;   // size + clip to real data, no phantom tail
     }
     if( nFrames_ <= 0 ) return -3;

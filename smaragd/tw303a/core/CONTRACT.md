@@ -10,6 +10,10 @@ SAMPLE_NORM_*), twformat.h (twFormat + capability domains), twfraction.h
 format conversion, NO rate change), generation_promise.h
 (std::future-based generation gate), exc.h, twsyslog.h, twlog.h (TwLog — the
 process-wide log sink and the TW_LOG* macros; proposal 24).
+twqtfree.h (QBX-305: twQtFreeScope, the Qt-free claim a raw std::thread makes
+for its work, and twQtFreeWatch, the test seam that counts QObjects constructed
+inside an open scope through Qt's qtHookData table; adoption's own
+QAdoptedThread is one of them, so the count sees adoption by any route).
 
 Depends on: QtCore only. Forbidden: every other tw/ module, anything app/.
 

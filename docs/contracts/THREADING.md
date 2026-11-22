@@ -85,6 +85,22 @@ worth stating:
   the worst case is one visually wrong meter frame. The audio thread already
   runs exactly this race (proposal 16's stale-page playback).
 
+**A QFile is a QObject too (QBX-305).** Not only signals: constructing ANY
+QObject on a raw `std::thread` adopts it, and file I/O is the easy one to miss.
+`twSampleSource` opened its file with a `QFile` and decoded on the sampler's
+generation worker (`SSamplerProgram::Job`), so every drop of a file on a key
+adopted a thread whose exit then crashed in Qt6Core.dll on Windows. Engine code
+that can run on a worker reads files with C stdio (`_wfopen` on the UTF-16 path
+on Windows, so non-ASCII paths still open); `QString`/`QFileInfo` as values are
+fine, `QFile`/`QSaveFile`/`QTimer`/`QSettings` are not. A worker that claims to
+be Qt-free opens a `twQtFreeScope` (`tw/core/twqtfree.h`) for its work, and
+the claim is GATED: `watch-qt-free`/`assert-qt-free` in a .qxa, or
+`twQtFreeWatch` in a module test, count the QObjects constructed inside an open
+scope, adoption's own `QAdoptedThread` included (`sample_source_thread_test`,
+`sampler_qt_free_workers`). Measured on Qt 6.11 with the default message
+handler: `qWarning` on a raw thread constructs no QObject; engine code logs
+through TwLog there anyway.
+
 ## Rule 2 — snapshot, don't lock, on the audio path
 
 State handoff UI→audio is snapshot/double-buffer based:

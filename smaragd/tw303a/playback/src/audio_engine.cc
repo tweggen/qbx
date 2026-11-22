@@ -5,6 +5,7 @@
 #include "tw/graph/tw303aenv.h"
 #include "tw/graph/tw_freeze_context.h"   // twRtThreadGuard (QBX-297)
 #include "tw/core/twlog.h"
+#include "tw/core/twqtfree.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -812,6 +813,9 @@ void AudioEngine::stopReadahead() {
 }
 
 void AudioEngine::readaheadLoop() {
+    // A raw std::thread: Qt-free by THREADING rule 1, checkable under
+    // watch-qt-free / assert-qt-free (QBX-305) for everything the readahead thread runs.
+    twQtFreeScope qtFree;
     constexpr int READAHEAD_PAGES = 3;  // Minimum lookahead; actual count grows to cover minBufferFrames_
     const uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
     static int readaheadLogCounter = 0;

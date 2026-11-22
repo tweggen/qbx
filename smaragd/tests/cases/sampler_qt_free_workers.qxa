@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="sampler_qt_free_workers">
+
+  <!-- QBX-305: THE SAMPLER'S WORKERS STAY QT-FREE (THREADING rule 1).
+
+       The report: on Windows, dropping a file on a key of the sampler's key
+       view crashed the generation worker at thread EXIT (SIGSEGV under
+       _endthreadex, in Qt6Core.dll). SSamplerProgram::Job decodes the file
+       on a raw std::thread with twSampleSource, whose loader opened it with
+       a QFile: a QObject, so Qt ADOPTED the worker, and the adopted thread's
+       Qt-TLS cleanup ran at DLL THREAD_DETACH.
+
+       The witness: each worker (Job::run, AnalysisJob::run) opens a
+       twQtFreeScope; watch-qt-free hooks QObject construction, and
+       assert-qt-free counts the QObjects born inside an open scope. Adoption
+       builds one (the QAdoptedThread, on the adopting thread), so zero means
+       no worker was adopted, by any route. minScopes says the workers really
+       ran inside their scopes: a scope lost from a worker would otherwise
+       pass by never looking.
+
+       Every worker path is driven:
+         1  a 16-bit WAV (twSampleSource::loadWav, the reported path)
+         2  a stretch, whose onset ANALYSIS job runs on its own thread
+         3  an MP3 (twSampleSource::loadSndfile, libsndfile)
+         4  an asset LINK, which the job BOUNCES by freezing the asset's
+            component pages on the worker
+       The CaptureRevalidator workers, the render-session thread and the
+       readahead thread open the same scope, so a QObject born on any of them
+       during the case counts too (their scopes open when they start, before
+       the watch, so minScopes counts only the sampler's own).
+       The module gate sample_source_thread_test pins the loader itself, with
+       two control sections that show the witness bites; this case pins that
+       the sampler's own threads carry the claim and hold it end to end.
+
+       On main this case fails on minScopes (no worker had a scope); with the
+       scopes but the QFile put back it fails on maxViolations (measured, see
+       the PR). -->
+
+  <setup project="new"/>
+
+  <actions>
+    <watch-qt-free/>
+
+    <add-track index="-1"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="tw" uid="tw.native.nassaudigital"
+                   name="NassauDigital" vendor="Nassau"
+                   path="" nIn="0" nOut="2"/>
+
+    <create-arrangement name="Src"/>
+    <add-track arrangement="Src" index="-1"/>
+    <add-sample trackPath="Src:0" filePath="../test_stereo.wav" timePos="0"/>
+    <create-asset container="Src:" startOffset="0" duration="48000" assetName="Src asset"/>
+
+    <!-- ========================================== 1. a 16-bit WAV decode -->
+    <add-zone trackPath="0" slotIndex="0" keyLo="0" keyHi="127" rootKey="60"
+              mode="tempo-loop" tempoMethod="resample">
+      <layer src="file:../sampler_q4_loop.wav" beats="2"/>
+    </add-zone>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" generation="1"/>
+    <assert-qt-free maxViolations="0" minScopes="1"/>
+
+    <!-- ===================================== 2. a stretch and its analysis -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" tempoMethod="stretch"/>
+    <!-- The new generation's install is what starts the analysis, so settle
+         it first, then wait for the analysis. -->
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000" analysis="1"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" analyzing="0" analyses="1"/>
+    <assert-qt-free maxViolations="0" minScopes="3"/>
+
+    <!-- ======================================== 3. an MP3, via libsndfile -->
+    <set-zone trackPath="0" slotIndex="0" zone="1" mode="oneshot"/>
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="file:../test_sawtooth.mp3" beats="0"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" rendering="0"
+                          src="file:../test_sawtooth.mp3"/>
+
+    <!-- ============================================ 4. an asset bounce -->
+    <set-layer trackPath="0" slotIndex="0" layer="2" src="asset:Src asset"/>
+    <wait-sampler-generations trackPath="0" slotIndex="0" timeoutMs="15000"/>
+    <assert-sampler-layer trackPath="0" slotIndex="0" layer="2" rendering="0" asset="Src asset"/>
+
+    <assert-qt-free maxViolations="0" minScopes="6"/>
+  </actions>
+</SActionScript>
