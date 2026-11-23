@@ -27,6 +27,27 @@ Also **5 disabled** and not counted: `qxa.au_effect_audible`,
 `qxa.au_missing_placeholder`, `qxa.au_slot_roundtrip` (AU is macOS-only) and
 `qxa.media_options_page`, `qxa.media_secret_redaction`.
 
+### Re-measured on the pinned image, 2026-11-23 (QBX-309)
+
+The 2026-10-03 baseline above was taken on **`ubuntu-24.04`** with Qt
+`6.4.2+dfsg-21.1build5`, which is what `ubuntu-latest` meant then. The label
+moved to **`ubuntu-26.04`** between 2026-11-05 15:27Z (run `42055149990`, the
+last on 24.04) and 2026-11-06 18:29Z (run `42271202494`), bringing Qt
+`6.10.2+dfsg-7`. Nothing in any diff announced it, and every run since has
+been green. `ci.yml` now pins `ubuntu-26.04` on both jobs, so the next image
+change is a commit.
+
+Run `45236914217` (PR #382, the pin itself), same exclusions:
+
+```
+100% tests passed out of 637
+Total Test time (real) = 517.31 s
+```
+
+The same 5 disabled. The rise from 398 is the suite's growth, not the image:
+`main`'s last unpinned run at `c9b7a256` (`45005733166`, already 26.04) also
+passed 637/637. Neither exclusion was revisited on the new image.
+
 ## The two failures
 
 ### 1. `secret_store_test` — no keyring on a headless runner
