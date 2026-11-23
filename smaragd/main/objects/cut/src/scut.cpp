@@ -2191,8 +2191,6 @@ void SCut::invalidateAspects(uint32_t aspects)
         return;  // Skip invalidation chain while loading
     }
 
-    auto start = std::chrono::high_resolution_clock::now();
-
     {
         std::lock_guard<std::mutex> lock(mutex());
 
@@ -2219,13 +2217,6 @@ void SCut::invalidateAspects(uint32_t aspects)
     // Example: Track A muted → Cut C (refs Track A) invalidated → Cut D (refs Cut C) invalidated
     if (aspects & Playback) {
         notifyDependentsChanged(Playback | Metadata);
-    }
-
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::high_resolution_clock::now() - start).count();
-    if (aspects & Playback) {
-        qWarning() << "invalidateAspects(Playback) for cut" << getSName()
-                   << "took" << elapsed << "μs";
     }
 }
 
