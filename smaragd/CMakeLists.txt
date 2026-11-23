@@ -687,7 +687,12 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # Closing a project while a lane is live must take the lane down
               # with it (the File -> Close SIGSEGV). Needs a real input so the
               # lane is actually running when the project dies.
-              live_monitor_project_close)
+              live_monitor_project_close
+              # QBX-307: a solo flip rebuilds the live plan. Needs a real input
+              # so the armed lane is live and a plan is published at all; it
+              # also writes mixer/monitorArming and mixer/soloScope, which
+              # RUN_SERIAL covers.
+              solo_rebuilds_live_plan)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE

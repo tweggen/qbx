@@ -201,6 +201,29 @@ void SApplication::setCurrentProject( SProject *cp )
         connect( cp, &SProject::propertyChanged, this,
                  &SApplication::onProjectPropertyChangedForLive,
                  Qt::UniqueConnection );
+    // A SOLO FLIP IS A PLAN-REBUILD TRIGGER (QBX-307). SLivePlanBuilder asks
+    // ssolo::isLaneAudible which unarmed children join the plan as frozen
+    // inputs, so the plan's MEMBERSHIP is a function of the solo topology --
+    // and a plan is a snapshot. The mixers heard the flip (applyAudibility
+    // fixes what THEY sum); the pump does not read their sum, it reads the
+    // frozen inputs it was handed, so a solo that silenced a sibling of an
+    // armed lane went on sounding through the ring until something unrelated
+    // rebuilt the plan.
+    //
+    // TWO signals, because neither covers the other: soloSetChanged is the
+    // flag moving, in EITHER scope (in `arrangement` scope it is the only one
+    // raised), and soloTopologyChanged also carries the SCOPE changing
+    // (setSoloScope), where no flag moved at all. In `global` scope a flip
+    // raises both and the plan is rebuilt twice; the second finds the same
+    // set and only republishes (refreshPlan_'s `sameSet` path). Pointer-to-
+    // member, not a lambda, so UniqueConnection holds across the reload.
+    // Gate: solo_rebuilds_live_plan.
+    if( cp )
+        connect( cp, &SProject::soloSetChanged, this,
+                 &SApplication::liveLanesChanged, Qt::UniqueConnection );
+    if( cp )
+        connect( cp, &SProject::soloTopologyChanged, this,
+                 &SApplication::liveLanesChanged, Qt::UniqueConnection );
 }
 
 void SApplication::onProjectPropertyChangedForLive( const QString &key,

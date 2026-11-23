@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-307: A SOLO FLIP REBUILDS THE LIVE PLAN.
+
+  THE BUG. SLivePlanBuilder decides which of a live folder's unarmed children
+  join the plan as FROZEN INPUTS by asking ssolo::isLaneAudible, so the plan's
+  membership is a function of the solo topology at the moment it is built.
+  A plan is a snapshot, and nothing rebuilt it on a solo change:
+  SProject::soloSetChanged / soloTopologyChanged reached the mixers (which fix
+  what THEY sum) and the status bar, never SApplication::liveLanesChanged().
+  While something was armed and monitoring, the pump therefore kept summing
+  the frozen input a solo had just silenced, until an unrelated arm, option or
+  transport change happened to rebuild it.
+
+  WHAT IS READ. `assert-live-plan` reads SLiveMonitor::describePlan(), which
+  is LiveGraphPump::plan() - the object the pump renders, not a recomputation.
+  A <render> cannot witness this: it rebuilds, so it never sees a stale plan.
+  Every stage asserts BOTH directions: the new membership present, the old
+  one absent.
+
+  THE SHAPE. F is a folder holding A, B and Arm; C is a top-level sibling of
+  F. Arm is armed and monitored, so F joins the live closure and A, B are its
+  frozen inputs: "[F live=Arm frozen=A,B]".
+
+  BOTH SCOPES, because they are carried by different signals: in `global` a
+  solo raises soloSetChanged AND soloTopologyChanged, in `arrangement` only
+  soloSetChanged (SStdMixer::trackSoloChanged). A fix wired to the topology
+  signal alone passes the global half and fails section 4. The SCOPE changing
+  moves no flag and raises soloTopologyChanged only; section 5 is the one
+  that fails a fix wired to soloSetChanged alone.
+
+  KEYS WRITTEN: `mixer/monitorArming` (QBX-260 - `any`, as the ticket asks,
+  so the monitor half of the live set is populated) and `mixer/soloScope`.
+  RUN_SERIAL (it is in the live list in smaragd/CMakeLists.txt, which also
+  gives it the file input backend), and both are restored to SOpt::def() at
+  the end.
+-->
+<SActionScript version="1" name="solo_rebuilds_live_plan">
+
+  <setup project="new"/>
+
+  <actions>
+    <set-option key="mixer/monitorArming" value="any"/>
+    <set-option key="mixer/soloScope" value="global"/>
+    <assert-mixing-options monitorArming="any" soloScope="global"/>
+
+    <add-track index="-1"/>                <!-- 0: becomes the folder F -->
+    <add-track index="-1"/>                <!-- 1: A -->
+    <add-track index="-1"/>                <!-- 2: B -->
+    <add-track index="-1"/>                <!-- 3: Arm -->
+    <add-track index="-1"/>                <!-- 4: C, stays top-level -->
+    <set-track-name trackPath="0" name="F"/>
+    <set-track-name trackPath="1" name="A"/>
+    <set-track-name trackPath="2" name="B"/>
+    <set-track-name trackPath="3" name="Arm"/>
+    <set-track-name trackPath="4" name="C"/>
+
+    <!-- After these, top level is F (0) and C (1); F holds A, B, Arm. -->
+    <reparent-track source="3" destParent="0" destIndex="-1"/>
+    <reparent-track source="2" destParent="0" destIndex="0"/>
+    <reparent-track source="1" destParent="0" destIndex="0"/>
+
+    <set-track-input trackPath="0,2" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0,2" mode="on"/>
+    <arm-track trackPath="0,2" armed="1"/>
+    <wait-ms ms="400"/>
+
+    <!-- ===== 0. THE CONTROL: no solo, both siblings are frozen inputs ===== -->
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+
+    <!-- ===== 1. Solo A, inside the folder: B leaves the plan ===== -->
+    <set-track-solo trackPath="0,0" solo="1"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A]" absent="frozen=A,B"/>
+
+    <!-- ===== 2. Unsolo A: B comes back ===== -->
+    <set-track-solo trackPath="0,0" solo="0"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+
+    <!-- ===== 3. Solo C, OUTSIDE the folder: nothing in F is audible ===== -->
+    <set-track-solo trackPath="1" solo="1"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=]" absent="frozen=A"/>
+    <set-track-solo trackPath="1" solo="0"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+
+    <!-- ===== 4. The same flip under `arrangement` scope ===== -->
+    <set-option key="mixer/soloScope" value="arrangement"/>
+    <assert-mixing-options soloScope="arrangement"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+    <set-track-solo trackPath="0,1" solo="1"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=B]" absent="frozen=A"/>
+    <set-track-solo trackPath="0,1" solo="0"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+
+    <!-- ===== 5. THE SCOPE ITSELF: no flag moves, the rule does ===== -->
+    <!-- A solo in ANOTHER root, under `arrangement`, leaves the master's
+         plan alone. Flipping the scope to `global` then silences F's
+         children with no solo flag moving at all: setSoloScope raises
+         soloTopologyChanged ONLY, so this section is the one that bites a fix
+         wired to soloSetChanged alone. -->
+    <create-arrangement name="Other"/>
+    <add-track arrangement="Other" index="-1"/>
+    <set-track-solo trackPath="Other:0" solo="1"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+    <set-option key="mixer/soloScope" value="global"/>
+    <assert-mixing-options soloScope="global"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=]" absent="frozen=A"/>
+    <set-track-solo trackPath="Other:0" solo="0"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A,B]"/>
+
+    <!-- ===== THE RESTORE ===== -->
+    <arm-track trackPath="0,2" armed="0"/>
+    <set-option key="mixer/soloScope" value="global"/>
+    <set-option key="mixer/monitorArming" value="armed-only"/>
+    <assert-mixing-options monitorArming="armed-only" soloScope="global"/>
+    <wait-ms ms="400"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

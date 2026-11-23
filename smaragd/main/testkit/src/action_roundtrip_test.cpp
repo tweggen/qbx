@@ -505,6 +505,8 @@ const Fixture kFixtures[] = {
     { "assert-audio-onset",
       "<assert-audio-onset filename='cap.wav' channel='0' startFrame='0'"
       " threshold='0.05' window='64' maxFrame='64' refChannel='1'/>" },
+    { "assert-live-plan",
+      "<assert-live-plan contains='[F live=' absent='frozen=B'/>" },
     { "assert-render-policy",
       "<assert-render-policy liveThreadRefusals='0' liveOwnedRefusals='64'"
       " minLiveOwnedRefusals='1' maxNodeRetries='0' maxMissPages='0'"
@@ -1288,6 +1290,7 @@ const LaneRow kLaneRows[] = {
     { "assert-feel-flow-pose",     Accept, "read-only" },
     { "assert-groove-aspect",      Accept, "read-only" },
     { "assert-input-meter",        Accept, "read-only" },
+    { "assert-live-plan",          Accept, "read-only" },
     { "assert-instrument-slot",    Accept, "read-only" },
     { "assert-lane-overlay",       Accept, "read-only" },
     { "assert-lane-view",          Accept, "read-only" },

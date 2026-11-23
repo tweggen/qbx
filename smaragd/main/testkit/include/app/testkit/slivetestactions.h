@@ -166,6 +166,34 @@ private:
 };
 
 /**
+ * `assert-live-plan` - the PUBLISHED live plan's membership (QBX-307).
+ *
+ * Reads SLiveMonitor::describePlan(), i.e. the plan the pump is rendering,
+ * not one recomputed for the question: a plan that was not rebuilt after an
+ * edit reads stale here, which a `<render>` (it recomputes) cannot see.
+ *
+ *   contains   substring the description must hold (default: not checked)
+ *   absent     substring it must NOT hold (default: not checked)
+ *
+ * The whole description is printed either way.
+ */
+class SAssertLivePlanAction : public SAction
+{
+public:
+    SAssertLivePlanAction() = default;
+    QString name() const override
+    { return QStringLiteral( "assert-live-plan" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    QString contains_;
+    QString absent_;
+};
+
+/**
  * `assert-audio-onset` - WHERE a sound starts, in frames, and how long after
  * the note that asked for it (proposal 21 L2).
  *

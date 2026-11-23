@@ -253,6 +253,18 @@ public:
     std::uint64_t rateRefusals() const;
     /// Human-readable state for the head tooltip and the testkit.
     QString describe() const;
+    /**
+     * THE PUBLISHED PLAN, read back off the pump (QBX-307).
+     *
+     * Not a recomputation: it reads LiveGraphPump::plan(), the very object the
+     * pump renders, so a plan that went stale after it was built reads stale
+     * here too -- which is the only thing a gate about a missing REBUILD can
+     * be asked. One `[name live=a,b frozen=c,d]` group per plan track, in plan
+     * order, then `out=<name>`; a frozen input is named after the lane whose
+     * root component it is (`?` when no lane in any root owns it any more).
+     * `plan=none` when no pump or no plan.
+     */
+    QString describePlan() const;
 
 private slots:
     void finishDisarm();
