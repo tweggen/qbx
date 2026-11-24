@@ -207,3 +207,9 @@ placed after a reload measures the stale view and passes whatever the code
 under test does. `qxa.track_list_view_roundtrip`'s post-load
 `secondWidth`/`scrollX` assertions have exactly this blind spot today. Whether
 the stale mixer is merely orphaned or actually freed was NOT established.
+
+> **Correction (QBX-316, 2026-11-24).** Freed, once its deferred delete is
+> delivered: with `drain-pending-deletes` after the reload `lane_view_persists`
+> SEGFAULTed 3 in 3 in the stale view's row rebuild. A load into the current
+> project now rebinds the shell (`main/shell/CONTRACT.md` inv. 60), and the
+> post-load zoom/pan assertions read the loaded document.

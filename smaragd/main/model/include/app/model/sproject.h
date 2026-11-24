@@ -367,6 +367,10 @@ public:
     // over-invalidation only costs a re-render, never correctness.
     void notifyArrangementChanged() { emit arrangementChanged(); }
 
+    // Fire loaded(). Called by SLoadProjectAction once a load has SUCCEEDED
+    // and invalidation is back on (QBX-316). See the signal.
+    void notifyLoaded() { emit loaded(); }
+
     // Fire captureRevalidated(). Invoked (queued) from revalidator worker
     // threads when an async recompute lands, so views repaint and pick up the
     // fresh preview. Deliberately NOT arrangementChanged: that one also drops
@@ -473,6 +477,12 @@ signals:
     // and a project with no arrangements at all unregisters nothing while
     // still crossing the boundary. This fires either way, after the names.
     void arrangementsCleared();
+    // A load into THIS project finished and succeeded (QBX-316). A load gives
+    // the project a NEW master root while the SProject object stays the same,
+    // so a view bound to the previous root has no pointer change to notice:
+    // this is its boundary. Raised after the post-load passes and after
+    // invalidation resumes, so a listener sees the finished document.
+    void loaded();
     // The solo scope changed, or a solo flag moved and the scope is Global:
     // every root re-applies the audibility rule and drops the pages it froze
     // under the old answer (QBX-256, see notifySoloTopologyChanged()).

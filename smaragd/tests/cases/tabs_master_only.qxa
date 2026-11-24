@@ -38,6 +38,10 @@
          rebuilt, not duplicated or left pointing at the dead project. -->
     <save-project path="../../build/test-output/tabs_master_only/tabs.qxp"/>
     <load-project path="../../build/test-output/tabs_master_only/tabs.qxp"/>
+    <!-- Deliver the old root's deletion (QBX-316). The master tab must
+         already be the LOADED root's: a tab still bound to the previous
+         mixer is removed when that mixer dies, and the set reads (). -->
+    <drain-pending-deletes/>
     <assert-tab-set names="Arrangement" active="Arrangement"/>
     <assert-track-count arrangement="" count="2"/>
 

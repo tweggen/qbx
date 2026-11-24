@@ -1547,11 +1547,51 @@ whenever the attribute is PRESENT, the empty string included: "this track shows
 no automation lane" is a thing a case needs to say, and a
 written-only-when-non-empty rule could not express it.
 
-**A ROW-COUNT ASSERTION AFTER A `load-project` PROVES NOTHING** — see
-`main/shell/CONTRACT.md` inv. 60. A scripted load does not rebind the arranger,
-so every arranger reach-through afterwards answers from the previous load's
-mixer. Keep `assert-lane-alignment rows=` on the NEAR side of a save/load;
-`assert-lane-view` is the only trustworthy read on the far side.
+**A row-count assertion after a `load-project` proved nothing until QBX-316**
+(`main/shell/CONTRACT.md` inv. 60): the arranger stayed bound to the previous
+load's mixer. Since QBX-316 a load REBINDS it, so an arranger-side read on the
+far side of a save/load reads the loaded document. One known gap there:
+QBX-317 (a shown automation lane gets no row in an arranger built over a loaded
+project), which is why `lane_view_persists` asserts no row count after its
+reload.
+
+## `load-project` vs `open-project` (QBX-316)
+
+Two verbs open a saved project, and they differ on purpose:
+
+- **`load-project` loads INTO the live `SProject`.** Same object, so its
+  in-memory properties survive where the file is silent, the undo history is
+  kept (`verify-undo` across a load counts both sides), and no project switch
+  runs. Since QBX-316 the shell REBINDS after it: the master tab is rebuilt
+  for the loaded root, the old editors are deleted and arrangement tabs close
+  (`SProject::loaded()` -> `SMainWindow::rebindAfterLoad_()`).
+- **`open-project` is File -> Open**: close, new `SProject`, load,
+  `setCurrentProject()` again. Use it when the claim is about the switch itself
+  (an armed track arriving inert, design D9).
+
+**Why the rebind and not "route `load-project` through the UI path".** QBX-316
+allowed either, and both were measured over the 90 cases that use
+`load-project` (89 enabled):
+
+- *rebind* (chosen): 89/89 pass. The rebind FIRES in 6 cases --
+  `lane_view_persists`, `tabs_master_only` (the gates), and
+  `selection_purge_across_roots`, `send_lane_rows`,
+  `track_detail_sections_and_fonts`, `track_list_view_roundtrip`. Of those
+  four only `track_list_view_roundtrip` changes meaning, and it gains: its
+  post-load `secondWidth`/`scrollX` now read an arranger built from the file
+  instead of the one the case had just zoomed. `selection_purge_across_roots`
+  was re-sabotaged with the rebind in place (both its wires, the per-name
+  `arrangementUnregistered` and `arrangementsCleared`): each still fails it,
+  so deleting the old tabs did not take over its gate.
+- *UI path* (every `load-project` run as `open-project`): 8 of 89 FAIL --
+  five by `verify-undo` (`clip_properties_actions`, `clip_volume_pan`,
+  `exact_stretch_roundtrip`, `formant_shift_offset`,
+  `warp_anchors_roundtrip`: the switch clears the undo history the case's
+  undo pass walks), two through the extern-file list
+  (`collect_external_media_missing`, `sample_missing_survives`), and
+  `tabs_master_only`. It would also silently change what every
+  property-survives-load case means (`record_mode_ini_seed` and the
+  conventions about in-memory properties), and make the two verbs one.
 
 ---
 

@@ -3776,6 +3776,11 @@ void SMainWindow::installMasterEditor_()
                                      : SApplication::app().getCurrentProject();
     // check_root_resolution: master -- installMasterEditor_ installs the MASTER's editor; the name says so
     if( !proj || !proj->masterRoot() ) return;
+    // A later load INTO this project gives it a new master root under the
+    // tab this call is about to install (QBX-316). Pointer-to-member, so
+    // UniqueConnection holds across the repeated installs.
+    connect( proj, &SProject::loaded, this, &SMainWindow::rebindAfterLoad_,
+             Qt::UniqueConnection );
     if( !viewTabs_ ) {
         viewTabs_ = new SViewTabs( centralHost_ );
         centralHost_->addWidget( viewTabs_ );
@@ -3791,6 +3796,51 @@ void SMainWindow::installMasterEditor_()
     // is why every cast to SStdMixerView* had to move to ensureArranger_().
     projectRootWidget_ = viewTabs_;
     viewTabs_->show();
+}
+
+// QBX-316. A load that goes INTO the current SProject -- the `load-project`
+// verb, from a .qxa or a --run-actions script -- gives the project a new master
+// root and lets the old one go. Nothing else tells the shell: the project
+// pointer does not change, and the old root's death is a deferred delete. Left
+// alone, the master tab kept the PREVIOUS root's arranger, every reach-through
+// answered from the previous document, and once that root was deleted its
+// view -- still connected to the project's arrangementChanged() -- rebuilt its
+// rows from freed memory (lane_view_persists, a SEGFAULT 3 in 3) while
+// onRootDestroyed() removed the tab and left the set empty (tabs_master_only).
+//
+// File -> Open never gets here with a shell: closeProject() detached it before
+// the load, and openProjectFile() installs afterwards. So this is the window
+// doing what that path does, for the one route that bypasses it.
+//
+// The old editors MUST be destroyed: SViewTabs::setMasterEditor() only
+// detaches them, and a detached view stays connected to the project's
+// arrangementChanged() and rebuilds its rows from the old root once that dies
+// (sabotage "no delete": lane_view_persists SEGFAULTs 3 in 3). They are
+// deleted NOW rather than deleteLater()d so that no signal can reach a stale
+// view at all, whatever order the deferred deletes arrive in. That ordering
+// argument is NOT gated: a deleteLater() here was measured passing both gates.
+void SMainWindow::rebindAfterLoad_()
+{
+    SProject *proj = qobject_cast<SProject *>( sender() );
+    if( !proj || proj != SApplication::app().getCurrentProject() ) return;
+    if( !viewTabs_ ) return;
+    // check_root_resolution: master -- rebinds the MASTER tab to the master the load installed
+    SObject *master = proj->masterRoot();
+    if( !master ) return;
+    if( viewTabs_->masterEditor() && viewTabs_->editorFor( master )
+        == viewTabs_->masterEditor() ) return;
+
+    QList<QWidget *> stale;
+    for( int i = 0; i < viewTabs_->count(); ++i )
+        if( QWidget *w = viewTabs_->widget( i ) ) stale.append( w );
+
+    installMasterEditor_();
+    linkEventEditorAxis();
+
+    for( QWidget *w : stale )
+        if( w != viewTabs_->masterEditor() ) delete w;
+    TW_LOGI( "ui.shell", "[LOAD] rebound the arranger to the loaded root "
+                         "(%d stale editor(s) dropped)", int( stale.size() ) );
 }
 
 SViewTabs *SMainWindow::ensureViewShell()

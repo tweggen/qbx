@@ -1838,6 +1838,35 @@ under test does. `qxa.track_list_view_roundtrip`'s post-load
 model-side reads (`trackAtPath_`, i.e. `assert-lane-view`'s `collapsed` /
 `laneScale` / `takesExpanded` / `automation`) are trustworthy after one.
 
+**SUPERSEDED BY QBX-316 (2026-11-24): a load into the current project now
+REBINDS the shell.** The stale view was worse than orphaned: once the previous
+root's deferred delete was delivered (`drain-pending-deletes`, and in the app
+the next turn of the event loop) the old `SStdMixerView` -- still connected to
+the project's `arrangementChanged()` -- rebuilt its rows from the freed mixer
+(`lane_view_persists`: SEGFAULT 3 in 3), while `SViewTabs::onRootDestroyed()`
+(QBX-300) removed the master tab and left the set empty (`tabs_master_only`:
+`()`, 3 in 3). The mechanism:
+
+- `SLoadProjectAction::apply()` raises `SProject::loaded()` on SUCCESS, after
+  the post-load passes and after invalidation resumes.
+- `installMasterEditor_()` connects it (UniqueConnection) to
+  `SMainWindow::rebindAfterLoad_()`, so every project the shell has installed
+  an editor for is heard, the `--run-actions` path included.
+- `rebindAfterLoad_()` does what `openProjectFile()` does after its load --
+  `installMasterEditor_()` + `linkEventEditorAxis()` -- when the shell exists
+  and its master tab is not already the loaded root's, and then DELETES every
+  editor the shell held. `setMasterEditor()` only detaches them, and a detached
+  view stays wired to the project (sabotage "no delete": SEGFAULT 3 in 3).
+  Arrangement tabs close, as they do on File -> Open.
+- File -> Open never takes the branch: `closeProject()` has dropped the shell
+  before the load, so `viewTabs_` is null when `loaded()` fires.
+
+Arranger reach-throughs after a `load-project` therefore answer from the
+LOADED document, and a post-load row/zoom/pan assertion means what it says.
+What a scripted load still does NOT do is the project SWITCH: same `SProject`,
+same properties, same undo history, no `SLiveMonitor::projectChanged()`. For
+that, use `open-project` (testkit CONTRACT, "load-project vs open-project").
+
 ## inv. 61 — the MIXER PANE is the ninth dock, and it joins the detach seam (proposal 48 M1)
 
 `dock_mixer`, created in the constructor like every other one (inv. 4:

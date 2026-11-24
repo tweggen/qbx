@@ -45,6 +45,14 @@
   `track_list_view_roundtrip.qxa` has the same blind spot in its post-load
   `secondWidth`/`scrollX` assertions.
 
+  QBX-316 CLOSED THAT LIMITATION, and this case is its gate. The stale view
+  was not merely stale: once the previous root's deferred delete is delivered
+  (the drain after each load below) it rebuilt its rows from the freed mixer,
+  a SEGFAULT 3 runs in 3 on main. A load now rebinds the shell, so the far
+  side of the reload is the loaded root's arranger; the section at the bottom
+  proves it with a gesture. The row assertions stay on the near side for a
+  different reason now, which that section states.
+
   Watched failing on the pre-fix binary: with the three sets still on the
   view, every `assert-lane-view` after the `load-project` at the bottom reads
   the defaults (laneScale=1.0, takesExpanded=0, automation="").
@@ -55,6 +63,10 @@
 
   <actions>
     <load-project path="../legacy_takestack_wrap.qxp"/>
+    <!-- Deliver what the load released (QBX-316): the setup project's root
+         mixer dies HERE, as it would on the next turn of the event loop in
+         the app, and nothing may still be reading it. -->
+    <drain-pending-deletes/>
 
     <!-- The defaults, which are also what a project written before these
          attributes existed says: they are omitted entirely, so an older file
@@ -104,6 +116,10 @@
     <!-- THE GATE. -->
     <save-project path="../../build/lane_view_persists.qxp"/>
     <load-project path="../../build/lane_view_persists.qxp"/>
+    <!-- The previous load's root mixer dies here. Before QBX-316 the arranger
+         was still bound to it, and the next arrangementChanged rebuilt its
+         rows from freed memory: a SEGFAULT, 3 runs in 3. -->
+    <drain-pending-deletes/>
 
     <assert-lane-view trackPath="0" laneScale="2.5" takesExpanded="1"
                       automation="self:Volume"/>
@@ -111,6 +127,19 @@
          genuinely per-track on the way out as well as on the way in. -->
     <assert-lane-view trackPath="1" laneScale="1.0" takesExpanded="0"
                       automation=""/>
+
+    <!-- THE REBIND (QBX-316). The far side of the reload is now the LOADED
+         root's arranger, so a gesture writes to the loaded project's track.
+         Before the fix this set-lane-view wrote to the previous load's track
+         and the assert-lane-view after it read 2.5.
+         NO ROW COUNT HERE, though one is now meaningful: the rebuilt arranger
+         builds 4 rows, not 5, because a SHOWN AUTOMATION LANE does not get
+         its row when an arranger is built from a loaded project (measured
+         with the rebind in place, and with a fresh arranger over the saved
+         file; the take rows do come back). That is its own defect, QBX-317,
+         and a count of 4 here would pin it. -->
+    <set-lane-view laneScaleRow="0" laneScale="1.5"/>
+    <assert-lane-view trackPath="0" laneScale="1.5"/>
   </actions>
 
   <assertions>
