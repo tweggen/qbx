@@ -54,6 +54,9 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         project->clearArrangements();
         // ...and the asset names, for the same reason (QBX-266).
         project->clearAssets();
+        // ...and the capture files the closing document's recorder wrote
+        // (QBX-315): they are not this document's unused recordings.
+        project->forgetCaptureFiles();
 
         project->disableInvalidation();
 
