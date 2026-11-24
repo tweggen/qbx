@@ -411,6 +411,15 @@ bool SPluginSlot::reloadPlugin()
     return getSlotState() == audio::twPluginSlotState::Active;
 }
 
+bool SPluginSlot::reattachIfAvailable()
+{
+    if( getSlotState() != audio::twPluginSlotState::Missing ) return false;
+    audio::twPluginDescriptor found;
+    if( !audio::pluginRegistry().findByUid( descriptor_.format, descriptor_.uid, found ) )
+        return false;
+    return reloadPlugin();
+}
+
 std::shared_ptr<twComponent> SPluginSlot::getRootComponent()
 {
     auto insert = getInsert();

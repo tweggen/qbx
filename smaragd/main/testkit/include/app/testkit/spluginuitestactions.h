@@ -3,6 +3,7 @@
 
 #include "app/actions/saction.h"
 
+#include <QList>
 #include <QString>
 #include <cstdint>
 
@@ -496,6 +497,43 @@ private:
     bool    hasStored_    = false;
     QString contains_;
     QString absent_;
+};
+
+// simulate-plugin-scan -- "the background plugin scan finished and found
+// these" (QBX-302). The case states the ORIGIN and the plugins found:
+//
+//   <simulate-plugin-scan origin="startup|rescan">
+//     <plugin format="clap" uid="tw.test.clap.gain" name="…" vendor="…"
+//             path="twtestclap.clap" nIn="2" nOut="2" isInstrument="false"/>
+//   </simulate-plugin-scan>
+//
+// `origin` = "rescan" (default) or "startup": which scan this is, i.e. the
+// label SApplication's own scan start would have given it -- the startup
+// scan's re-attach is silent, a re-scan's is announced. Each <plugin> is
+// published into the registry as a scan's publish would (its `path` resolved
+// like a project's module path, against the app directory), then the REAL
+// finish poll runs and emits pluginScanFinished, so everything that listens to
+// it -- the late-plugin re-attach first -- runs as it does after a real scan.
+// SApplication::simulatePluginScanForTest is the shell half. Not undoable.
+class SSimulatePluginScanAction : public SAction {
+public:
+    QString name() const override
+    {
+        return QStringLiteral( "simulate-plugin-scan" );
+    }
+    QStringList knownAttributes() const override { return { "origin" }; }
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    struct Found {
+        QString format, uid, name, vendor, path;
+        int     nIn = 2, nOut = 2;
+        bool    isInstrument = false;
+    };
+    QString      origin_ = QStringLiteral( "rescan" );
+    QList<Found> found_;
 };
 
 #endif  // SPLUGINUITESTACTIONS_H

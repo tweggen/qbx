@@ -35,6 +35,21 @@ Invariants:
    pluginReloaded(). Any editor showing that slot's parameters must re-read
    them on that signal. It is NOT an action: it mutates no document state (a
    re-save produces the same bytes), so there is nothing to undo.
+
+   **The app also runs it unasked, after a scan (QBX-302, thinktank convention
+   `late-plugin-reattach`).** The startup scan runs in the background next to
+   the default project's load, so a plugin it has not reached yet loads as a
+   Missing placeholder. `SApplication::pluginScanFinished` is answered by
+   `SApplication::reattachLatePlugins()`, which walks every track of every root
+   (send and master lanes included) and calls
+   `SPluginSlot::reattachIfAvailable()`: `reloadPlugin()` for a slot that is
+   Missing AND whose (format, uid) the registry now resolves, nothing for any
+   other. The STARTUP scan does it silently; any LATER scan (the options
+   dialog's re-scan) also emits `latePluginsReattached(notice)`, which the main
+   window shows as a status message ("1 plugin insert became available and was
+   re-attached"), counting only the inserts THAT scan re-attached. Same rule as
+   the button: not an action, so the undo stack and the modified flag are left
+   alone. Gate: `qxa.plugin_late_reattach`, through `simulate-plugin-scan`.
 6. An edit is inaudible unless the slot is told. A cache sits in front of the
    plugin — the slot's single twPluginInsert's frozen pages (before proposal 36
    B4 there were two, because the processor also kept an all-bus page cache for
@@ -537,6 +552,26 @@ MECHANISM (at most one restart acted on per second of playback, and the guard
 seen declining the rest) and deliberately not the SYMPTOM: on a 4-second
 sawtooth through one arithmetic-only plugin the freeze outruns the loop and the
 playhead advances even with the guard disabled.
+
+## A plugin's own state change marks the project modified, with no undo step (QBX-313)
+
+The author decided on 2026-11-24 (thinktank convention
+plugin-ui-state-marks-modified): a change to a plugin's saved per-instance UI
+state marks the host project modified, like any other state change. When the
+poll reports `twEditorFeedback::stateDirty` (VST3 `setDirty`, CLAP
+`mark_dirty`; `tw303a/plugins/CONTRACT.md` inv. 69), `SPluginNativeEditor::
+onPoll()` logs `native editor: plugin marked its state dirty` and calls
+`SActionHistory::markModified()` -- `QUndoStack::resetClean()`, the route
+Collect Media already took. NOT an action: the plugin owns that state, so an
+undo entry would undo nothing, and the unsaved-changes prompt reads the
+stack's clean marker and nothing else. It runs before the close check, so a
+mark made in the poll where a plugin also closed its own window still counts.
+
+Gated by `qxa.plugin_state_dirty_marks_modified`: a control window that
+changes nothing leaves a saved project clean, the `tw.test.clap.dirty` window
+makes it modified with the undo stack's entry count unchanged
+(`assert-unsaved-changes undoEntries=`), and after a save the next mark
+modifies it again.
 
 ## The native editor window is never parented to the FX strip (fixed 2026-08-23)
 

@@ -60,6 +60,10 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         // this one, and into its next save.
         project->clearLoadedOrphans();
 
+        // ...and the capture files the closing document's recorder wrote
+        // (QBX-315): they are not this document's unused recordings.
+        project->forgetCaptureFiles();
+
         project->disableInvalidation();
 
         built = ( loader.createObjects(*project) == 0 );

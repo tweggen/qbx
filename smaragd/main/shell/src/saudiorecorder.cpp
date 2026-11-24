@@ -255,6 +255,12 @@ bool SAudioRecorder::start()
         bridge_ = nullptr;
         return false;
     }
+    // THE PROJECT REMEMBERS WHAT WAS WRITTEN FOR IT, by path (QBX-315): an
+    // undone take's WAV stays on the Unused recordings list because the scan
+    // reads the disk for these, not because the take's objects are still
+    // alive. Noted after beginCapture, so a press that never opened a file
+    // notes nothing; the scan checks existence anyway.
+    for( const Armed &a : armed_ ) project->noteCaptureFile( a.file );
 
     // 3. THE PLACEMENT TERMS that are known now. P0 and the output latency
     //    both arrive with the anchor (see tryAnchor_).

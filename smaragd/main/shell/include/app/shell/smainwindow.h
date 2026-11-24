@@ -638,8 +638,9 @@ public:
     //   describeStatusBar     — the status bar's permanent widgets as they
     //                           are shown: the mode label, then the solo
     //                           indicator's own describe() (QBX-257), then
-    //                           the record-arm indicator's. Fields are
-    //                           APPENDED, never inserted.
+    //                           the record-arm indicator's, then the
+    //                           transient message (`message=`, QBX-302).
+    //                           Fields are APPENDED, never inserted.
     //   clickSoloIndicator    — a REAL click on the solo indicator, through
     //                           the same QAction the menu item triggers. It
     //                           REFUSES when that action is disabled, because

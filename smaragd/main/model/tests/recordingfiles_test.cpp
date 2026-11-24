@@ -9,6 +9,12 @@
 // is unreachable from it. Measured: with the regex replaced by the substring
 // "track", every .qxa in the suite still passed.
 //
+// QBX-315 made the disk half REACHABLE from that case (the recorder's own
+// capture list, SProject::captureFiles), but only with names the recorder
+// composed -- which a loose test matches as well as a strict one. A user's own
+// file never reaches the scan from a .qxa, so the NEGATIVES below are still
+// gated here and nowhere else.
+//
 // It is also exactly the shape a unit test is for: a pure function over a
 // string, with no project, no Qt platform and no engine behind it.
 //

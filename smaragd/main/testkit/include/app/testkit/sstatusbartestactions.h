@@ -16,6 +16,7 @@
 //                 |armShown=<0|1>|armText=<…>|armLanes=<n>|armRoots=<a;b>
 //                 |armOnScreen=<0|1>|armList=<spec …>
 //                 |disarmAllEnabled=<0|1>
+//                 |message=<the transient status message, or empty>
 //
 //       `soloRoots` is THE DISCRIMINATOR for the defect this gates: it names
 //       the root that holds the solo, so an implementation that read the

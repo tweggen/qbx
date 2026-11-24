@@ -88,7 +88,7 @@ QList<Orphan> scanUnused( SProject *project )
     QList<Orphan> out;
     if( !project ) return out;
 
-    // ---- the MODEL side: extern files NO CLIP PLACES ---------------------
+    // ---- WHAT IS IN USE: extern files a clip PLACES, and asset bodies ----
     //
     // "PLACED" MEANS A CLIP WINDOWS IT, and that has to be answered by walking
     // the arrangement. `SObject::refCount()` is NOT the question, although it
@@ -97,38 +97,85 @@ QList<Orphan> scanUnused( SProject *project )
     // away still reports a positive count. Measured -- a recording undone left
     // the count at 1 and this scan reported nothing at all.
     //
-    // A REGISTERED ASSET IS EXEMPT whatever the walk finds: an asset body is
+    // A REGISTERED ASSET IS IN USE whatever the walk finds: an asset body is
     // something the user named and can place later, so "nothing places it
     // right now" is not a reason to offer to bin it.
+    //
+    // This is the ONLY thing the objects are asked (QBX-315). A file in use is
+    // held by a live clip or a pinned asset, so asking about it is asking about
+    // objects that are alive BECAUSE they are in use. What is NOT in use is
+    // the opposite: its objects are garbage, and whether a DeferredDelete has
+    // reached them yet is timing. So the list itself is read from the disk.
     QSet<const SObject *> placed;
     collectPlacedContent( project, placed );
 
-    QStringList referenced;
+    QSet<QString> usedNames;
+    QList<SExternFile *> unused;
     const QHash<QString, SExternFile *> &xf = project->externFiles();
     for( auto it = xf.cbegin(); it != xf.cend(); ++it ) {
         SExternFile *f = it.value();
         if( !f ) continue;
-        const QString path = f->getFileName();
-        if( !path.isEmpty() ) referenced.append( QFileInfo( path ).fileName() );
-        if( placed.contains( f ) ) continue;
-        if( !project->assetNameOf( f ).isEmpty() ) continue;
-        out.append( { path, QStringLiteral( "no clip places it" ) } );
+        if( placed.contains( f ) || !project->assetNameOf( f ).isEmpty() ) {
+            const QString path = f->getFileName();
+            if( !path.isEmpty() ) usedNames.insert( QFileInfo( path ).fileName() );
+        } else {
+            unused.append( f );
+        }
     }
 
-    // ---- the DISK side: capture files nothing references -----------------
+    // ---- the DISK side: capture files nothing uses -----------------------
+    //
+    // TWO PLACES TO LOOK, both of them directories and paths, never objects:
+    // the project's own directory (a saved project, and one reopened), and the
+    // files this document's recorder wrote (SProject::captureFiles), which is
+    // the only way to find the captures of an UNTITLED project -- it records
+    // into Documents or a test run's output dir, and sweeping either would
+    // offer other projects' recordings. Each candidate must exist, must pass
+    // the strict capture-name test, and must not share a NAME with a file in
+    // use (by name and not by path, deliberately: a capture name carries a
+    // millisecond stamp, so a match is the same take, and when in doubt this
+    // list leaves a file off rather than offering it for the bin).
+    QStringList candidates;
     const QString dir = captureDirOf( project );
-    if( dir.isEmpty() ) return out;
-    QDir d( dir );
-    if( !d.exists() ) return out;
-    const QStringList names =
-        d.entryList( QStringList() << QStringLiteral( "*.wav" ), QDir::Files,
-                     QDir::Name );
-    for( const QString &n : names ) {
-        if( !isCaptureName( n ) ) continue;
-        if( referenced.contains( n ) ) continue;
-        out.append( { d.absoluteFilePath( n ),
-                      QStringLiteral( "a recording no clip uses" ) } );
+    if( !dir.isEmpty() ) {
+        QDir d( dir );
+        if( d.exists() ) {
+            const QStringList names =
+                d.entryList( QStringList() << QStringLiteral( "*.wav" ),
+                             QDir::Files, QDir::Name );
+            for( const QString &n : names ) candidates << d.absoluteFilePath( n );
+        }
     }
+    for( const QString &p : project->captureFiles() )
+        candidates << QFileInfo( p ).absoluteFilePath();
+
+    QSet<QString> listed;
+    QList<Orphan> disk;
+    for( const QString &abs : candidates ) {
+        const QString clean = QDir::cleanPath( abs );
+        if( listed.contains( clean ) ) continue;
+        const QFileInfo fi( clean );
+        if( !isCaptureName( fi.fileName() ) ) continue;
+        if( !fi.isFile() ) continue;
+        if( usedNames.contains( fi.fileName() ) ) continue;
+        listed.insert( clean );
+        disk.append( { clean, QStringLiteral( "a recording no clip uses" ) } );
+    }
+
+    // ---- the MODEL side: what the disk cannot see ------------------------
+    //
+    // An extern file the project still holds with nothing placing it, which
+    // the disk half did not already list: a user's own sample whose clips
+    // were all deleted, or a recording whose file has been moved away. Never
+    // a second entry for a capture the disk half found, so the count and the
+    // wording of a recording's entry do not depend on its objects.
+    for( SExternFile *f : unused ) {
+        const QString path = f->getFileName();
+        if( listed.contains( QDir::cleanPath( QFileInfo( path ).absoluteFilePath() ) ) )
+            continue;
+        out.append( { path, QStringLiteral( "no clip places it" ) } );
+    }
+    out.append( disk );
     return out;
 }
 

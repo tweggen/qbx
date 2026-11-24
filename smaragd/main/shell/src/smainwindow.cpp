@@ -1277,11 +1277,10 @@ void SMainWindow::collectExternalMedia_()
         // There is no dirty FLAG to set: hasUnsavedChanges() reads the undo
         // stack's clean marker. A collect is deliberately not an action (it
         // copies files, and no undo step can put a file system back the way it
-        // found it), so resetClean() is how a non-action change tells the
-        // window there is now something worth saving.
+        // found it), so markModified() - resetClean() - is how a non-action
+        // change tells the window there is now something worth saving.
         if( SActionHistory *hist = SApplication::app().actionHistory() )
-            if( QUndoStack *stack = hist->undoStack() )
-                stack->resetClean();
+            hist->markModified();
         updateWindowTitle();
     }
     refreshSelfContainedBanner_();
@@ -2592,6 +2591,13 @@ SMainWindow::SMainWindow()
         statusBar()->showMessage( message, 6000 );
     } );
 
+    // QBX-302: a plugin re-scan that re-attached inserts says so (the startup
+    // scan re-attaches silently and never emits this).
+    QObject::connect( &SApplication::app(), &SApplication::latePluginsReattached,
+                      this, [ this ]( const QString &notice ) {
+                          statusBar()->showMessage( notice, 10000 );
+                      } );
+
     // View menu — built here rather than in the menu block above because it
     // needs the docks to exist for their toggleViewAction()s.
     QMenu *viewMenu = new QMenu( tr( "&View" ), this );
@@ -2962,6 +2968,9 @@ QString SMainWindow::describeStatusBar()
     if( armIndicator_ ) d += QStringLiteral( "|" ) + armIndicator_->describe();
     d += QStringLiteral( "|disarmAllEnabled=%1" )
              .arg( actDisarmAll_ && actDisarmAll_->isEnabled() ? 1 : 0 );
+    // The TRANSIENT message on the left (QBX-302: the late-plugin notice),
+    // APPENDED LAST for the same reason as every field before it.
+    d += QStringLiteral( "|message=%1" ).arg( statusBar()->currentMessage() );
     return d;
 }
 

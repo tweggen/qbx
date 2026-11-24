@@ -26,6 +26,25 @@
  *
  * It is a TEST verb and not a fix: production pumps its own event loop. Use it
  * only where a case's claim is about an object's LIFETIME.
+ *
+ * `quiesce="1"` (QBX-315) first waits, bounded by `timeoutMs` (default 5000),
+ * until the project's revalidator holds NO PIN: no reval job in flight and
+ * none queued. A pinned SObject SWALLOWS its DeferredDelete (SObject::event)
+ * and only the last unpin re-arms it, so without this the drain frees the
+ * objects in one run and leaks them in the next, whichever way the worker
+ * pool happened to be. With it the objects are freed every time, which is
+ * what lets a gate that depends on their being GONE fail deterministically.
+ * A timeout is a refusal, never a silent drain over a pinned graph.
+ *
+ * `collect="1"` (QBX-315, implies `quiesce`) then deletes every extern file
+ * the project holds at REFCOUNT ZERO. That is the deletion the model already
+ * asked for and Qt 6.11 dropped: a DeferredDelete that SObject::event()
+ * swallowed (a resurrection, or a pin) sets Qt's once-only deleteLater flag,
+ * so when the count reaches zero again the re-armed deleteLater() is a silent
+ * no-op and the object leaks until teardown (QBX-306's measurement). Whether
+ * an undone recording's SPlainWave leaks or dies depended on the ORDER the
+ * drain met it and the cut holding it; this makes it die every time, which is
+ * the state the live app reaches when the order goes the other way.
  */
 class SDrainPendingDeletesAction : public SAction
 {
@@ -34,9 +53,16 @@ public:
     SApplyResult apply( SProject *project ) override;
     QString name() const override
     { return QStringLiteral( "drain-pending-deletes" ); }
-    QStringList knownAttributes() const override { return {}; }
+    QStringList knownAttributes() const override
+    { return { QStringLiteral( "quiesce" ), QStringLiteral( "collect" ),
+             QStringLiteral( "timeoutMs" ) }; }
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    bool quiesce_   = false;
+    bool collect_   = false;
+    int  timeoutMs_ = 5000;
 };
 
 #endif // _SDRAINPENDINGDELETESACTION_H_

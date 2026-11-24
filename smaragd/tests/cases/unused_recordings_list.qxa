@@ -16,15 +16,34 @@
   act on, so a second implementation of "which files are orphans" is exactly
   what would let the display and the sweep disagree.
 
-  THE SCAN HAS TWO SOURCES and this case exercises the MODEL one. An extern
-  file the project still holds with no placements is an orphan seen from the
-  model side; a capture file in the project's own directory that no extern
-  file references is the same thing seen from disk. A scripted run has no
+  THE SCAN HAS TWO SOURCES and this case exercises the DISK one (QBX-315).
+  A capture file nothing places is found on DISK: in the project's own
+  directory, and among the files this document's recorder wrote
+  (SProject::captureFiles, paths rather than objects). A scripted run has no
   project directory (the project is untitled, and the recorder writes into the
-  test output dir instead), so the disk half has nothing to scan here and the
-  model half is what answers. That is not a gap in the scan — it is what the
-  disk half is FOR, a project saved and reopened, which no headless case
-  reaches.
+  test output dir instead), so the recorder's own list is what answers here.
+  The MODEL half, an extern file the project still holds with no placements,
+  is the same thing seen from the objects; for a capture the disk half has
+  already listed it is not listed twice.
+
+  WHY THE DISK AND NOT THE OBJECTS (convention
+  unused-recordings-independent-of-lifetime). Until QBX-315 this case read
+  the model half: the extern file stayed in the project after the undo, with
+  nothing placing it. But it stayed only because nothing had DELETED it. With
+  a plain drain the recording's SPlainWave died in 1 run of 11 (QBX-306's log)
+  and leaked in the rest: whether its DeferredDelete met it before or after
+  the cut holding it was freed decided it, and on Qt 6.11 a swallowed
+  deleteLater is never re-armed. So the case drains with `collect="1"`: it
+  waits until the revalidator holds no pin, delivers the deletes, and frees
+  the extern files left at refcount zero, which is the state the live app
+  reaches when the order goes the other way. The list must still hold the WAV.
+
+  The take is asserted ONCE BEFORE the drain too, with its objects alive: the
+  model half then also sees the file, and the entry must not be listed twice
+  or read differently. Measured with main's scan and the drain seam: 10
+  failures in 10 (here the entry reads "no clip places it"; with that
+  assertion left out, the count after the drain is 0, also 10 in 10). With
+  the fix: 10 passes in 10.
 
   WHAT IS NOT EXERCISED: `files="1"`, i.e. actually moving a file to the OS
   trash. Doing that inside a parallel suite is not something a case may do. The
@@ -67,7 +86,14 @@
     <undo count="1"/>
     <assert-clip-window clip="0,0" expectReject="true"/>
 
-    <assert-unused-recordings count="1" contains="no clip places it"/>
+    <!-- WITH THE OBJECTS STILL ALIVE: one entry, the disk's, not two. -->
+    <assert-unused-recordings count="1" contains="a recording no clip uses"/>
+
+    <!-- FREE WHAT THE UNDO RELEASED, every run (see the header). After this
+         the recording's model objects are gone, and the WAV is not. -->
+    <drain-pending-deletes collect="1"/>
+
+    <assert-unused-recordings count="1" contains="a recording no clip uses"/>
     <!-- The entry names the FILE, so the dock can offer it. -->
     <assert-unused-recordings contains="_track0.wav"/>
 
@@ -75,6 +101,10 @@
          model right now, not a log of things that once happened. -->
     <redo count="1"/>
     <assert-clip-window clip="0,0"/>
+    <assert-unused-recordings count="0"/>
+    <!-- ...and stays off it once the redo's own leftovers are collected: a
+         placed recording is never listed, whatever objects are alive. -->
+    <drain-pending-deletes collect="1"/>
     <assert-unused-recordings count="0"/>
   </actions>
 

@@ -1418,3 +1418,24 @@ different views of the same type.
     runs it down the broken path and watches it NOT duck. AU keeps the
     default (55 §7). Fixtures: `tw.test.clap.duck` and VST3 `TestDuck`, the
     keyed hard gate of proposal 55 §5.
+
+69. **"STATE CHANGED, NOT A PARAMETER" IS REPORTED THROUGH EACH FORMAT'S OWN
+    STANDARD CALLBACK, AND DRAINED BY THE EDITOR POLL (QBX-313).** A plugin
+    whose saved per-instance state changes without a parameter moving
+    (NassauEQ's analyzer mode) says so the standard way, and the host hears it
+    for every plugin that does: VST3 `IComponentHandler2::setDirty(true)` --
+    `twVst3ComponentHandler` is ALSO the plugin's `IComponentHandler2`, one
+    object and one reference count, listed in `IPlugInterfaceSupport` -- and
+    CLAP `clap_host_state::mark_dirty()`, the host now vending
+    `clap.host-state`. Both only RECORD an atomic, like every other host
+    callback here, and `twEditorFeedback::stateDirty` carries it out of the
+    next `poll()`. A VST3 `setDirty` raised from inside a call the host made
+    (`setState` above all: a plugin answering a project load) is not reported,
+    by the same window as inv. 53's restarts; `setDirty(false)` reports
+    nothing, because only the host's own save decides "clean". A mark made
+    while no window is open is kept until one opens -- late, not lost -- since
+    the poll is the only drain. AU has no such callback at all, and this
+    engine has no AU editor. The VST3 handler is gated by `vst3_host_test`;
+    the CLAP route end to end, through `tw.test.clap.dirty`, by
+    `qxa.plugin_state_dirty_marks_modified`. `twVst3Editor::poll()`'s one line
+    copying the flag has no headless gate (no VST3 fixture has a view).
