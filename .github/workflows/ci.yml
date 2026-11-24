@@ -15,10 +15,11 @@ jobs:
   # ---------------------------------------------------------------------------
   static:
     name: Static checkers
-    runs-on: ubuntu-latest
+    # Pinned, like build-and-test below and for the same reason (QBX-309).
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: ./ci/gates.sh --static
 
   # ---------------------------------------------------------------------------
@@ -33,14 +34,23 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-test:
     name: Build + ctest (Linux)
-    runs-on: ubuntu-latest
+    # PINNED, not ubuntu-latest (QBX-309). The image decides the gate: the apt
+    # packages below, Qt above all, come from it, and docs/LINUX_GATE.md is a
+    # measurement of one image. ubuntu-latest moved from 24.04 to 26.04 between
+    # 2026-11-05 and 2026-11-06 and took Qt from 6.4.2 to 6.10.2 with nothing in
+    # any diff to say so. 26.04 is what it ran then, so this pin changes nothing.
+    # MOVE IT FORWARD DELIBERATELY: a commit of its own that bumps both jobs,
+    # with a green run and a re-measured LINUX_GATE.md, so a red run can be
+    # bisected to it. A pin nobody moves rots the other way, until the image
+    # is retired under it.
+    runs-on: ubuntu-26.04
     # A green run takes 14-19 min (15 runs measured 2026-11-06). Without a limit
     # a runner-side stall waits for GitHub's 6 h default: on 2026-11-05 #351's
     # `apt-get update` hung on the Azure mirror and the job sat for 6 h 0 m
     # before turning red, having built nothing. 60 min is three green runs.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # smaragd/third_party/{clap,vst3_pluginterfaces}. Without them the
           # build succeeds but SILENTLY DROPS plugin hosting and the plugin_*
