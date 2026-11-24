@@ -384,6 +384,21 @@ std::vector<twPluginDescriptor> twPluginRegistry::plugins() const
     return plugins_;
 }
 
+void twPluginRegistry::publishScannedForTest( const twPluginDescriptor &desc )
+{
+    std::lock_guard<std::mutex> g( mutex_ );
+    // Seed first, as findByUid() does: a list published before the seed would
+    // otherwise be non-empty WITHOUT the built-ins, and they must resolve.
+    if( plugins_.empty() ) appendBuiltins_nolock();
+    for( twPluginDescriptor &d : plugins_ ) {
+        if( d.format == desc.format && d.uid == desc.uid ) {
+            d = desc;
+            return;
+        }
+    }
+    plugins_.push_back( desc );
+}
+
 bool twPluginRegistry::findByUid( const std::string &format, const std::string &uid,
                                   twPluginDescriptor &out ) const
 {

@@ -35,6 +35,21 @@ Invariants:
    pluginReloaded(). Any editor showing that slot's parameters must re-read
    them on that signal. It is NOT an action: it mutates no document state (a
    re-save produces the same bytes), so there is nothing to undo.
+
+   **The app also runs it unasked, after a scan (QBX-302, thinktank convention
+   `late-plugin-reattach`).** The startup scan runs in the background next to
+   the default project's load, so a plugin it has not reached yet loads as a
+   Missing placeholder. `SApplication::pluginScanFinished` is answered by
+   `SApplication::reattachLatePlugins()`, which walks every track of every root
+   (send and master lanes included) and calls
+   `SPluginSlot::reattachIfAvailable()`: `reloadPlugin()` for a slot that is
+   Missing AND whose (format, uid) the registry now resolves, nothing for any
+   other. The STARTUP scan does it silently; any LATER scan (the options
+   dialog's re-scan) also emits `latePluginsReattached(notice)`, which the main
+   window shows as a status message ("1 plugin insert became available and was
+   re-attached"), counting only the inserts THAT scan re-attached. Same rule as
+   the button: not an action, so the undo stack and the modified flag are left
+   alone. Gate: `qxa.plugin_late_reattach`, through `simulate-plugin-scan`.
 6. An edit is inaudible unless the slot is told. A cache sits in front of the
    plugin — the slot's single twPluginInsert's frozen pages (before proposal 36
    B4 there were two, because the processor also kept an all-bus page cache for

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_late_reattach">
+
+  <!-- QBX-302 (thinktank convention late-plugin-reattach): a plugin the open
+       project names becomes available only AFTER the project loaded, because
+       the plugin scan runs in the background next to the startup load (and
+       likewise after a re-scan from the options dialog). Its inserts were
+       loaded as Missing placeholders and stayed that way.
+
+       The author's decision, which this case pins:
+         * the FIRST scan after startup re-attaches them silently;
+         * any LATER re-scan re-attaches them AND says so in the status line;
+         * either way the insert keeps the state chunk it was loaded with.
+
+       THE FIXTURE ../plugin_late_reattach.qxp has ONE track and TWO inserts,
+       both in-repo CLAP fixtures saved with path='' so that NOTHING but the
+       registry can resolve them, exactly as for a plugin a scan has not found
+       yet:
+
+         slot 0  tw.test.clap.stereoskew  state: gain 2.0
+         slot 1  tw.test.clap.gain        state: gain 1.5
+
+       Each chunk is the host's own envelope (magic TWCP, version 1) around the
+       fixture's two doubles (gain, report), exactly what a save writes; a bare
+       blob is refused as "foreign magic" and would test nothing.
+
+       simulate-plugin-scan is the seam for "the scan finished and found
+       these": it joins any real scan in flight, marks the scan started with
+       the given origin through the SAME bookkeeping SApplication's own scan
+       start uses, publishes the descriptors into the registry, and then runs
+       SApplication's own finish poll, which emits pluginScanFinished.
+
+       The sawtooth renders unprocessed at RMS ~0.0667 over its first second.
+       Channel 0 of the skew is 1.5 x gain of its (mono-fed) input; the gain
+       fixture multiplies by its gain. So, on channel 0:
+
+           0.0667   both Missing (the placeholders copy their input)
+           0.100    skew attached but its state LOST (gain 1)
+           0.200    skew attached with its state (gain 2), gain still Missing
+                    – or gain attached with its state LOST (gain 1)
+           0.300    both attached, both states restored (3 x 1.5 = 4.5 x)
+
+       Every band below excludes every other level. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../plugin_late_reattach.qxp"/>
+
+    <!-- Not yet scanned: both inserts are placeholders. -->
+    <assert-plugin-strip trackPath="0" slotIndex="0" contains="state=Missing"/>
+    <assert-plugin-strip trackPath="0" slotIndex="1" contains="state=Missing"/>
+
+    <render filename="plr_missing.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="plr_missing.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.060" maxRms="0.073"/>
+
+    <!-- A clean point. The re-attach is a REPAIR of a load that ran too early,
+         not a user edit: it must leave the project unmodified (and the undo
+         stack untouched) – see the convention and the PR. -->
+    <save-project path="../../build/plugin_late_reattach_a.qxp"/>
+    <assert-unsaved-changes expect="0"/>
+
+    <!-- 1. THE FIRST SCAN AFTER STARTUP finds the skew. -->
+    <simulate-plugin-scan origin="startup">
+      <plugin format="clap" uid="tw.test.clap.stereoskew"
+              name="Smaragd Test Stereo Skew" vendor="Smaragd"
+              path="twtestclap.clap" nIn="2" nOut="2"/>
+    </simulate-plugin-scan>
+
+    <assert-plugin-strip trackPath="0" slotIndex="0" contains="state=Active"/>
+    <assert-plugin-strip trackPath="0" slotIndex="1" contains="state=Missing"/>
+
+    <!-- Its saved state came with it: gain 2, not the default 1. -->
+    <render filename="plr_startup.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="plr_startup.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.185" maxRms="0.215"/>
+
+    <!-- ...and SILENTLY: no notice on the startup scan. -->
+    <assert-status-bar absent="re-attached"/>
+    <assert-unsaved-changes expect="0"/>
+
+    <!-- 2. A LATER RE-SCAN finds the gain fixture. -->
+    <simulate-plugin-scan origin="rescan">
+      <plugin format="clap" uid="tw.test.clap.gain"
+              name="Smaragd Test Gain" vendor="Smaragd"
+              path="twtestclap.clap" nIn="2" nOut="2"/>
+    </simulate-plugin-scan>
+
+    <assert-plugin-strip trackPath="0" slotIndex="0" contains="state=Active"/>
+    <assert-plugin-strip trackPath="0" slotIndex="1" contains="state=Active"/>
+
+    <render filename="plr_rescan.wav" format="wav" quality="10" durationSec="1.5"/>
+    <assert-audio-energy filename="plr_rescan.wav"
+                         startFrame="0" frameCount="48000"
+                         channel="0" minRms="0.285" maxRms="0.315"/>
+
+    <!-- This time the user is told, and the count is the inserts THIS scan
+         re-attached: the skew, re-attached by the startup scan, is not
+         counted again. -->
+    <assert-status-bar contains="message=1 plugin insert became available and was re-attached"/>
+    <assert-unsaved-changes expect="0"/>
+
+    <!-- The live plugins now hand back the very chunks the file carried. -->
+    <save-project path="../../build/plugin_late_reattach_b.qxp"/>
+    <assert-file-contains path="../../build/plugin_late_reattach_b.qxp"
+                          text="VFdDUAEAAAAAAAAAAAAAQAAAAAAAAAAA"/>
+    <assert-file-contains path="../../build/plugin_late_reattach_b.qxp"
+                          text="VFdDUAEAAAAAAAAAAAD4PwAAAAAAAAAA"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

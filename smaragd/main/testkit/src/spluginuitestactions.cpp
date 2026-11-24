@@ -22,6 +22,7 @@
 // edge for assert-media-options). Restoring the browser's remembered format
 // below must name the same key the dialog writes, not a second copy of it.
 #include "app/servicesui/soptions.h"
+#include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
 #include "app/shell/ssettings.h"
 
@@ -34,6 +35,7 @@
 #include <QWidget>
 
 #include <QDebug>
+#include <QDomDocument>
 #include <QDomElement>
 #include <memory>
 
@@ -1068,4 +1070,71 @@ static const bool s_reg_pluginrowcommand =
     ( SActionRegistry::instance().registerType(
           QStringLiteral( "plugin-row-command" ),
           [] { return new SPluginRowCommandAction; } ),
+      true );
+
+// --- simulate-plugin-scan (QBX-302) -----------------------------------------
+
+SApplyResult SSimulatePluginScanAction::apply( SProject * /*project*/ )
+{
+    if( origin_ != QLatin1String( "startup" ) && origin_ != QLatin1String( "rescan" ) ) {
+        qWarning() << "simulate-plugin-scan: origin must be startup or rescan, not"
+                   << origin_;
+        return { false, nullptr };
+    }
+    QList<SApplication::ScannedPluginForTest> found;
+    for( const Found &f : found_ ) {
+        SApplication::ScannedPluginForTest p;
+        p.format = f.format; p.uid = f.uid; p.name = f.name; p.vendor = f.vendor;
+        p.path = f.path; p.nIn = f.nIn; p.nOut = f.nOut;
+        p.isInstrument = f.isInstrument;
+        found.append( p );
+    }
+    SApplication::app().simulatePluginScanForTest(
+        origin_ == QLatin1String( "startup" ), found );
+    return { true, nullptr };
+}
+
+void SSimulatePluginScanAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "origin", origin_ );
+    QDomDocument doc = elem.ownerDocument();
+    for( const Found &f : found_ ) {
+        QDomElement c = doc.createElement( "plugin" );
+        c.setAttribute( "format", f.format );
+        c.setAttribute( "uid", f.uid );
+        c.setAttribute( "name", f.name );
+        c.setAttribute( "vendor", f.vendor );
+        c.setAttribute( "path", f.path );
+        c.setAttribute( "nIn", f.nIn );
+        c.setAttribute( "nOut", f.nOut );
+        c.setAttribute( "isInstrument", f.isInstrument ? "true" : "false" );
+        elem.appendChild( c );
+    }
+}
+
+bool SSimulatePluginScanAction::readXml( const QDomElement &elem, int /*version*/ )
+{
+    origin_ = elem.attribute( "origin", "rescan" );
+    found_.clear();
+    for( QDomElement c = elem.firstChildElement( "plugin" ); !c.isNull();
+         c = c.nextSiblingElement( "plugin" ) ) {
+        Found f;
+        f.format = c.attribute( "format" );
+        f.uid    = c.attribute( "uid" );
+        f.name   = c.attribute( "name" );
+        f.vendor = c.attribute( "vendor" );
+        f.path   = c.attribute( "path" );
+        f.nIn    = c.attribute( "nIn", "2" ).toInt();
+        f.nOut   = c.attribute( "nOut", "2" ).toInt();
+        f.isInstrument = c.attribute( "isInstrument", "false" ) == QLatin1String( "true" );
+        if( f.uid.isEmpty() ) return false;
+        found_.append( f );
+    }
+    return true;
+}
+
+static const bool s_reg_simulatepluginscan =
+    ( SActionRegistry::instance().registerType(
+          QStringLiteral( "simulate-plugin-scan" ),
+          [] { return new SSimulatePluginScanAction; } ),
       true );

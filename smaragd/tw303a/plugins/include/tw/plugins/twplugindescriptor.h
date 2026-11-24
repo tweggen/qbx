@@ -251,6 +251,14 @@ public:
     using BuiltinFactory = std::function<std::unique_ptr<twPlugin>()>;
     void registerBuiltin( const twPluginDescriptor &desc, BuiltinFactory factory );
 
+    // TEST SEAM (QBX-302): make `desc` appear in the list exactly as a finished
+    // scan's publish would make it appear -- replace the (format, uid) row in
+    // place, else append -- without walking any directory. It is how a .qxa
+    // states "the background scan has now found this plugin" for an in-repo
+    // fixture that no search path holds. Not a built-in: the next real scan
+    // replaces the list and drops it, as it would drop anything uninstalled.
+    void publishScannedForTest( const twPluginDescriptor &desc );
+
 private:
     void appendBuiltins_nolock();
 
