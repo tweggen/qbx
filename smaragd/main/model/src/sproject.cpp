@@ -515,6 +515,33 @@ QList<QString> SProject::assetNames() const
     return assetDict_.keys();
 }
 
+// --- Loaded orphans (QBX-314) ---------------------------------------------
+//
+// The pin the asset and arrangement registries take, for the objects no
+// registry names: a clip the file holds and nothing in the file places.
+// See the header and model/CONTRACT.md "Loaded orphans".
+
+void SProject::pinLoadedOrphan( SObject *obj )
+{
+    if( !obj ) return;
+    for( const QPointer<SObject> &p : loadedOrphans_ ) {
+        if( p == obj ) return;          // one pin per object, never two
+    }
+    obj->addRef();
+    loadedOrphans_.append( QPointer<SObject>( obj ) );
+}
+
+void SProject::clearLoadedOrphans()
+{
+    // Taken by value and cleared first: a removeRef() that reaches zero only
+    // schedules the deletion, but nothing below may see a half-cleared list.
+    QList<QPointer<SObject> > pins;
+    pins.swap( loadedOrphans_ );
+    for( const QPointer<SObject> &p : pins ) {
+        if( p ) p->removeRef();
+    }
+}
+
 // --- Arrangement registry (proposal 09 D3) --------------------------------
 //
 // Mirrors the asset registry above, including the pin, for the reason given in
@@ -722,6 +749,12 @@ SProject::~SProject()
             if( body ) body->removeRef();
         }
     }
+
+    // The loaded-orphan pins (QBX-314) go the same way: held here they make
+    // every orphan look permanently referenced, so the cascade below would
+    // skip it and the survivor pass would hard-delete it with a warning.
+    // Dropped, an orphan is a zero-count child like any other.
+    clearLoadedOrphans();
 
     // The arrangement pins go the same way, and for the same reason: held here
     // they make a whole detached root look permanently referenced, so the

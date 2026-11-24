@@ -4,6 +4,7 @@
 #include <QDomDocument>
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <functional>
 #include "app/model/slink.h"
 
@@ -113,6 +114,9 @@ private:
      */
     bool pruneUnresolvable_( QDomElement &docElem );
     SObjectDictionary objectDict_;
+    // Ids of the loaded elements registered as SElementKind::Window -- the
+    // CLIPS. createObjects() pins the unplaced ones in the project (QBX-314).
+    QSet<QString> windowIds_;
     QList<std::function<void()> > deferredResolvers_;
     SProject &project_;
     QString name_;

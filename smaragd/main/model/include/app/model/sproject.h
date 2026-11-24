@@ -12,6 +12,7 @@
 #include <QList>
 #include <QStringList>
 #include <QVector>
+#include <QPointer>
 
 #include <cstdint>
 #include <vector>
@@ -252,6 +253,29 @@ public:
     // only under a FREE name) comes back UNNAMED -- measured, QBX-266: a
     // sampler's asset link read back fine but named no asset.
     void clearAssets();
+
+    // --- LOADED ORPHANS (QBX-314, convention orphan-clips-survive-load) ----
+    // An ORPHAN is a clip the file describes that nothing in the file places,
+    // and through it whatever only that clip windows (a missing-media
+    // placeholder, say). The loader's temporary handle links
+    // are its only references, so when ~SProjectLoader drops them its count
+    // reaches zero and the next turn of the event loop deletes it -- and the
+    // next save drops it. The author's rule is that an orphan survives load
+    // and save EXACTLY AS WRITTEN, so the project holds one reference to each.
+    //
+    // WHO PINS: SProjectLoader::createObjects(), once every object, link and
+    // deferred resolver exists, for every loaded CLIP (an element registered
+    // as SElementKind::Window) whose ONLY reference is still the loader's
+    // handle. Nothing else calls pinLoadedOrphan().
+    // WHAT RELEASES: clearLoadedOrphans(), which a LOAD calls (it loads INTO
+    // this project, so the previous document's orphans must not be inherited),
+    // and ~SProject, before its refcount cascade. Placing an orphan does NOT
+    // release it -- see model/CONTRACT.md "Loaded orphans" for why.
+    // The list is weak (QPointer) only so that a teardown can never removeRef
+    // through a dangling pointer; while pinned an orphan's count is >= 1 and
+    // nothing deletes it.
+    void pinLoadedOrphan( SObject *obj );
+    void clearLoadedOrphans();
 
     // --- Arrangement registry (proposal 09 D3) ---------------------------
     // An ARRANGEMENT is a named summing root that is NOT the project's master
@@ -538,6 +562,8 @@ private:
     QVector<MissingFile> missingFiles_;
     QHash<QString,SObject*> assetDict_;
     QHash<QString,SObject*> arrangementDict_;
+    // See pinLoadedOrphan(). One reference per entry, taken with addRef().
+    QList<QPointer<SObject> > loadedOrphans_;
     // Runtime only, never saved — see the SoloScope block above.
     SoloScope soloScope_ = SoloScope::Global;
 
