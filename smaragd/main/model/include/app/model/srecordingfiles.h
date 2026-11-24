@@ -56,14 +56,28 @@ struct Orphan {
 /**
  * CAPTURE FILES AND EXTERN FILES THIS PROJECT DOES NOT USE.
  *
- * Two sources, deliberately both (plan 53 §6.3's step 4):
+ * READ FROM THE DISK, compared against what is PLACED (QBX-315; convention
+ * unused-recordings-independent-of-lifetime). An undone take's WAV is listed
+ * whether or not its model objects are still alive: once nothing places them
+ * they are garbage, and whether a DeferredDelete has reached them yet is
+ * timing, so the list may not be asked of them. Two sources:
  *
- *  - a capture file in the project's own directory that NO `SExternFile` in
- *    the project references. That is a press whose take was undone, or was
- *    refused by every armed lane, or a project saved without it;
- *  - an `SExternFile` the project still holds with NO PLACEMENTS, which is not
- *    a registered asset. That is the same thing seen from the model side, and
- *    it catches a recording whose file the user has already moved away.
+ *  - the DISK: a file that passes isCaptureName(), exists, and shares its name
+ *    with no extern file a clip places or an asset registers. Candidates are
+ *    the project's own directory (a saved project) and the files this
+ *    document's recorder wrote (SProject::captureFiles -- the only way to find
+ *    an UNTITLED project's captures without sweeping a shared directory such
+ *    as Documents, which holds other projects' recordings). A press whose take
+ *    was undone, refused by every armed lane, or a project saved without it;
+ *  - the MODEL: an `SExternFile` the project still holds with NO PLACEMENTS,
+ *    which is not a registered asset, and which the disk half did not already
+ *    list. That catches what the disk cannot see: a user's own sample whose
+ *    clips are all gone, or a recording whose file was moved away. A capture
+ *    is never listed twice, so its entry reads the same either way.
+ *
+ * A PLACED RECORDING IS NEVER LISTED: being placed is the one question asked
+ * of the objects, and a placed file's objects are alive because a clip holds
+ * them.
  *
  * READ-ONLY. It removes nothing and touches nothing -- which is what lets the
  * dock and the clean-up share it, and what makes the COUNT gateable while the

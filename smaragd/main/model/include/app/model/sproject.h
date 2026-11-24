@@ -408,6 +408,25 @@ public:
     const QHash<QString,SExternFile*> &externFiles() const { return externFileDict_; }
     const QHash<QString,SObject*> &assets() const { return assetDict_; }
 
+    // ---- THE CAPTURE FILES THIS DOCUMENT'S RECORDER WROTE (QBX-315) ------
+    //
+    // PATHS, NOT OBJECTS. The Unused recordings scan (srecfiles::scanUnused)
+    // must list an undone take's WAV whatever became of its model objects: a
+    // DeferredDelete that frees the extern file must not take the recording
+    // off the list (convention unused-recordings-independent-of-lifetime). The
+    // project's own directory covers a SAVED project, but an untitled one has
+    // no directory and records elsewhere (Documents, or a test run's output
+    // dir), so the recorder notes here every file it starts writing and the
+    // scan reads the DISK for them.
+    //
+    // Session-only, never saved: a reopened project's captures are found
+    // through its directory. A load drops the list with the arrangements, for
+    // clearArrangements()'s reason -- it belongs to the document being closed.
+    void noteCaptureFile( const QString &path )
+    { if( !path.isEmpty() && !captureFiles_.contains( path ) ) captureFiles_.append( path ); }
+    const QStringList &captureFiles() const { return captureFiles_; }
+    void forgetCaptureFiles() { captureFiles_.clear(); }
+
     // ---- A LOAD'S MISSING EXTERNAL FILES -------------------------------
     //
     // A sample that will not load must NOT take the arrangement down with it.
@@ -542,6 +561,9 @@ private:
     SoloScope soloScope_ = SoloScope::Global;
 
     bool isPartialLoad_ = false;  // True if load failed partway through
+
+    // Runtime only, never saved -- see noteCaptureFile().
+    QStringList captureFiles_;
 
     // Invalidation suppression counter (for project loading).
     // When > 0, invalidateAspects() returns early without scheduling revalidation.
