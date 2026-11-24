@@ -1211,6 +1211,11 @@ SActionHistory *SApplication::actionHistory() const
     return actionHistory_;
 }
 
+void SApplication::markProjectModified()
+{
+    if( SActionHistory *hist = actionHistory() ) hist->markModified();
+}
+
 void SApplication::beginRecordCommit()
 {
     // Arms the scope and opens NOTHING. See the header: an empty Qt macro is

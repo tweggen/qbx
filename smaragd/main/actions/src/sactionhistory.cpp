@@ -162,3 +162,8 @@ QUndoStack *SActionHistory::undoStack() const
 {
     return undoStack_;
 }
+
+void SActionHistory::markModified()
+{
+    if (undoStack_) undoStack_->resetClean();
+}

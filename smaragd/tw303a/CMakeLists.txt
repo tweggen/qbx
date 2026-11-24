@@ -1235,6 +1235,17 @@ if(TARGET twtestvst3)
     target_compile_definitions(plugins_test PRIVATE
         TW_TESTVST3_PATH="$<TARGET_FILE:twtestvst3>")
 endif()
+# QBX-313: the VST3 host objects, driven directly - IComponentHandler2::setDirty
+# is offered, reported, and filtered inside a host-initiated call. Needs the
+# backend's private header and the SDK's (private) include path, as vst3_probe
+# does; vst3_probe exists exactly when the VST3 backend is built.
+if(TARGET vst3_probe)
+    tw_module_test(vst3_host_test plugins/tests/vst3_host_test.cc tw_plugins)
+    target_include_directories(vst3_host_test PRIVATE
+        ${TW_VST3_INC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/src)
+    set_target_properties(vst3_host_test PROPERTIES AUTOMOC OFF)
+endif()
 # The scanner/cache gate (proposal 08 M2): cache hit / miss / invalidate-on-mtime,
 # the stickiness of a failed record, and the out-of-process probe. It needs
 # plugins/src on its include path for the cache's private header, and both the

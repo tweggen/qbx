@@ -1277,11 +1277,10 @@ void SMainWindow::collectExternalMedia_()
         // There is no dirty FLAG to set: hasUnsavedChanges() reads the undo
         // stack's clean marker. A collect is deliberately not an action (it
         // copies files, and no undo step can put a file system back the way it
-        // found it), so resetClean() is how a non-action change tells the
-        // window there is now something worth saving.
+        // found it), so markModified() - resetClean() - is how a non-action
+        // change tells the window there is now something worth saving.
         if( SActionHistory *hist = SApplication::app().actionHistory() )
-            if( QUndoStack *stack = hist->undoStack() )
-                stack->resetClean();
+            hist->markModified();
         updateWindowTitle();
     }
     refreshSelfContainedBanner_();

@@ -177,13 +177,22 @@ struct twEditorFeedback
     // plugin.
     bool closeRequested = false;
 
+    // The plugin says state the host SAVES for it changed, and no parameter did
+    // (VST3 IComponentHandler2::setDirty(true), CLAP clap_host_state::
+    // mark_dirty()): a NassauEQ analyzer mode, a plugin's own preset browser.
+    // The host marks its project modified, with no undo step - the plugin owns
+    // that state and the host has nothing to put back (QBX-313). Coalesced:
+    // any number of marks since the previous poll are one.
+    bool stateDirty = false;
+
     // Ordered, gesture-bracketed. May be empty. A Begin without an End is
     // legal and normal — the user is still holding the control.
     std::vector<twEditorParamEdit> edits;
 
     bool empty() const
     {
-        return !resized && !restartRequested && !closeRequested && edits.empty();
+        return !resized && !restartRequested && !closeRequested && !stateDirty &&
+               edits.empty();
     }
 };
 

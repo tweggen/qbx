@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SActionScript version="1" name="plugin_state_dirty_marks_modified">
+
+  <!-- A PLUGIN THAT SAYS ITS STATE CHANGED MARKS THE PROJECT MODIFIED (QBX-313).
+
+       The author decided on 2026-11-24 (thinktank convention
+       plugin-ui-state-marks-modified): a change to a plugin's saved
+       per-instance UI state marks the host project modified, like any other
+       state change. The case it comes from is NassauEQ's analyzer strip: a
+       click sets the analyzer mode, which is saved with the instance and is
+       NOT a parameter, so no set-plugin-param ever reaches the undo stack. A
+       project whose only edit was that click closed with no save prompt, and
+       the mode was lost.
+
+       A plugin tells its host through the format's STANDARD callback, which
+       is what the host listens to here, so every plugin that uses it gains
+       this, not only Nassau's: CLAP clap_host_state::mark_dirty(), VST3
+       IComponentHandler2::setDirty(true). Both are drained by the native
+       editor's poll, the only place a plugin's GUI is heard from, and both
+       mark the project modified WITHOUT an undo step - there is nothing to
+       undo, the plugin owns the state - exactly as Collect Media does
+       (QUndoStack::resetClean()).
+
+       THE FIXTURE IS tw.test.clap.dirty: tw.test.clap.gui whose show() calls
+       mark_dirty() and turns no knob (twtestclap.c), so a parameter edit
+       cannot stand in for what is measured. The CONTROL is
+       tw.test.clap.reopen, a window that opens and changes nothing: without
+       it the case would also pass on a host that marked the project modified
+       whenever a plugin window opened.
+
+       This gates the CLAP half end to end. The VST3 half has no headless
+       editor (twtestvst3.cpp's createView returns nullptr), so its handler is
+       gated in plugins_test instead: IComponentHandler2 is offered, setDirty
+       is reported, and a setDirty from inside a call the host made is not.
+
+       Watched failing on main: the first expect="1" below read clean, because
+       the host vended no clap.host-state and the fixture could tell nobody. -->
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <add-track index="-1"/>
+
+    <!-- Track 0: the control. Track 1: the plugin that marks its state. -->
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.reopen"
+                   name="Smaragd Test Reopen" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <insert-plugin trackPath="1" slotIndex="0"
+                   format="clap" uid="tw.test.clap.dirty"
+                   name="Smaragd Test Dirty" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <assert-plugin-editor-kind trackIndex="1" slotIndex="0" expect="native"/>
+
+    <!-- A saved project: nothing to save. Four entries are on the stack (two
+         add-track, two insert-plugin); the save adds none. -->
+    <save-project path="../../build/plugin_state_dirty_marks_modified.qxp"/>
+    <assert-unsaved-changes expect="0" undoEntries="4"/>
+
+    <!-- 1. THE CONTROL. A plugin window that opens and changes nothing leaves
+         the project as it was. -->
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="open" expectOpen="1"/>
+    <wait-ms ms="300"/>
+    <assert-unsaved-changes expect="0" undoEntries="4"/>
+    <plugin-native-editor trackIndex="0" slotIndex="0" action="close" expectOpen="0"/>
+    <assert-unsaved-changes expect="0" undoEntries="4"/>
+
+    <!-- 2. THE GATE. The fixture's window marks its state dirty when shown;
+         the next poll (30 Hz) hears it. The project is modified, and the
+         stack holds exactly what it held: no undo step was made. -->
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="open" expectOpen="1"/>
+    <wait-ms ms="300"/>
+    <!-- The window of an assert-log is the records since the PREVIOUS action
+         started, so it goes right after the wait the poll ran in. -->
+    <assert-log contains="plugin marked its state dirty" minCount="1"/>
+    <assert-unsaved-changes expect="1" undoEntries="4"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="close" expectOpen="0"/>
+
+    <!-- 3. A save clears it, and the mark is no one-shot: the next one dirties
+         the project again. -->
+    <save-project path="../../build/plugin_state_dirty_marks_modified.qxp"/>
+    <assert-unsaved-changes expect="0" undoEntries="4"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="open" expectOpen="1"/>
+    <wait-ms ms="300"/>
+    <assert-unsaved-changes expect="1" undoEntries="4"/>
+    <plugin-native-editor trackIndex="1" slotIndex="0" action="close" expectOpen="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+</SActionScript>

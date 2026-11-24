@@ -193,6 +193,9 @@ private:
     static void          hostParamsClear( const clap_host_t *, clap_id, clap_param_clear_flags );
     static void          hostParamsRequestFlush( const clap_host_t * );
     static void          hostTailChanged( const clap_host_t * );
+    // clap.host-state (QBX-313): "state you save for me changed, and no
+    // parameter did". Recorded like the others; guiDrain() reports it.
+    static void          hostStateMarkDirty( const clap_host_t * );
 
     // clap.gui (proposal 33 M6). Every one of these is annotated [thread-safe]
     // in gui.h, which is exactly why they only touch ATOMICS: the plugin may
@@ -252,6 +255,7 @@ private:
     static const clap_host_params_t     s_hostParams;
     static const clap_host_tail_t       s_hostTail;
     static const clap_host_gui_t        s_hostGui;
+    static const clap_host_state_t      s_hostState;
 
     twPluginIoLayout io_{};
     std::string      uid_, path_;
@@ -342,6 +346,9 @@ private:
     // graph: the audio/worker side must never reach into component wiring, and
     // twComponent is not a QObject, so there is no signal to emit either.
     std::atomic<bool> restartRequested_{ false };
+    // Set by clap_host_state::mark_dirty(); taken by guiDrain(). A mark made
+    // while no window is open stays set until one is: late, but not lost.
+    std::atomic<bool> stateDirty_{ false };
     std::atomic<bool> processRequested_{ false };
     std::atomic<bool> callbackRequested_{ false };
 
@@ -405,6 +412,10 @@ const clap_host_tail_t twClapPlugin::s_hostTail = {
     &twClapPlugin::hostTailChanged,
 };
 
+const clap_host_state_t twClapPlugin::s_hostState = {
+    &twClapPlugin::hostStateMarkDirty,
+};
+
 const clap_host_gui_t twClapPlugin::s_hostGui = {
     &twClapPlugin::hostGuiResizeHintsChanged,
     &twClapPlugin::hostGuiRequestResize,
@@ -427,6 +438,8 @@ const void *twClapPlugin::hostGetExtension( const clap_host_t *, const char *id 
         return &s_hostParams;
     if( std::strcmp( id, CLAP_EXT_TAIL ) == 0 )
         return &s_hostTail;
+    if( std::strcmp( id, CLAP_EXT_STATE ) == 0 )
+        return &s_hostState;
     // clap.gui is vended UNCONDITIONALLY, not only while a window is open: a
     // plugin caches host extension pointers at init() (the spec allows it to,
     // and most do), so answering "no" now and "yes" later would leave it
@@ -547,6 +560,14 @@ void twClapPlugin::hostGuiClosed( const clap_host_t *h, bool wasDestroyed )
     if( wasDestroyed )
         self->guiDestroyedByPlugin_.store( true, std::memory_order_release );
     self->guiCloseRequested_.store( true, std::memory_order_release );
+}
+
+void twClapPlugin::hostStateMarkDirty( const clap_host_t *h )
+{
+    // [main-thread] by annotation, but only an atomic is touched, so a plugin
+    // that calls it from elsewhere is merely early, not a race.
+    if( h && h->host_data )
+        ( (twClapPlugin *)h->host_data )->stateDirty_.store( true, std::memory_order_release );
 }
 
 void twClapPlugin::hostTailChanged( const clap_host_t * )
@@ -1290,6 +1311,7 @@ twEditorFeedback twClapPlugin::guiDrain( bool &guiWasDestroyed )
     }
     if( restartRequested_.exchange( false, std::memory_order_acq_rel ) )
         fb.restartRequested = true;
+    fb.stateDirty = stateDirty_.exchange( false, std::memory_order_acq_rel );
 
     // try_lock, never lock: a render may be in flight, and a GUI poll that
     // blocked on it would freeze the plugin's window for the length of a page

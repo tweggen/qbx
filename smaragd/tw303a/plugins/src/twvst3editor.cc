@@ -279,6 +279,10 @@ twEditorFeedback twVst3Editor::poll()
     if( flags & ~(int32)Vst::kParamValuesChanged )
         fb.restartRequested = true;
 
+    // 4. IComponentHandler2::setDirty(true): saved state that is not a
+    // parameter changed (QBX-313). The host marks its project modified.
+    fb.stateDirty = handler_->takeDirtyFlag();
+
     return fb;
 }
 

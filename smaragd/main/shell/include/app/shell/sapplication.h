@@ -203,6 +203,9 @@ public:
     offset_t recordingStartFrame() const { return recordingStartFrame_; }
     void setRecordingStartFrame( offset_t f ) { recordingStartFrame_ = f; }
     SActionHistory *actionHistory() const;
+    // The project changed by something that is not an action, so it makes no
+    // undo step: SActionHistory::markModified() (QBX-313).
+    void markProjectModified();
     void submitAction(SAction *action);
 
     audio::RenderSession *renderSession() const;

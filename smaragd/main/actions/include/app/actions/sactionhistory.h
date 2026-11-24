@@ -44,6 +44,16 @@ public:
     // Access to the undo stack (for binding to UI, QUndoView, etc.).
     QUndoStack *undoStack() const;
 
+    // Mark the project MODIFIED by a change that is not an action, so it has
+    // no undo step: the stack's clean marker is dropped (QUndoStack::
+    // resetClean()) and only the next save sets it again. The unsaved-changes
+    // prompt reads that marker and nothing else, so this is the one way a
+    // non-action change asks for a save. Callers: Collect Media (it copies
+    // files, which no undo can put back) and a plugin reporting that state it
+    // owns changed (QBX-313: VST3 setDirty, CLAP mark_dirty) - the plugin
+    // holds that state, so the host has nothing to restore.
+    void markModified();
+
     // Total actions whose apply() returned failure since construction. The test
     // runner samples this around each submit to detect rejected actions (e.g. a
     // failed assert-audio-energy), which previously vanished silently.
