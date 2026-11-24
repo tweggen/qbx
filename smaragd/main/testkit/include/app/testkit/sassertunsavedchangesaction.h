@@ -15,7 +15,11 @@
  * assertion would have read `expect="1"` forever after the first edit, no
  * matter how many times `<save-project>` ran.
  *
- *   expect = "1"   1 = unsaved changes are pending; 0 = the stack is clean
+ *   expect      = "1"   1 = unsaved changes are pending; 0 = the stack is clean
+ *   undoEntries = "-1"  >= 0 also asserts QUndoStack::count(), the number of
+ *                       entries on the stack (QBX-313: a change that marks the
+ *                       project modified WITHOUT an undo step must leave this
+ *                       where it was)
  */
 class SAssertUnsavedChangesAction : public SAction
 {
@@ -25,12 +29,13 @@ public:
     QString name() const override
     { return QStringLiteral( "assert-unsaved-changes" ); }
     QStringList knownAttributes() const override
-    { return { QStringLiteral( "expect" ) }; }
+    { return { QStringLiteral( "expect" ), QStringLiteral( "undoEntries" ) }; }
     void writeXml( QDomElement &elem ) const override;
     bool readXml( const QDomElement &elem, int version ) override;
 
 private:
-    int expect_ = 1;
+    int expect_      = 1;
+    int undoEntries_ = -1;
 };
 
 #endif // _SASSERTUNSAVEDCHANGESACTION_H_

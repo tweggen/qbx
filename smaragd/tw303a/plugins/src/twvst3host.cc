@@ -229,6 +229,7 @@ tresult PLUGIN_API twVst3PlugInterfaceSupport::isPlugInterfaceSupported( const T
     // interface we do not answer is how a host earns a crash inside the plugin,
     // so the default is no.
     if( FUnknownPrivate::iidEqual( _iid, Vst::IComponentHandler::iid ) ||
+        FUnknownPrivate::iidEqual( _iid, Vst::IComponentHandler2::iid ) ||   // QBX-313
         FUnknownPrivate::iidEqual( _iid, Vst::IHostApplication::iid ) ||
         FUnknownPrivate::iidEqual( _iid, Vst::IAttributeList::iid ) ||
         FUnknownPrivate::iidEqual( _iid, Vst::IMessage::iid ) ||
@@ -295,7 +296,25 @@ tresult PLUGIN_API twVst3HostApplication::createInstance( TUID cid, TUID _iid, v
 
 tresult PLUGIN_API twVst3ComponentHandler::queryInterface( const TUID _iid, void **obj )
 {
+    // IComponentHandler2 first, because it is the leg resolveOne() cannot
+    // reach: its pointer is a different base subobject of this object.
+    if( obj && FUnknownPrivate::iidEqual( _iid, Vst::IComponentHandler2::iid ) ) {
+        *obj = static_cast<Vst::IComponentHandler2 *>( this );
+        addRef();
+        return kResultOk;
+    }
     return resolveOne( _iid, obj, Vst::IComponentHandler::iid );
+}
+
+tresult PLUGIN_API twVst3ComponentHandler::setDirty( TBool state )
+{
+    if( !state ) return kResultOk;
+    if( inHostCallHere() ) {
+        TW_LOGD( "plugins", "[vst3] setDirty inside a host-initiated call; not reported" );
+        return kResultOk;
+    }
+    dirty_.store( true, std::memory_order_release );
+    return kResultOk;
 }
 
 // The three gesture callbacks all funnel here (proposal 33 M2). RECORDING, not

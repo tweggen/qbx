@@ -54,6 +54,7 @@ DEF_CLASS_IID( Vst::IConnectionPoint )
 // find IComponentHandler cannot report parameter edits at all.
 DEF_CLASS_IID( Vst::IHostApplication )
 DEF_CLASS_IID( Vst::IComponentHandler )
+DEF_CLASS_IID( Vst::IComponentHandler2 )
 DEF_CLASS_IID( Vst::IPlugInterfaceSupport )
 
 // --- objects passed across the boundary in both directions ------------------

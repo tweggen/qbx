@@ -553,6 +553,26 @@ seen declining the rest) and deliberately not the SYMPTOM: on a 4-second
 sawtooth through one arithmetic-only plugin the freeze outruns the loop and the
 playhead advances even with the guard disabled.
 
+## A plugin's own state change marks the project modified, with no undo step (QBX-313)
+
+The author decided on 2026-11-24 (thinktank convention
+plugin-ui-state-marks-modified): a change to a plugin's saved per-instance UI
+state marks the host project modified, like any other state change. When the
+poll reports `twEditorFeedback::stateDirty` (VST3 `setDirty`, CLAP
+`mark_dirty`; `tw303a/plugins/CONTRACT.md` inv. 69), `SPluginNativeEditor::
+onPoll()` logs `native editor: plugin marked its state dirty` and calls
+`SActionHistory::markModified()` -- `QUndoStack::resetClean()`, the route
+Collect Media already took. NOT an action: the plugin owns that state, so an
+undo entry would undo nothing, and the unsaved-changes prompt reads the
+stack's clean marker and nothing else. It runs before the close check, so a
+mark made in the poll where a plugin also closed its own window still counts.
+
+Gated by `qxa.plugin_state_dirty_marks_modified`: a control window that
+changes nothing leaves a saved project clean, the `tw.test.clap.dirty` window
+makes it modified with the undo stack's entry count unchanged
+(`assert-unsaved-changes undoEntries=`), and after a save the next mark
+modifies it again.
+
 ## The native editor window is never parented to the FX strip (fixed 2026-08-23)
 
 `SPluginNativeEditor`'s own header comment already said the window must not be

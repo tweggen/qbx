@@ -253,17 +253,50 @@ private:
 // plugin's UI thread, and reaching into the graph from it would violate the
 // no-Qt-off-the-main-thread rule this repo has already been bitten by. The
 // backend polls the flags.
+//
+// It is ALSO the plugin's IComponentHandler2 (QBX-313), for one call: setDirty,
+// the VST3 way of saying "state you save for me changed, and no parameter did".
+// Both interfaces are one object with one reference count, which is what the
+// spec asks of an interface obtained through queryInterface.
 class twVst3ComponentHandler final
-    : public twVst3Borrowed<Steinberg::Vst::IComponentHandler> {
+    : public twVst3Borrowed<Steinberg::Vst::IComponentHandler>
+    , public Steinberg::Vst::IComponentHandler2 {
 public:
     Steinberg::tresult PLUGIN_API queryInterface( const Steinberg::TUID _iid,
                                                   void **obj ) override;
+    // One count for both legs: these override IComponentHandler2's as well.
+    Steinberg::uint32 PLUGIN_API addRef() override
+    { return twVst3Borrowed<Steinberg::Vst::IComponentHandler>::addRef(); }
+    Steinberg::uint32 PLUGIN_API release() override
+    { return twVst3Borrowed<Steinberg::Vst::IComponentHandler>::release(); }
 
     Steinberg::tresult PLUGIN_API beginEdit( Steinberg::Vst::ParamID id ) override;
     Steinberg::tresult PLUGIN_API performEdit( Steinberg::Vst::ParamID id,
                                                Steinberg::Vst::ParamValue v ) override;
     Steinberg::tresult PLUGIN_API endEdit( Steinberg::Vst::ParamID id ) override;
     Steinberg::tresult PLUGIN_API restartComponent( Steinberg::int32 flags ) override;
+
+    // --- IComponentHandler2 (QBX-313) ----------------------------------------
+    //
+    // setDirty(true) is RECORDED, as everything here is, and drained by the
+    // editor's poll into twEditorFeedback::stateDirty; the host marks its
+    // project modified from there. setDirty(false) is a plugin saying it is
+    // clean, which only the host's own save decides, so it records nothing.
+    // A setDirty raised from inside a call the HOST made (setState above all:
+    // a plugin answering a project load) is not news either, by the same
+    // window that filters restartComponent.
+    Steinberg::tresult PLUGIN_API setDirty( Steinberg::TBool state ) override;
+    // No editor of ours can be opened from here (the app owns windows), and no
+    // group of edits is treated differently from its members: the host's own
+    // undo coalescing is SSetPluginParamAction::mergeWith. Honest answers,
+    // not errors - iPlug2 brackets DirtyParametersFromUI() in a group edit.
+    Steinberg::tresult PLUGIN_API requestOpenEditor( Steinberg::FIDString ) override
+    { return Steinberg::kNotImplemented; }
+    Steinberg::tresult PLUGIN_API startGroupEdit() override { return Steinberg::kResultOk; }
+    Steinberg::tresult PLUGIN_API finishGroupEdit() override { return Steinberg::kResultOk; }
+
+    // Set by setDirty(true) since the last call; cleared. Main thread.
+    bool takeDirtyFlag() { return dirty_.exchange( false, std::memory_order_acq_rel ); }
 
     // Set when the plugin changed a parameter behind our back; the backend
     // refreshes its mirror on the next main-thread touch.
@@ -347,6 +380,7 @@ private:
 
     std::atomic<bool> edited_{ false };
     std::atomic<bool> restart_{ false };
+    std::atomic<bool> dirty_{ false };
 
     // The thread currently inside a host-initiated call, as a hash (0 = none),
     // and how deep it is nested. Only that thread writes the depth.

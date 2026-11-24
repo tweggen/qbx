@@ -807,6 +807,18 @@ void SPluginNativeEditor::onPoll()
 
     if( fb.resized ) resizeToPlugin( fb.newSize );
 
+    // The plugin says state it saves changed and no parameter did (VST3
+    // setDirty, CLAP mark_dirty): the project is modified, with no undo step -
+    // the plugin owns that state, and there is nothing for the host to put
+    // back (QBX-313, thinktank convention plugin-ui-state-marks-modified). Before
+    // the close below, which returns: a mark made just before a plugin closed
+    // its own window is still a change.
+    if( fb.stateDirty ) {
+        TW_LOGI( "pluginui", "native editor: plugin marked its state dirty; "
+                 "project modified" );
+        SApplication::app().markProjectModified();
+    }
+
     if( fb.closeRequested ) {
         close();
         return;

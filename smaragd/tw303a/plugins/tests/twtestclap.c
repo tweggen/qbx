@@ -11,7 +11,7 @@
  * It is written in C on purpose: a C DLL has no libstdc++/libgcc import, so it
  * loads regardless of where the test binary runs from or what is on PATH.
  *
- * ELEVEN entry points:
+ * TWELVE entry points:
  *
  *   tw.test.clap.gain         2 in / 2 out effect     (M1)
  *   tw.test.clap.stereoskew   2 in / 2 out effect     (M3)
@@ -24,6 +24,7 @@
  *   tw.test.clap.monosplit    split with every port MONO                 (55 M2)
  *   tw.test.clap.duck         stereo in + stereo SIDECHAIN in / stereo out (55 M3)
  *   tw.test.clap.splittail    split whose main out is a DECAYING ENVELOPE  (QBX-264)
+ *   tw.test.clap.dirty        gui whose show() calls clap_host_state::mark_dirty (QBX-313)
  *
  * --- tw.test.clap.duck (proposal 55 §5, M3) ------------------------------------
  *
@@ -193,6 +194,7 @@
 #define TW_TESTCLAP_GUI_ID  "tw.test.clap.gui"
 #define TW_TESTCLAP_RESTART_ID "tw.test.clap.restart"
 #define TW_TESTCLAP_REOPEN_ID  "tw.test.clap.reopen"
+#define TW_TESTCLAP_DIRTY_ID   "tw.test.clap.dirty"
 #define TW_TESTCLAP_SPLIT_ID   "tw.test.clap.split"
 #define TW_TESTCLAP_MONOSPLIT_ID "tw.test.clap.monosplit"
 #define TW_TESTCLAP_DUCK_ID    "tw.test.clap.duck"
@@ -423,6 +425,27 @@ static const clap_plugin_descriptor_t s_desc_reopen = {
    .features     = s_features,
 };
 
+/* tw.test.clap.dirty (QBX-313) - the GUI fixture that, when its window is
+ * shown, changes state the host saves and that is NOT a parameter, and says so
+ * the standard CLAP way: clap_host_state::mark_dirty(). That is NassauEQ's
+ * analyzer strip reduced to what a host can observe - a click that sets the
+ * analyzer mode moves no parameter, so the host hears of it only through this
+ * call. show() turns no knob, for the same reason tw.test.clap.restart's does
+ * not: a parameter edit would make the project modified on its own, and the
+ * case built on this fixture has to leave exactly one thing to measure. */
+static const clap_plugin_descriptor_t s_desc_dirty = {
+   .clap_version = CLAP_VERSION_INIT,
+   .id           = TW_TESTCLAP_DIRTY_ID,
+   .name         = "Smaragd Test Dirty",
+   .vendor       = "Smaragd",
+   .url          = "https://github.com/tweggen/qbx",
+   .manual_url   = "",
+   .support_url  = "",
+   .version      = "1.0.0",
+   .description  = "Test fixture: windowless GUI that marks its state dirty when shown",
+   .features     = s_features,
+};
+
 static const clap_plugin_descriptor_t s_desc_arp = {
    .clap_version = CLAP_VERSION_INIT,
    .id           = TW_TESTCLAP_ARP_ID,
@@ -497,6 +520,9 @@ typedef struct {
    /* tw.test.clap.reopen: get_size() answers 0x0 once set_parent() has been
     * called more than once on this instance. See the descriptor. */
    int      zeroOnReattach;
+   /* tw.test.clap.dirty: show() calls clap_host_state::mark_dirty(). See the
+    * descriptor. */
+   int      marksDirtyOnShow;
    int      guiAttaches;
    int      guiCreated;
    int      guiFloating;
@@ -1728,6 +1754,19 @@ static bool tc_gui_show( const clap_plugin_t *p )
    if( self->restartsOnReset || self->zeroOnReattach )
       return true;
 
+   /* tw.test.clap.dirty: state the host saves changed, and no parameter did.
+    * A host that does not vend clap.host-state cannot be told, which is what
+    * the case built on this fixture sees on a host without the extension. */
+   if( self->marksDirtyOnShow ) {
+      if( self->host && self->host->get_extension ) {
+         const clap_host_state_t *hs =
+            (const clap_host_state_t *)self->host->get_extension( self->host, CLAP_EXT_STATE );
+         if( hs && hs->mark_dirty )
+            hs->mark_dirty( self->host );
+      }
+      return true;
+   }
+
    /* Stand in for the user turning the Gain knob. The value is applied
     * INTERNALLY first, exactly as a real plugin does - its DSP follows its own
     * GUI without asking the host - and only then offered to the host. */
@@ -1799,7 +1838,7 @@ static void tc_on_main_thread( const clap_plugin_t *p )
 static uint32_t tc_factory_count( const clap_plugin_factory_t *f )
 {
    (void)f;
-   return 11;
+   return 12;
 }
 
 static const clap_plugin_descriptor_t *
@@ -1817,6 +1856,7 @@ tc_factory_descriptor( const clap_plugin_factory_t *f, uint32_t index )
    if( index == 8 ) return &s_desc_monosplit;
    if( index == 9 ) return &s_desc_duck;
    if( index == 10 ) return &s_desc_splittail;
+   if( index == 11 ) return &s_desc_dirty;
    return NULL;
 }
 
@@ -1850,6 +1890,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    /* And REOPEN is GUI with a size that goes missing. */
    else if( !strcmp( id, TW_TESTCLAP_REOPEN_ID ) )
                                                  { kind = TW_KIND_GAIN; desc = &s_desc_reopen; }
+   /* And DIRTY is GUI that marks its state dirty when shown. */
+   else if( !strcmp( id, TW_TESTCLAP_DIRTY_ID ) )
+                                                 { kind = TW_KIND_GAIN; desc = &s_desc_dirty; }
    else                                          { return NULL; }
 
    tw_testclap_t *self = (tw_testclap_t *)calloc( 1, sizeof( tw_testclap_t ) );
@@ -1867,8 +1910,9 @@ static const clap_plugin_t *tc_factory_create( const clap_plugin_factory_t *f,
    self->active     = 0;
    self->restartsOnReset = !strcmp( id, TW_TESTCLAP_RESTART_ID );
    self->zeroOnReattach = !strcmp( id, TW_TESTCLAP_REOPEN_ID );
+   self->marksDirtyOnShow = !strcmp( id, TW_TESTCLAP_DIRTY_ID );
    self->hasGui     = !strcmp( id, TW_TESTCLAP_GUI_ID ) || self->restartsOnReset ||
-                      self->zeroOnReattach;
+                      self->zeroOnReattach || self->marksDirtyOnShow;
    self->guiScale   = 1.0;
    self->monoPorts  = !strcmp( id, TW_TESTCLAP_MONOSPLIT_ID );
    self->tailMain   = !strcmp( id, TW_TESTCLAP_SPLITTAIL_ID );
