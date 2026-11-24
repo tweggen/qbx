@@ -542,6 +542,14 @@ signals:
      * SUPERSET of "the arm set changed": hence "may". A consumer recomputes
      * and must assume nothing moved.
      *
+     * A SOLO FLIP raises it too (QBX-307: SProject::soloSetChanged and
+     * soloTopologyChanged are wired to liveLanesChanged() in
+     * setCurrentProject), because which unarmed lanes the live plan reads as
+     * frozen inputs depends on solo. That widens "may" further: a solo flip
+     * usually moves no arm and often no plan membership at all -- the arm
+     * set never changes on it -- and refreshPlan_()'s `sameSet` path turns
+     * such a call into a cheap republish.
+     *
      * It invalidates nothing and re-wires nothing -- SLiveMonitor::refresh()
      * has already done that work by the time this is emitted. The only
      * consumers are readers, the status bar's record-arm badge first.

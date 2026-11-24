@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 
+#include <QStringList>
 #include <QTimer>
 
 #include "app/model/slink.h"
@@ -1723,5 +1724,56 @@ QString SLiveMonitor::describe() const
     if( !lastRefusal_.isEmpty() ) s += QStringLiteral( " refused='%1'" ).arg( lastRefusal_ );
     // APPENDED (QBX-291): how many loaded arms are still inert (design D9).
     s += QStringLiteral( " inert=%1" ).arg( inertlyArmed_.size() );
+    return s;
+}
+
+namespace {
+// Lane name for a frozen input, by root component. Walks every lane of one
+// root; a nested lane is found because the walk descends into child tracks.
+const STrack *laneOwningComponent( SObject *node, const twComponent *c )
+{
+    if( !node || !c ) return nullptr;
+    for( SLink *lk : node->childLinks() ) {
+        if( !lk ) continue;
+        STrack *t = dynamic_cast<STrack *>( &lk->getSObject() );
+        if( !t ) continue;
+        if( t->getRootComponent().get() == c ) return t;
+        if( const STrack *inner = laneOwningComponent( t, c ) ) return inner;
+    }
+    return nullptr;
+}
+}  // namespace
+
+QString SLiveMonitor::describePlan() const
+{
+    std::shared_ptr<const twLivePlan> plan = pump_ ? pump_->plan() : nullptr;
+    if( !plan ) return QStringLiteral( "plan=none" );
+    auto nameOf = [this]( const std::shared_ptr<twComponent> &c ) -> QString {
+        if( const STrack *t = laneOwningComponent( rootMixer(), c.get() ) )
+            return t->getSName();
+        for( const auto &a : arrangementMixers() )
+            if( const STrack *t = laneOwningComponent( a.second, c.get() ) )
+                return t->getSName();
+        return QStringLiteral( "?" );
+    };
+    QString s = QStringLiteral( "plan=%1" ).arg( plan->tracks.size() );
+    for( const twLiveTrackPlan &tp : plan->tracks ) {
+        QStringList live, frozen;
+        for( int i : tp.liveChildren )
+            live << ( i >= 0 && i < (int) plan->tracks.size()
+                          ? QString::fromStdString( plan->tracks[i].name )
+                          : QStringLiteral( "?" ) );
+        for( const std::shared_ptr<twComponent> &c : tp.frozenInputs )
+            frozen << nameOf( c );
+        s += QStringLiteral( " [%1 live=%2 frozen=%3]" )
+                 .arg( QString::fromStdString( tp.name ) )
+                 .arg( live.join( ',' ) )
+                 .arg( frozen.join( ',' ) );
+    }
+    const int out = plan->outputTrack;
+    s += QStringLiteral( " out=%1" )
+             .arg( out >= 0 && out < (int) plan->tracks.size()
+                       ? QString::fromStdString( plan->tracks[out].name )
+                       : QStringLiteral( "none" ) );
     return s;
 }

@@ -2660,3 +2660,36 @@ delivered, which is what `drain-pending-deletes` exists for.)
   project is armed so the reopen's second `setCurrentProject` does emit
   `skipsChanged`. ASan was not run for this ticket; the poisoned-heap variant
   is the memory evidence.
+
+## inv. 73 — a SOLO flip is a live-plan rebuild trigger (QBX-307)
+
+`SLivePlanBuilder` asks `ssolo::isLaneAudible` which unarmed lanes a live
+folder (or, under Closure, the master node) reads as **frozen inputs**, so the
+plan's membership is a function of the solo topology, and the plan is a
+snapshot. The mixers hear a solo (`applyAudibility`) but the pump does not sum
+through them: it sums the frozen inputs it was handed. Before this, nothing
+rebuilt the plan on a solo, so a sibling a solo had just silenced went on
+sounding through the ring until an unrelated arm, option, transport or load
+rebuilt it.
+
+`SApplication::setCurrentProject` connects BOTH `SProject::soloSetChanged`
+(a flag moved, in either scope; the only one raised in `arrangement` scope)
+and `SProject::soloTopologyChanged` (also the SCOPE changing, where no flag
+moved) to `liveLanesChanged()`. Neither covers the other; in `global` scope a
+flip raises both and the second rebuild takes the `sameSet` republish path.
+
+Gate: `solo_rebuilds_live_plan` reads the PUBLISHED plan through
+`assert-live-plan` (`SLiveMonitor::describePlan()`, off `LiveGraphPump::plan()`).
+Measured on main `c9b7a256`: every post-flip stage still read
+`[F live=Arm frozen=A,B]`. Sabotaged: removing the soloSetChanged wire fails
+section 4 (arrangement scope) only; removing the soloTopologyChanged wire fails
+section 5 (scope flip) only; a seam that recomputes audibility instead of
+reading the pump PASSES on the unfixed build, which is why the seam reads the
+pump.
+
+Not covered, and measured open: a MUTE on a frozen sibling (`set-track-mute
+trackPath="0,0" muted="1"` in the same shape) also leaves the published plan at
+`frozen=A,B` — `isLaneAudible` reads `isMuted()` too, and nothing on a mute
+rebuilds the plan (`planSignature()` asks only closure members and the master
+lane). Whether that is audible depends on whether the muted lane's root page
+goes silent on its own, which was not measured here; it is a separate ticket.

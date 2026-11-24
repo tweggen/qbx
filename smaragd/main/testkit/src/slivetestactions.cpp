@@ -444,6 +444,48 @@ bool SAssertInputMeterAction::readXml( const QDomElement &elem, int )
     return true;
 }
 
+// --- assert-live-plan -------------------------------------------------------
+
+QStringList SAssertLivePlanAction::knownAttributes() const
+{
+    return { QStringLiteral( "contains" ), QStringLiteral( "absent" ) };
+}
+
+SApplyResult SAssertLivePlanAction::apply( SProject * )
+{
+    SLiveMonitor *mon = SApplication::app().liveMonitor();
+    if( !mon ) {
+        qWarning() << "assert-live-plan: no live monitor";
+        return { false, nullptr };
+    }
+    const QString desc = mon->describePlan();
+    bool ok = true;
+    if( !contains_.isEmpty() && !desc.contains( contains_ ) ) {
+        qWarning() << "assert-live-plan: plan" << desc << "does not contain" << contains_;
+        ok = false;
+    }
+    if( !absent_.isEmpty() && desc.contains( absent_ ) ) {
+        qWarning() << "assert-live-plan: plan" << desc << "contains" << absent_;
+        ok = false;
+    }
+    if( !ok ) return { false, nullptr };
+    qDebug() << "assert-live-plan:" << desc;
+    return { true, nullptr };
+}
+
+void SAssertLivePlanAction::writeXml( QDomElement &elem ) const
+{
+    if( !contains_.isEmpty() ) elem.setAttribute( "contains", contains_ );
+    if( !absent_.isEmpty() )   elem.setAttribute( "absent", absent_ );
+}
+
+bool SAssertLivePlanAction::readXml( const QDomElement &elem, int )
+{
+    contains_ = elem.attribute( "contains", "" );
+    absent_   = elem.attribute( "absent", "" );
+    return true;
+}
+
 // --- assert-audio-onset -----------------------------------------------------
 
 QStringList SAssertAudioOnsetAction::knownAttributes() const
@@ -874,6 +916,9 @@ static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-input-meter" ),
         []{ return new SAssertInputMeterAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-live-plan" ),
+        []{ return new SAssertLivePlanAction; } ),
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-audio-onset" ),
         []{ return new SAssertAudioOnsetAction; } ),
