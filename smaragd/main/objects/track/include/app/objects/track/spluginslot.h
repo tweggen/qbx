@@ -141,6 +141,15 @@ public:
     // reaches twPlugin::prepare()); M5 owns the per-slot "Reload" affordance.
     bool reloadPlugin();
 
+    // QBX-302: reloadPlugin() for a slot that NEEDS it -- one loaded as a
+    // Missing placeholder whose (format, uid) the registry now resolves,
+    // because a scan finished after the project loaded. Anything else (an
+    // Active slot, an Unsupported one, a plugin still not found) is left alone,
+    // so a finished scan re-instantiates and re-renders nothing it need not.
+    // The saved state chunk is re-applied by reloadPlugin(). Returns true when
+    // the slot was re-attached and is Active now. UI thread only.
+    bool reattachIfAvailable();
+
     // Bypass control
     void setBypass( bool bypass );
     bool getBypass() const { return bypass_; }

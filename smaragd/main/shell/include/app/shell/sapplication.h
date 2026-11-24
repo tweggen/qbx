@@ -512,6 +512,45 @@ public:
     // "N plugins, M modules scanned (K cached, S skipped)" for the options page.
     QString pluginScanStatusText() const;
 
+    // --- late plugins (QBX-302, convention late-plugin-reattach) -----------
+    // A scan that finishes AFTER a project loaded may find plugins that the
+    // project's inserts name: those were loaded as Missing placeholders. When
+    // pluginScanFinished fires, every such insert of the current project whose
+    // (format, uid) the registry now resolves is re-attached in place, with
+    // the state chunk it was loaded with (SPluginSlot::reattachIfAvailable).
+    //
+    //   * the STARTUP scan (initPluginRegistry's) re-attaches SILENTLY;
+    //   * any LATER scan (rescanPlugins, i.e. the options dialog) re-attaches
+    //     and announces it: latePluginsReattached(notice) carries the status
+    //     line, which SMainWindow shows.
+    //
+    // NOT AN ACTION and not a modification: nothing the user did changed, the
+    // descriptor and the chunk are untouched and a re-save is byte-identical.
+    // It is the strip's Reload button run for every insert at once, and that
+    // button is deliberately not an action for the same reason.
+    //
+    // Returns the number of inserts this call re-attached.
+    int reattachLatePlugins( bool announce );
+    // The status line for `n` re-attached inserts (n > 0).
+    static QString latePluginNotice( int n );
+
+    // TEST SEAM for simulate-plugin-scan: "a scan with this origin ran and
+    // found these plugins". It joins any real scan still in flight (whose
+    // publish would otherwise replace the list afterwards), marks the scan
+    // started through the SAME bookkeeping a real start uses
+    // (noteScanStarted_), publishes the descriptors as a scan's publish would
+    // (twPluginRegistry::publishScannedForTest, each `path` resolved like a
+    // project's module path) and then runs the REAL finish poll,
+    // pumpPluginScan(), which emits pluginScanFinished. Testkit has no edge to
+    // tw/plugins, hence the app-typed struct.
+    struct ScannedPluginForTest {
+        QString format, uid, name, vendor, path;
+        int     nIn = 2, nOut = 2;
+        bool    isInstrument = false;
+    };
+    void simulatePluginScanForTest( bool startup,
+                                    const QList<ScannedPluginForTest> &found );
+
     // Proposal 37 P6: the Touch/Latch/Write recorder. One per app, because a
     // pass is a transport-wide thing and only one control can be held at a
     // time; it lives here rather than in a view because BOTH the arranger's
@@ -552,6 +591,9 @@ signals:
     // signal from a worker thread makes Qt adopt it, and the adopted thread's
     // TLS cleanup deadlocks the teardown join.
     void pluginScanFinished();
+    // A LATER scan (not the startup one) re-attached inserts whose plugin it
+    // found (QBX-302); `notice` is the status line to show.
+    void latePluginsReattached( const QString &notice );
 
     // Proposal 34 — one tick for EVERY meter in the app, ~30 Hz.
     //   pos    is already LATENCY-COMPENSATED (see meterLatencyFrames): it is the
@@ -710,6 +752,14 @@ private:
 
     QTimer *locatorTimer_ = nullptr;  // drives the playhead repaint while playing
     QTimer *pluginScanTimer_ = nullptr;  // polls the background plugin scan
+    // QBX-302: whether the scan in flight (or last started) is the one
+    // initPluginRegistry started. Set ONLY when a scan really started --
+    // rescanAsync() refuses a second scan while one runs, and a refused
+    // re-scan must not relabel the startup scan it could not replace.
+    bool pluginScanIsStartup_ = false;
+    void startPluginScan_( bool force, bool startup );
+    void noteScanStarted_( bool startup ) { pluginScanIsStartup_ = startup; }
+    void onPluginScanFinished_();
     QTimer *meterTimer_ = nullptr;    // drives meterTick (proposal 34)
     // The count-in / pre-roll sequencer (proposal 21 L5). A 5 ms poll rather
     // than a single-shot QTimer of the count-in's DURATION: the count-in ends

@@ -2592,6 +2592,13 @@ SMainWindow::SMainWindow()
         statusBar()->showMessage( message, 6000 );
     } );
 
+    // QBX-302: a plugin re-scan that re-attached inserts says so (the startup
+    // scan re-attaches silently and never emits this).
+    QObject::connect( &SApplication::app(), &SApplication::latePluginsReattached,
+                      this, [ this ]( const QString &notice ) {
+                          statusBar()->showMessage( notice, 10000 );
+                      } );
+
     // View menu — built here rather than in the menu block above because it
     // needs the docks to exist for their toggleViewAction()s.
     QMenu *viewMenu = new QMenu( tr( "&View" ), this );
@@ -2962,6 +2969,9 @@ QString SMainWindow::describeStatusBar()
     if( armIndicator_ ) d += QStringLiteral( "|" ) + armIndicator_->describe();
     d += QStringLiteral( "|disarmAllEnabled=%1" )
              .arg( actDisarmAll_ && actDisarmAll_->isEnabled() ? 1 : 0 );
+    // The TRANSIENT message on the left (QBX-302: the late-plugin notice),
+    // APPENDED LAST for the same reason as every field before it.
+    d += QStringLiteral( "|message=%1" ).arg( statusBar()->currentMessage() );
     return d;
 }
 

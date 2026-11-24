@@ -32,6 +32,12 @@
 #include "app/shell/sapplication.h"
 #include <QUndoStack>
 #include "app/model/sproject.h"
+#include "app/model/splacements.h"
+#include "app/objects/mixer/sstdmixer.h"
+#include "app/objects/track/strack.h"
+#include "app/objects/track/spluginchain.h"
+#include "app/objects/track/spluginslot.h"
+#include <QSet>
 #include "app/model/sprojectprops.h"
 #include "app/shell/ssettings.h"
 #include "app/shell/smidiinputhub.h"
@@ -803,8 +809,12 @@ void SApplication::initPluginRegistry()
     pluginScanTimer_ = new QTimer( this );
     pluginScanTimer_->setInterval( 200 );
     connect( pluginScanTimer_, &QTimer::timeout, this, &SApplication::pumpPluginScan );
+    // QBX-302: a scan that finishes after the project loaded re-attaches the
+    // inserts it found a plugin for.
+    connect( this, &SApplication::pluginScanFinished,
+             this, &SApplication::onPluginScanFinished_ );
 
-    if( s.pluginScanOnStartup() ) rescanPlugins( false );
+    if( s.pluginScanOnStartup() ) startPluginScan_( false, /*startup*/ true );
 }
 
 void SApplication::pushPluginSearchPaths()
@@ -819,10 +829,105 @@ void SApplication::pushPluginSearchPaths()
 
 void SApplication::rescanPlugins( bool force )
 {
+    startPluginScan_( force, /*startup*/ false );
+}
+
+void SApplication::startPluginScan_( bool force, bool startup )
+{
     // Re-read the list first: the options dialog may have just changed it.
     pushPluginSearchPaths();
-    if( audio::pluginRegistry().rescanAsync( force ) && pluginScanTimer_ )
-        pluginScanTimer_->start();
+    if( !audio::pluginRegistry().rescanAsync( force ) ) return;
+    noteScanStarted_( startup );
+    if( pluginScanTimer_ ) pluginScanTimer_->start();
+}
+
+namespace {
+// Every STrack of every root the project holds: the master tree, each
+// arrangement, and the lanes a mixer keeps OUTSIDE its child links (its send
+// lanes and its master lane). Depth-first, folders included.
+void collectTracks( SObject *o, QList<STrack *> &out, QSet<SObject *> &seen )
+{
+    if( !o || seen.contains( o ) ) return;
+    seen.insert( o );
+    if( STrack *t = dynamic_cast<STrack *>( o ) ) out.append( t );
+    if( SStdMixer *m = dynamic_cast<SStdMixer *>( o ) ) {
+        for( STrack *lane : m->sendLanes() ) collectTracks( lane, out, seen );
+        collectTracks( m->masterLane(), out, seen );
+    }
+    for( SLink *lk : o->childLinks() )
+        if( lk && lk->getSObject().isLane() ) collectTracks( &lk->getSObject(), out, seen );
+}
+}  // namespace
+
+int SApplication::reattachLatePlugins( bool announce )
+{
+    SProject *project = getCurrentProject();
+    if( !project ) return 0;
+
+    QList<STrack *> tracks;
+    QSet<SObject *> seen;
+    // check_root_resolution: master -- EVERY root is walked, the master first and each arrangement below; no slot may be missed
+    collectTracks( splacements::rootContainer( project ), tracks, seen );
+    for( SObject *root : project->arrangements() ) collectTracks( root, tracks, seen );
+
+    int n = 0;
+    for( STrack *t : tracks ) {
+        SPluginChain *chain = t->getPluginChain();
+        if( !chain ) continue;
+        for( int i = 0; i < chain->getSlotCount(); ++i ) {
+            SPluginSlot *slot = chain->getSlotAt( i );
+            if( slot && slot->reattachIfAvailable() ) {
+                ++n;
+                TW_LOGI( "plugins", "[app] re-attached '%s' on '%s': the plugin "
+                         "became available after the project loaded",
+                         slot->getSName().toUtf8().constData(),
+                         t->getSName().toUtf8().constData() );
+            }
+        }
+    }
+    if( n > 0 && announce ) emit latePluginsReattached( latePluginNotice( n ) );
+    return n;
+}
+
+QString SApplication::latePluginNotice( int n )
+{
+    return n == 1
+        ? QStringLiteral( "1 plugin insert became available and was re-attached" )
+        : QStringLiteral( "%1 plugin inserts became available and were re-attached" )
+              .arg( n );
+}
+
+void SApplication::simulatePluginScanForTest( bool startup,
+                                              const QList<ScannedPluginForTest> &found )
+{
+    audio::twPluginRegistry &reg = audio::pluginRegistry();
+    reg.waitForScan( -1 );
+    noteScanStarted_( startup );
+    for( const ScannedPluginForTest &f : found ) {
+        audio::twPluginDescriptor d;
+        d.format = f.format.toStdString();
+        d.uid    = f.uid.toStdString();
+        d.name   = f.name.toStdString();
+        d.vendor = f.vendor.toStdString();
+        d.path   = SPluginSlot::resolveModulePath( nullptr, f.path ).toStdString();
+        d.io.audioInputs  = (std::uint16_t) f.nIn;
+        d.io.audioOutputs = (std::uint16_t) f.nOut;
+        d.isInstrument    = f.isInstrument;
+        if( f.nIn > 0 )  { d.nInBuses = 1;  d.inBusChannels  = { (std::uint16_t) f.nIn }; }
+        if( f.nOut > 0 ) { d.nOutBuses = 1; d.outBusChannels = { (std::uint16_t) f.nOut }; }
+        reg.publishScannedForTest( d );
+    }
+    pumpPluginScan();
+}
+
+void SApplication::onPluginScanFinished_()
+{
+    // The FIRST scan after startup is silent, every later one is announced
+    // (convention late-plugin-reattach). Consumed here, so the label never
+    // outlives the scan it describes.
+    const bool startup = pluginScanIsStartup_;
+    pluginScanIsStartup_ = false;
+    reattachLatePlugins( /*announce*/ !startup );
 }
 
 bool SApplication::isPluginScanActive() const
