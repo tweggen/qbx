@@ -36,8 +36,8 @@ void CaptureRevalidator::scheduleRevalidation(IRevalidatable* object, uint32_t a
         std::lock_guard<std::mutex> lock(queueLock_);
         // Refuse after shutdown, and refuse BEFORE taking the pin. No worker
         // will ever dequeue this job, so nothing would release the pin — and a
-        // permanently pinned SObject never re-arms the deleteLater() that
-        // event() swallowed while it was pinned (see SObject::revalRemoveRef).
+        // permanently pinned SObject is never deleted: its queued deletion
+        // check re-checks the pins (see SObject::revalRemoveRef).
         // The teardown path reaches here for real: ~SProject quiesces the pool
         // first and THEN cascades the object graph, and an object dying inside
         // that cascade still runs its invalidation hooks.

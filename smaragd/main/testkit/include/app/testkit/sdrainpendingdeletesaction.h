@@ -4,8 +4,10 @@
 #include "app/actions/saction.h"
 
 /**
- * `drain-pending-deletes` — deliver the `QEvent::DeferredDelete` events a
- * `--test-case` run otherwise never delivers.
+ * `drain-pending-deletes` — collect the dead objects a loop-less caller would
+ * otherwise leave pending: every posted event (the model's queued deletion
+ * checks), then the `QEvent::DeferredDelete` events a `--test-case` run never
+ * delivers.
  *
  * WHY IT EXISTS, and it is a narrow reason rather than a general convenience.
  * `SObject::removeRef()` answers a refcount reaching zero with `deleteLater()`,
@@ -23,6 +25,18 @@
  * real app, with a live event loop, the lane would be freed between the removal
  * and the undo. This verb closes that gap: call it between the two and the
  * unpinned lane is actually collected.
+ *
+ * WHAT IT FLUSHES (QBX-306): every posted event first, then DeferredDelete,
+ * repeated until a round delivers nothing (bounded) -- SObject::
+ * drainPendingDeletes(), the same call the shell's teardown makes. Since
+ * QBX-306 removeRef() no longer calls deleteLater(): it posts a queued,
+ * re-checking functor (Qt 6.11's deleteLater() is once-only, and a revalidator
+ * worker may not call it at all), so the FIRST flush is what deletes a dead
+ * SObject; the second collects widgets' deleteLater(). The runner's
+ * per-action processEvents() delivers those functors too, so the paragraph
+ * above now describes the history: a removed object is collected between
+ * actions anyway, and this verb matters where no pump falls between the
+ * removal and the claim (model CONTRACT invariant 8a).
  *
  * It is a TEST verb and not a fix: production pumps its own event loop. Use it
  * only where a case's claim is about an object's LIFETIME.

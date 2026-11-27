@@ -6,6 +6,7 @@
 
 #include "app/actions/sactionregistry.h"
 #include "app/model/sexternfile.h"
+#include "app/model/sobject.h"
 #include "app/model/sproject.h"
 #include "tw/schedule/capture_revalidator.h"
 
@@ -20,8 +21,8 @@ SApplyResult SDrainPendingDeletesAction::apply( SProject *project )
         // path unpins -- so a pause that finds the queue EMPTY means no job
         // holds a borrowed pointer. A job that re-queued itself on the way out
         // shows up as queued work, and the loop lets it run and asks again.
-        // The last unpin's re-armed deleteLater() is posted from the worker
-        // before pause() can return, so the drain below sees it.
+        // The last unpin hands its deletion check to the main thread before
+        // pause() can return (QBX-306), so the drain below sees it.
         CaptureRevalidator *rv = project ? project->getRevalidator() : nullptr;
         if( rv ) {
             QElapsedTimer t;
@@ -42,9 +43,12 @@ SApplyResult SDrainPendingDeletesAction::apply( SProject *project )
             }
         }
     }
-    // The same call smaragdOrderlyShutdown() makes before std::exit(), for the
-    // same reason: nothing else in a --test-case run delivers these.
-    QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
+    // The same drain smaragdOrderlyShutdown() runs before std::exit(), for the
+    // same reason: nothing else in a --test-case run delivers these. It flushes
+    // ALL posted events, then DeferredDelete, until nothing is left -- a
+    // DeferredDelete-only flush misses the model's queued deletion checks
+    // (SObject::removeRef, QBX-306; model CONTRACT invariant 8a).
+    SObject::drainPendingDeletes();
 
     if( collect_ && project ) {
         // WHAT A WORKING deleteLater() WOULD HAVE FREED (see the header). No

@@ -8,6 +8,7 @@
 #include "smaragd_version.h"
 #include "app/shell/sapplication.h"
 #include "app/shell/smainwindow.h"
+#include "app/model/sobject.h"
 #include "app/testkit/sactionscript.h"
 #include "app/testkit/sactionrunner.h"
 #include "app/actions/sactionregistry.h"
@@ -107,7 +108,19 @@ static void smaragdOrderlyShutdown()
     // reproduced with a three-line script (open a native editor, never close
     // it). Draining it here, with QApplication still fully alive, is what
     // makes the destruction happen at a point where it is safe.
-    QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
+    //
+    // QBX-306 widened it from DeferredDelete only to ALL posted events, then
+    // DeferredDelete, repeated (bounded) until nothing is left: a model
+    // object's death is now a QUEUED re-checking functor, not a deleteLater()
+    // (Qt 6.11's is once-only, and a revalidator worker may not call it
+    // without Qt adopting it), and a DeferredDelete flush alone leaves that
+    // functor -- and the object -- pending. What the
+    // wider flush can still run here: everything is alive at this point
+    // (QApplication, the main window, the project, the speaker and the scan
+    // thread), so a queued slot delivered now meets the same objects the
+    // runner's own processEvents() pump would have; nothing has been torn down
+    // yet. See the model CONTRACT, invariant 8a.
+    SObject::drainPendingDeletes();
     audio::pluginRegistry().stopScan();
     tw::TwLog::instance().shutdown();
 }
