@@ -338,6 +338,99 @@ failure is a 37 % shortfall. **But that family is real and has a live member**:
 loadavg >= 12, because it anchors its grid on a first click the capture start
 truncates. That one reproduces on demand and is filed as QBX-227.
 
+## `qxa.master_insert_while_monitoring` — MECHANISM ESTABLISHED, half of it a product glitch, NOT fixed and NOT excluded (QBX-318)
+
+**Not excluded.** It went red on three unrelated PRs on one day, each time with
+the **bit-identical** value `0.17129` against `[0.1592, 0.1691]`, and each passed
+when the failed job was re-run on the same commit:
+
+| PR | run | job | result |
+|---|---|---|---|
+| #387 | `45373093378` | `138372083387` | `0.17129` |
+| #388 | `45375039041` | `138378872970` | `0.17129` |
+| #389 | `45376223988` | `138383120939` | `0.17129` |
+
+All three dumped 256000 frames, all three had `[SCHED] graph stats:
+nodesExecuted=757 nodeRetries=0 missPages=0 selfStale=0` and no render-policy
+refusals. Those lines say nothing about this failure; the answer is in the
+audio.
+
+### Decoding the value
+
+The window `[168000, 216000)` is ABSOLUTE, and it lies on a ramp of
+`test_sawtooth.wav` (the per-second level staircase described under QBX-220),
+so every reading decodes to **how far the ring's material sits from where this
+box puts it**. Measured on local captures, with `audio_analysis.cc`'s
+arithmetic:
+
+| ring displaced by | reads |
+|---|---|
+| 0 | `0.1641429` (the expected `0.164142`) |
+| +1024 | `0.1665854` |
+| +2048 | `0.169044` (passes by `0.00006`) |
+| +3072 | `0.1712965` |
+
+### Two mechanisms, independent, both measured
+
+**C — the capture head (the QBX-228 family).** The whole capture's ring starts
+about **2049 frames late** (onset 8872 instead of 6823). It reads `0.1690398`,
+which the log prints as `0.16904`. Seen in **2 of 37** idle runs, with no frozen
+miss. This is the displacement the onset anchor was built for, and this case
+does not use one.
+
+**B — a clock stall at the flip, a product glitch.** The master insert re-roots
+the frozen lane below the master chain (`[READAHEAD] Frozen root changed:
+restarting chain at page 65536`). The callback that follows can find **no page
+of the new root**, so `AudioEngine::pullBlock` comes up short by a whole block
+at engine position **129024**, and the **playhead stalls for that block**. Under
+Closure the frozen lane's audio is discarded, but it still owns the clock. Then:
+
+- the RT plays a **1024-frame silent gap in the monitored signal**:
+  `mixStream`'s `notYet`, because the next ring entry is now in the future;
+- every frame after the gap is **one block later, for the rest of the arm**:
+  the input FIFO kept filling while the pump, pacing on the stalled clock,
+  idled.
+
+Confirmed by a temporary counter in `twSpeaker::renderCallbackBody` (since
+reverted). Over 22 instrumented runs it read `frozenShort=1 frames=1024
+first=129024` in exactly the 5 runs that had the gap, and 0 in the other 17.
+
+| regime | runs | none | B ×1 | B ×2 | C | other |
+|---|---|---|---|---|---|---|
+| idle, load < 3.6 (`ctest -R` loops, and the binary run with ctest's ENVIRONMENT) | 37 | 25 | 10 | 0 | 2 | 0 |
+| load decaying 13 → 6 after the spinners | 10 | 8 | 2 | 0 | 0 | 0 |
+| 36 spinners on 12 cores, load 13–33 | 16 | 4 | 9 | 1 | 0 | 2 (onset +1025, no gap, `0.166582`) |
+
+**CI's `0.17129` is C and B×1 together.** A C capture with its post-flip window
+moved one block reads `0.1712904`, which `qDebug` prints (6 significant digits,
+trailing zero dropped) as exactly CI's `0.17129`. A three-block stall alone would
+read `0.1712965` and print as `0.171297`, so the printed digits favour the
+composition. CI's `[READAHEAD] … playhead=` samples, 3072 behind this box after
+the flip, are **not** evidence either way: they are readahead-tick samples, and
+locally they move by ±2048 from run to run.
+
+### Why it is not fixed here
+
+C is the case's fault, and anchoring on the onset would remove it. B is not the
+case's fault. A master edit while monitoring costs the monitored input a dropout
+of a block or more and adds that much monitor latency until disarm. The case only
+notices this because the window reads position. Anchoring alone would make CI's
+failing state pass at `0.166585` and leave B tolerated up to two blocks. That is
+relaxing the case around a live glitch, so it was not done.
+
+Every remedy for B needs a decision:
+
+- keep the clock running when a Closure-suppressed frozen pull misses;
+- warm the new root's current page before publishing the re-root, as the
+  arm/disarm epoch gate does for content;
+- resync the input FIFO after any clock stall, since any frozen underrun while
+  monitoring adds latency this way.
+
+**If it returns**, decode the value against the table above. Then look for a
+silent block near frame 132096 in
+`test-output/master_insert_while_monitoring/master_insert_while_monitoring.wav`
+(that is B), and for an onset later than ~6823 (that is C).
+
 ## Running the comparison yourself
 
 ```bash
