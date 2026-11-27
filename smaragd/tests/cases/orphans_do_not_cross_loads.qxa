@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A LOAD RELEASES THE PREVIOUS DOCUMENT'S ORPHAN PINS (QBX-314).
+
+  The project holds a reference to every unplaced clip a load finds, so that an
+  orphan, and the missing-media placeholder it windows, survive load and save
+  exactly as written (sample_missing_survives.qxa, collect_external_media_missing.qxa;
+  model/CONTRACT.md "Loaded orphans"). load-project loads INTO the existing
+  SProject, so the same pin, kept across a SECOND load, would carry the first
+  document's orphan into the second one and into its next save. The load
+  releases them beside clearAssets(); this case is what notices if it stops.
+
+  The first fixture is sample_missing_survives.qxp: one placed clip, and the
+  orphan cut2 over the unreachable wave2. The second is load_fixture.qxp, which
+  places one clip and holds no orphan clip. After the second load and a drain
+  (what the running app's event loop does), the saved file must name the
+  second document's sample and NOT the first document's missing one. A build
+  that keeps the old pins writes cut2 and wave2 into the second project.
+
+  The assert-log after the first load is the witness that the pin site was
+  reached at all: without it, a build that pinned nothing would pass the
+  absent check below for the wrong reason.
+-->
+<SActionScript version="1" name="orphans_do_not_cross_loads">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sample_missing_survives.qxp"/>
+    <assert-log level="warn" minCount="1"
+                contains="Project holds 1 unplaced clip(s)"/>
+    <drain-pending-deletes/>
+    <assert-extern-files count="2" missing="1"/>
+
+    <load-project path="../load_fixture.qxp"/>
+    <drain-pending-deletes/>
+
+    <save-project path="../../build/test-output/orphans_do_not_cross_loads/next.qxp"/>
+
+    <assert-file-contains path="../../build/test-output/orphans_do_not_cross_loads/next.qxp"
+                          text="test_sawtooth.wav"/>
+    <assert-file-contains path="../../build/test-output/orphans_do_not_cross_loads/next.qxp"
+                          text="__missing_sample__.wav" absent="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

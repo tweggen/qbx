@@ -218,6 +218,8 @@ int SProjectLoader::createObjects( SProject &project )
                     // Now apply the attributes
                     object->readAttributes( e );
                     objectDict_.insert( id, object );
+                    if( elementKind( tagName ) == SElementKind::Window )
+                        windowIds_.insert( id );
                 }
                 QDomNode nodeToDelete = n;
                 n = n.nextSibling();
@@ -293,6 +295,41 @@ int SProjectLoader::createObjects( SProject &project )
     // fully wired tree; before ~SProjectLoader, so the dictionary and its handle
     // links are still alive.
     runDeferredResolvers();
+
+    // ORPHAN CLIPS, LAST OF ALL (QBX-314, convention orphan-clips-survive-load).
+    // Every link and every resolver's reference now exists, so a clip whose
+    // count is exactly ONE is held by nothing but its handle in objectDict_:
+    // the file describes it and nothing in the file places it. When
+    // ~SProjectLoader deletes the handles it reaches zero and the first turn of
+    // the event loop deletes it, and with it whatever only it windowed (a
+    // missing-media placeholder); the next save then drops both. The project
+    // pins it instead, so it survives load and save exactly as written.
+    //
+    // A CLIP is an element its slice registered as SElementKind::Window (SCut,
+    // SMidiCut): the loader's own name for "an object that windows content",
+    // and the only type knowledge it has. Other orphans are left to die as
+    // they always did, deliberately: the commonest is a pre-proposal-08-M4
+    // <SPluginChain> no track claims, whose slots would otherwise hold their
+    // plugins for as long as the project is open.
+    //
+    // Decided HERE and not after the post-load passes, because the take-column
+    // pass unlinks collapsed wrappers on purpose and expects them to die; at
+    // this point each of those is still placed, so none is pinned.
+    int orphans = 0;
+    for( auto it = objectDict_.cbegin(); it != objectDict_.cend(); ++it ) {
+        SLink *lk = it.value();
+        if( !lk || !windowIds_.contains( it.key() ) ) continue;
+        SObject &obj = lk->getSObject();
+        if( obj.refCount() == 1 ) {
+            project_.pinLoadedOrphan( &obj );
+            ++orphans;
+        }
+    }
+    if( orphans ) {
+        qWarning() << QString( "Project holds %1 unplaced clip(s); kept as written "
+                               "(the project holds a reference to each)." )
+                          .arg( orphans );
+    }
 
     return 0;
 }

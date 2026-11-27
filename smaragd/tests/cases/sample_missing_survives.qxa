@@ -63,6 +63,17 @@
     <assert-log level="warn" minCount="1"
                 contains="sample NOT FOUND, keeping a silent placeholder"/>
 
+    <!-- WHAT A RUNNING EVENT LOOP DOES NEXT (QBX-314). The loader's handle
+         links were the only references to the orphan cut2, and so through it
+         to the placeholder wave2; the real app deletes whatever they leave at
+         zero on its first turn of the loop, and a headless run never turned
+         it. Draining here is that turn: the first action after the assert-log,
+         which reads what the LOAD itself logged. Without the project's own reference
+         to every loaded orphan (SProject::pinLoadedOrphan, model CONTRACT
+         "Loaded orphans"), both die here and the counts below read
+         count 1 / missing 0. -->
+    <drain-pending-deletes/>
+
     <render filename="sample_missing_survives.wav" format="wav" quality="10" durationSec="2.5"/>
 
     <!-- 0-1 s: good track plays source sec1 (slip offset via startOffset=48000) -->

@@ -54,6 +54,12 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
         project->clearArrangements();
         // ...and the asset names, for the same reason (QBX-266).
         project->clearAssets();
+        // ...and the previous document's orphans (QBX-314): the project pins
+        // every unplaced clip a load finds, and a pin it kept from the
+        // document being replaced would carry that document's orphan into
+        // this one, and into its next save.
+        project->clearLoadedOrphans();
+
         // ...and the capture files the closing document's recorder wrote
         // (QBX-315): they are not this document's unused recordings.
         project->forgetCaptureFiles();

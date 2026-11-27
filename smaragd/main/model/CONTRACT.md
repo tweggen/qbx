@@ -709,6 +709,78 @@ re-registers a loaded asset body only under a FREE name — with the previous
 document's names still held, a loaded body came back UNNAMED (measured: a
 sampler's asset link read back fine but named no asset).
 
+## Loaded orphans: the PROJECT holds them (QBX-314)
+
+**The rule (author, 2026-11-24, convention `orphan-clips-survive-load`).** An
+ORPHAN is a clip a project file describes that nothing in the file places,
+and through it whatever only that clip windows (a missing-media placeholder,
+say). It survives load and save EXACTLY AS
+WRITTEN. Its survival must never depend on whether a deferred delete happens
+to be delivered.
+
+**What went wrong without it.** The loader's temporary handle links
+(`SProjectLoader::objectDict_`) were an orphan's only references.
+`~SProjectLoader` deletes them, the count reaches zero, and the first turn of
+the event loop deletes the orphan -- and with it the placeholder it windowed.
+The next save then dropped both. Headless runs never turned the loop, which is
+why `sample_missing_survives.qxa` and `collect_external_media_missing.qxa`
+passed for months while the real app lost the clip. Both cases now drain
+pending deletes right after the load, which is what that turn of the loop does.
+
+**Who holds an orphan: `SProject`, one reference each** (`pinLoadedOrphan()`,
+`loadedOrphans_`), the same raw `addRef()` pin the asset and arrangement
+registries take, for the objects no registry names.
+
+* **Who pins.** `SProjectLoader::createObjects()`, and nothing else. It runs
+  once every object, every link and every deferred resolver's own reference
+  exists, so "count exactly 1" means "held only by the loader's handle". A
+  registered asset (held by its registry) and everything placed have a count
+  of at least 2, so only true orphans are pinned.
+* **Only CLIPS.** The loader may not name a type, so "clip" is the
+  registration kind: an element its slice declared `SElementKind::Window`
+  (today `SCut` and `SMidiCut`). What a pinned clip windows survives through
+  the clip's own link, which is how the missing-media placeholder is kept.
+  Every other orphan dies as it always did, deliberately: the commonest is a
+  `<SPluginChain>` written before proposal 08 M4 that no track claims, and
+  pinning it would keep its slots and their plugins alive for the whole
+  session. An unplaced take column (`STakeStack`, a `Container`) is not
+  covered; none has been seen in a file. A placed clip is NOT pinned, which is why
+  deleting a clip's last placement, and undoing and redoing that, behaves
+  exactly as before.
+* **Before the post-load passes, deliberately.** The take-column
+  normalisation unlinks collapsed wrappers and expects them to die. When the
+  pin is decided each wrapper is still placed, so none is pinned.
+* **What releases it.** `clearLoadedOrphans()`, which `load-project` calls
+  beside `clearAssets()` (a load goes INTO this project, so a pin kept from the
+  replaced document would carry its orphan into this one and into its next
+  save), and `~SProject`, before the refcount cascade, for the reason the
+  asset and arrangement pins are dropped there.
+* **Placing an orphan does NOT release the pin, and no verb deletes one.**
+  `refCount()` is not "has placements", so a release keyed on a count rising
+  would also fire on a transient reference, a selection or an undo pin, and
+  the orphan's life would again depend on which edits followed. Nor can a
+  verb reach one: an orphan is unnamed (a NAMED body is an asset and is pinned
+  by the registry instead) and unplaced, so no path addresses it. A future
+  "purge unused" command is the one thing that may release a pin, and it must
+  do so through `SProject`, never with a bare `removeRef()`.
+* **Not a cycle, and not an undo link.** The holder is the project, which no
+  `SLink` reaches, so the pin can never close a reference cycle. It is not an
+  undo link either: it keeps something the FILE holds, not something an
+  inverse needs, so the "a link kept for undo must be weak" rule does not
+  apply. The list is `QPointer` only so a teardown cannot `removeRef()`
+  through a dangling pointer.
+
+**What it costs.** An orphan is kept forever: every save writes it, every
+load pins it again. That is the rule as decided, not a leak. The serializer writes every
+`SObject` still alive under the project, so a clip deleted while an undo pin
+kept it alive is written as an orphan too, and from now on is kept by the next
+load as well.
+
+Gates: `sample_missing_survives.qxa` (the orphan and its placeholder survive
+the load), `collect_external_media_missing.qxa` (and the save), and
+`orphans_do_not_cross_loads.qxa` (a load releases the previous document's
+pins).
+
 ## The generic take seam is TOTAL, and it answers a different question from
 ## `SClipWindow::parametersOf()`
 
