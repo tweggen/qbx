@@ -340,17 +340,21 @@ truncates. That one reproduces on demand and is filed as QBX-227.
 
 ## `qxa.master_insert_while_monitoring` — MECHANISM ESTABLISHED, half of it a product glitch, NOT fixed and NOT excluded (QBX-318)
 
-**Not excluded.** It went red on three unrelated PRs on one day, each time with
-the **bit-identical** value `0.17129` against `[0.1592, 0.1691]`, and each passed
-when the failed job was re-run on the same commit:
+**Not excluded.** It went red on three unrelated PRs on 2026-11-24, and on two
+`main` pushes on 2026-11-10 that were found later by scanning every CI job
+since 2026-11-08. Each time the value was the **bit-identical** `0.17129`
+against `[0.1592, 0.1691]`. Every PR failure passed when the job was re-run on
+the same commit:
 
 | PR | run | job | result |
 |---|---|---|---|
 | #387 | `45373093378` | `138372083387` | `0.17129` |
 | #388 | `45375039041` | `138378872970` | `0.17129` |
 | #389 | `45376223988` | `138383120939` | `0.17129` |
+| `main` push, `c44f135b` | `42863616969` | `129995989812` | `0.17129` |
+| `main` push, `231514a9` | `42863723087` | `129996365577` | `0.17129` |
 
-All three dumped 256000 frames, all three had `[SCHED] graph stats:
+All five dumped 256000 frames, all five had `[SCHED] graph stats:
 nodesExecuted=757 nodeRetries=0 missPages=0 selfStale=0` and no render-policy
 refusals. Those lines say nothing about this failure; the answer is in the
 audio.
