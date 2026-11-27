@@ -793,7 +793,9 @@ registries take, for the objects no registry names.
 * **Before the post-load passes, deliberately.** The take-column
   normalisation unlinks collapsed wrappers and expects them to die. When the
   pin is decided each wrapper is still placed, so none is pinned.
-* **What releases it.** `clearLoadedOrphans()`, which `load-project` calls
+* **What releases it.** `releaseLoadedOrphans()`, which only
+  `purge-unused-clips` calls, for the clips the user chose (QBX-319, below), and
+  `clearLoadedOrphans()`, which `load-project` calls
   beside `clearAssets()` (a load goes INTO this project, so a pin kept from the
   replaced document would carry its orphan into this one and into its next
   save), and `~SProject`, before the refcount cascade, for the reason the
@@ -803,9 +805,9 @@ registries take, for the objects no registry names.
   would also fire on a transient reference, a selection or an undo pin, and
   the orphan's life would again depend on which edits followed. Nor can a
   verb reach one: an orphan is unnamed (a NAMED body is an asset and is pinned
-  by the registry instead) and unplaced, so no path addresses it. A future
-  "purge unused" command is the one thing that may release a pin, and it must
-  do so through `SProject`, never with a bare `removeRef()`.
+  by the registry instead) and unplaced, so no path addresses it. The purge
+  (QBX-319) is the one thing that may release a single pin, and it does so
+  through `SProject::releaseLoadedOrphans()`, never with a bare `removeRef()`.
 * **Not a cycle, and not an undo link.** The holder is the project, which no
   `SLink` reaches, so the pin can never close a reference cycle. It is not an
   undo link either: it keeps something the FILE holds, not something an
@@ -813,8 +815,8 @@ registries take, for the objects no registry names.
   apply. The list is `QPointer` only so a teardown cannot `removeRef()`
   through a dangling pointer.
 
-**What it costs.** An orphan is kept forever: every save writes it, every
-load pins it again. That is the rule as decided, not a leak. The serializer writes every
+**What it costs.** An orphan is kept until the user purges it (below): every
+save writes it, every load pins it again. That is the rule as decided, not a leak. The serializer writes every
 `SObject` still alive under the project, so a clip deleted while an undo pin
 kept it alive is written as an orphan too, and from now on is kept by the next
 load as well.
@@ -823,6 +825,53 @@ Gates: `sample_missing_survives.qxa` (the orphan and its placeholder survive
 the load), `collect_external_media_missing.qxa` (and the save), and
 `orphans_do_not_cross_loads.qxa` (a load releases the previous document's
 pins).
+
+### The purge: Edit > "Purge unused clips..." (QBX-319)
+
+The author accepted "kept forever" on one condition: a command that releases
+them. These are the author's decisions (2026-11-27), and the reason for each.
+
+* **CONFIRMED, NOT UNDOABLE.** An undoable purge would need an undo PIN to
+  keep the released clip alive for its inverse. But `SProject::serialize()`
+  writes every object still alive under the project, so that pin would write
+  the clip into the next save, and the next load would pin it again. The purge
+  would undo itself across a save. So the release is final, and the user
+  confirms it first, as with `cleanup-takes files="1"`: one checkbox per clip,
+  all off, Cancel the default, OK disabled until a box is ticked
+  (`SPurgeUnusedClipsDialog`). A headless run answers NO
+  (`SPurgeUnusedClipsDialog::ask`), and a case supplies its rows through
+  `purge-unused-clips-gesture`, which goes round the dialog. The verb still
+  marks the project MODIFIED (`SAction::marksProjectModified()`), because the
+  next save writes less.
+* **LOADED ORPHANS ONLY.** The list is `loadedOrphans()` minus anything a
+  root, an arrangement or an asset body reaches now (`sunusedclips::list()`).
+  A clip that lost its last placement in THIS session is held by the undo
+  history and is not offered. Releasing it would make that undo fail. Today
+  nothing can place a pinned orphan, so the "reaches now" filter is a
+  defence, not a reachable branch.
+* **ADDRESSED BY ROW, IN A SORTED LIST.** An orphan has no name and no path,
+  and its file id is a pointer value. The list is sorted by content file name,
+  then window start, then length, then position in the file. The loader pins
+  in document order for that last key: `objectDict_` is a QHash, so pin order
+  used to change from run to run. `purge-unused-clips rows="0;2"` or
+  `all="1"`. One list (`sunusedclips::list()`) answers the Edit menu's
+  greying, the dialog's rows and the verb's indices, so a ticked row cannot
+  release another clip.
+* **WHAT ELSE GOES.** A released clip dies on the next turn of the event loop
+  (removeRef's queued check), and so does whatever only it windowed: its
+  sample's extern file, or a missing-media placeholder. The confirmation says
+  so. Files on disk are not touched. A scripted save straight after a purge
+  must `drain-pending-deletes` first, because until that turn the dying clip
+  is still a child of the project and would be written.
+* **GREYED** when the list is empty, decided on the Edit menu's
+  `aboutToShow()`. The verb refuses an empty list as well, and refuses the
+  whole request (nothing released) for a bad, repeated or missing row.
+
+Gates: `purge_unused_clips.qxa` (the sorted list; a session-deleted clip not
+listed; the headless decline; the verb's refusals; purge row 1, then save and
+reload; greyed and refused when empty), `purge_unused_clips_placeholder.qxa`
+(a purged orphan takes its missing-media placeholder with it), and
+`purge_unused_clips_dialog_test` (the dialog's own surface).
 
 ## The generic take seam is TOTAL, and it answers a different question from
 ## `SClipWindow::parametersOf()`

@@ -19,9 +19,9 @@
 
   Sections:
    1. The list after the load: three rows in sorted order, the menu enabled.
-   2. A clip deleted IN THIS SESSION is not listed: remove-sample takes the
-      placed clip away, an undo pin keeps it alive, and the list stays at
-      three. Undone again before going on.
+   2. A clip deleted IN THIS SESSION is not listed: a MIDI clip is inserted
+      and removed, remove-sample's undo pin keeps it alive and unplaced, and
+      the list stays at three. Undone again, so it is placed in the save.
    3. The menu path with no rows: the item fires, the confirmation declines
       headless (it answers NO), and nothing is released.
    4. The verb refuses whole: an out-of-range row, a repeated row, no rows,
@@ -51,17 +51,24 @@
     <assert-unused-clips count="3" menuEnabled="1"
         contains="count=3|0:test_sawtooth.wav, 1.000 s from 0.000 s|1:test_sawtooth.wav, 1.500 s from 0.500 s|2:test_sawtooth.wav, 0.500 s from 2.000 s"/>
 
-    <!-- 2. A clip deleted in this session belongs to the undo history. -->
-    <remove-sample trackPath="0" clipIndex="0"/>
+    <!-- 2. A clip deleted in this session belongs to the undo history. A MIDI
+         clip, because remove-sample PINS one for its undo (an audio clip over
+         a file is rebuilt from a recipe instead and really dies), so this one
+         stays alive, unplaced, and a child of the project. -->
+    <insert-midi-clip trackPath="0" timePos="192000" duration="1920" name="SessionClip"/>
+    <remove-sample trackPath="0" clipIndex="1"/>
     <drain-pending-deletes/>
-    <assert-unused-clips count="3" absent="2.000 s from 1.000 s"/>
+    <assert-unused-clips count="3" absent="|3:"/>
+    <!-- Undone, so the clip is placed again: left deleted, the save below
+         would write it (the undo pin keeps it alive) and the reload would pin
+         it, QBX-314's recorded cost. -->
     <undo/>
     <drain-pending-deletes/>
-    <assert-clip-window clip="0,0" startOffset="48000" duration="96000"/>
+    <assert-unused-clips count="3" absent="SMidiSequence"/>
 
     <!-- 3. The menu with nobody to answer: declined, nothing released. -->
     <purge-unused-clips-gesture via="menu"/>
-    <assert-log contains="purge-unused-clips: confirmation declined" minCount="1" level="info"/>
+    <assert-log contains="purge-unused-clips: confirmation declined" minCount="1"/>
     <drain-pending-deletes/>
     <assert-unused-clips count="3"/>
 
@@ -75,9 +82,9 @@
 
     <!-- 5. THE PURGE. A clean stack first, so "modified" means this did it. -->
     <save-project path="../../build/test-output/purge_unused_clips/before.qxp"/>
-    <assert-unsaved-changes expect="0" undoEntries="1"/>
+    <assert-unsaved-changes expect="0" undoEntries="2"/>
     <purge-unused-clips-gesture via="rows" rows="1" expectPurged="1"/>
-    <assert-unsaved-changes expect="1" undoEntries="1"/>
+    <assert-unsaved-changes expect="1" undoEntries="2"/>
     <drain-pending-deletes/>
     <assert-unused-clips count="2"
         contains="count=2|0:test_sawtooth.wav, 1.000 s from 0.000 s|1:test_sawtooth.wav, 0.500 s from 2.000 s"

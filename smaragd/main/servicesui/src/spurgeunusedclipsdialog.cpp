@@ -98,7 +98,7 @@ bool SPurgeUnusedClipsDialog::ask( QWidget *parent, const QStringList &rows,
     // HEADLESS FIRST, and it answers NO (convention: a modal confirmation
     // reachable from a scripted run declines when it cannot be shown).
     if( SApplication::app().isTestCaseMode() ) {
-        TW_LOGI( "ui.servicesui",
+        TW_LOGW( "ui.servicesui",
                  "purge-unused-clips: confirmation declined (scripted run, no "
                  "rows supplied); %d unused clip(s) kept",
                  int( rows.size() ) );

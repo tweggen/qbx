@@ -2722,3 +2722,35 @@ trackPath="0,0" muted="1"` in the same shape) also leaves the published plan at
 rebuilds the plan (`planSignature()` asks only closure members and the master
 lane). Whether that is audible depends on whether the muted lane's root page
 goes silent on its own, which was not measured here; it is a separate ticket.
+
+## inv. 74 — Edit > "Purge unused clips..." is greyed on the same list it confirms and the verb indexes (QBX-319)
+
+The menu entry for `purge-unused-clips`. Its model side is model/CONTRACT.md
+"Loaded orphans"; this is the shell's part.
+
+**ONE LIST.** `refreshPurgeUnusedClipsEnabled_()` greys the item on
+`sunusedclips::list().isEmpty()`, `purgeUnusedClipsGesture()` builds the
+dialog's rows from the same list, and the rows it submits are indices into
+that list. Nothing here counts or sorts on its own. A second reading could
+tick one clip and release another.
+
+**GREYED ON `aboutToShow()`**, not by a model signal: no signal announces a
+change to the list (a load, a purge), and the menu opening is the only moment
+the answer is read. The seams emit that same signal before they read
+(`purgeUnusedClipsMenuEnabled()`) or trigger (`triggerPurgeUnusedClipsMenu()`).
+So a missing `connect()` leaves the item greyed for good, and a case sees it.
+The trigger seam refuses a greyed item itself, because `QAction::trigger()`
+fires one anyway.
+
+**THE CONFIRMATION DECLINES HEADLESS.** `SPurgeUnusedClipsDialog::ask` returns
+false under `--test-case` without opening anything. A case that wants the
+purge supplies the rows to `purgeUnusedClipsGesture()`, which goes round it,
+the `cleanup-takes-gesture` split.
+
+**THE COUNT COMES BACK THROUGH A SINK** (`SPurgeUnusedClipsAction::reportTo`).
+The verb leaves no undo step, so the history deletes it after the submit.
+
+**NOT GATED.** No case clicks the item through a real `QMenu` popup. The
+seams emit `aboutToShow()` and call `QAction::trigger()`, which is what a
+popup does on the way. The dialog's `exec()` path (OK with boxes ticked) is
+hand-verified. Its widget surface is gated by `purge_unused_clips_dialog_test`.
