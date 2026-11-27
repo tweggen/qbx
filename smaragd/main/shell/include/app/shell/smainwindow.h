@@ -956,6 +956,11 @@ private:
     class SStdMixerView *ensureArranger_();
     // Build the master editor and install it as tab 0 (proposal 09 §2).
     void installMasterEditor_();
+    // A load INTO the current project replaced its master root (QBX-316):
+    // rebuild the master tab for the loaded root and destroy the editors that
+    // showed the previous one. Connected to SProject::loaded() by
+    // installMasterEditor_(); a no-op while no shell exists.
+    void rebindAfterLoad_();
     // Build the status bar and its permanent widgets (mode indicator, …).
     void buildStatusBar();
     // Point the STATUS-BAR INDICATORS (solo, record-arm) at the CURRENT

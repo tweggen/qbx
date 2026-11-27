@@ -94,6 +94,11 @@ SApplyResult SLoadProjectAction::apply(SProject *project)
     project->endLoad();
     project->enableInvalidation();
 
+    // Tell whoever shows the project that the document under it was replaced
+    // (QBX-316): the window rebinds an arranger it built for the previous
+    // root. The File -> Open path has no arranger at this point and ignores it.
+    project->notifyLoaded();
+
     // Not undoable: loading replaces the whole project; callers manage the swap.
     return {true, nullptr};
 }
