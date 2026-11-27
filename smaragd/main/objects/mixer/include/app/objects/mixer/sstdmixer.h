@@ -423,6 +423,11 @@ private slots:
     // both scopes and keeps using the slot above -- which is why solo needs a
     // slot of its own rather than a branch inside that one.
     void trackSoloChanged();
+    // A MUTE flag of one of our direct children changed: our pass (the slot
+    // above), then the project is told so the live plan can rebuild
+    // (QBX-311). Its own slot, not a branch in trackMuteSoloChanged(),
+    // because trackSoloChanged() runs that one too.
+    void trackMuteChanged();
     // Another root's solo moved, or the scope itself changed
     // (SProject::soloTopologyChanged).
     void onSoloTopologyChanged();

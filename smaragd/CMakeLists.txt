@@ -692,7 +692,11 @@ foreach(_live monitor_through_chain monitor_folder_closure arm_during_playback
               # so the armed lane is live and a plan is published at all; it
               # also writes mixer/monitorArming and mixer/soloScope, which
               # RUN_SERIAL covers.
-              solo_rebuilds_live_plan)
+              solo_rebuilds_live_plan
+              # QBX-311: the same for a MUTE flip, and the stale plan is
+              # heard: the case reads the ring through dump-playback-capture.
+              # Writes mixer/monitorArming, which RUN_SERIAL covers.
+              mute_rebuilds_live_plan)
     if(TEST qxa.${_live})
         set_tests_properties(qxa.${_live} PROPERTIES
             RUN_SERIAL TRUE

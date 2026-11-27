@@ -1123,6 +1123,21 @@ void SStdMixer::trackSoloChanged()
 }
 
 /**
+ * A MUTE flag of a direct child moved (QBX-311). Our pass is all the routing
+ * there is to it -- mute changes nobody else's audibility -- but the LIVE PLAN
+ * read the old answer: SLivePlanBuilder asks ssolo::isLaneAudible which unarmed
+ * lanes join it as frozen inputs, and the pump reads those straight out of the
+ * lane's own root pages, which a user-lane mute deliberately leaves full. So a
+ * muted lane went on sounding through the ring. Tell the project; SApplication
+ * turns that into liveLanesChanged(). Gate: mute_rebuilds_live_plan.
+ */
+void SStdMixer::trackMuteChanged()
+{
+    trackMuteSoloChanged();
+    if( SProject *project = getProjectSafe() ) project->notifyMuteSetChanged();
+}
+
+/**
  * Another root's solo moved, or the user changed the scope. Both mean our
  * answer may have changed without anything in OUR tree moving, so neither the
  * signals above nor the invalidation walk would have reached us.
@@ -1242,7 +1257,7 @@ void SStdMixer::insertTrack( STrack &trk )
     // Volume needs no connection: twTrackMix reads getVolume() live each buffer.
     QObject::connect(
         (QObject*)&trk, SIGNAL( mutedChanged( bool ) ),
-        this, SLOT( trackMuteSoloChanged() ) );
+        this, SLOT( trackMuteChanged() ) );
     QObject::connect(
         (QObject*)&trk, SIGNAL( soloChanged( bool ) ),
         this, SLOT( trackSoloChanged() ) );

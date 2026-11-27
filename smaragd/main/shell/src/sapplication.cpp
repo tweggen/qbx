@@ -230,6 +230,17 @@ void SApplication::setCurrentProject( SProject *cp )
     if( cp )
         connect( cp, &SProject::soloTopologyChanged, this,
                  &SApplication::liveLanesChanged, Qt::UniqueConnection );
+    // A MUTE FLIP IS ONE TOO (QBX-311), for the same reason: isLaneAudible
+    // reads isMuted(), and a user lane's mute lives in its summing parent, not
+    // in the root pages the pump reads a frozen input from -- so a stale plan
+    // went on summing a muted sibling at full level (measured: RMS 0.3591, the
+    // sum, in the muted window). One signal suffices: mute has no scope and no
+    // topology half. Raised by SStdMixer::trackMuteChanged (a root child) and
+    // STrack::childTrackMuteChanged (a nested lane). Gate:
+    // mute_rebuilds_live_plan.
+    if( cp )
+        connect( cp, &SProject::muteSetChanged, this,
+                 &SApplication::liveLanesChanged, Qt::UniqueConnection );
 }
 
 void SApplication::onProjectPropertyChangedForLive( const QString &key,
