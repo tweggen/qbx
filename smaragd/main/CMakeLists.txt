@@ -1235,6 +1235,23 @@ add_test(NAME routinggraph_test COMMAND routinggraph_test)
 set_tests_properties(routinggraph_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The model's deletion path (QBX-306): removeRef() posts a re-checking functor
+# instead of deleteLater() (once-only on Qt 6.11, so a swallowed one leaked the
+# object), the revalidator's last unpin -- on a raw std::thread inside a
+# twQtFreeScope -- constructs no QObject, and SObject::drainPendingDeletes()
+# (the shell's teardown and drain-pending-deletes) collects plain, resurrected
+# and unpinned objects. No verb can schedule the pin/zero/unpin race, and a .qxa
+# cannot separate the drain from the runner's processEvents(), so the gate
+# drives it by hand.
+add_executable(reval_rearm_test testkit/src/reval_rearm_test.cpp)
+target_link_libraries(reval_rearm_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME reval_rearm_test COMMAND reval_rearm_test)
+set_tests_properties(reval_rearm_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The stale-INI plugin search-path merge (fix/mac-vst3-loading). A pure
 # function over two string lists, so it needs no QSettings and no platform --
 # the test states the macOS/Windows default shapes itself.

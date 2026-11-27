@@ -854,9 +854,21 @@ public:
     // deleteLater() then destroyed an object that live SLinks still pointed
     // at (the vtable-garbage paint crash). Pins are a separate atomic; while
     // any pin is held a refcount-driven deletion is deferred (see event()),
-    // and the last unpin re-arms it.
+    // and the last unpin re-arms it. The last pin is handed to the object's
+    // thread with a queued functor, never released with a deleteLater() on
+    // the worker (QBX-306: that makes Qt adopt the worker).
     void revalAddRef() override;
     void revalRemoveRef() override;
+
+    // Deliver what a loop-less caller (the shell's teardown, the
+    // drain-pending-deletes verb) must deliver to collect dead objects: ALL
+    // posted events of this thread, then its DeferredDelete events, repeated
+    // until a round delivers nothing or `maxRounds` is reached (then it
+    // warns). The first flush runs removeRef()'s and revalRemoveRef()'s
+    // queued checks, which delete the model's dead objects; the second
+    // collects any deleteLater() (widgets). Returns the number of rounds that
+    // delivered something. Main thread only. Model CONTRACT invariant 8a.
+    static int drainPendingDeletes( int maxRounds = 16 );
     bool revalNeeded_nolock(uint32_t aspects) const override
         { return needsRevalidation_nolock(aspects); }
     std::shared_ptr<CapturePageData> revalGetNextPage_nolock() const override
@@ -1272,11 +1284,17 @@ protected:
 
     int getStraightPreview( preview_t *, offset_t, length_t, offset_t );
     virtual void childEvent( QChildEvent * ) override;
-    // Swallows a pending DeferredDelete when the object was re-referenced
-    // after removeRef() hit zero (deleteLater() cannot be rescinded; without
-    // this, any 1->0->1 refcount transition destroys an object that live
-    // SLinks still point at — vtable-garbage crash at the next paint).
+    // Swallows a DeferredDelete (a deleteLater() from outside the model's own
+    // lifetime path) while the object is still referenced or reval-pinned:
+    // honouring it would leave live SLinks dangling. removeRef() itself never
+    // posts one (QBX-306); see deleteIfDead().
     virtual bool event( QEvent * ) override;
+
+    // QBX-306: the model's deletion path. postCheckedDelete() (main thread)
+    // queues deleteIfDead(), which deletes the object only if nRefs_ == 0,
+    // revalPins_ == 0 and deletePending_ still hold when it is delivered.
+    void postCheckedDelete();
+    void deleteIfDead();
 
     virtual int serializeSelfAttributes( QTextStream &o );
 
@@ -1383,8 +1401,8 @@ private:
     QSet<SLink*> dependentLinks_;
     int nRefs_;
     // Revalidator keep-alive pins (worker-thread safe — see revalAddRef()).
-    // deletePending_ records a refcount-driven deleteLater() that arrived
-    // while pinned, so the last unpin can re-arm it.
+    // deletePending_: the refcount reached zero and no addRef() has
+    // rescinded it since; deleteIfDead() requires it (QBX-306).
     std::atomic<int> revalPins_{0};
     std::atomic<bool> deletePending_{false};
     offset_t previewForLength_;

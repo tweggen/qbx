@@ -346,8 +346,8 @@ Invariants:
    cascade, which keeps scheduling more work as objects invalidate on their way
    out; the up-front shutdown is the property, the retire is the belt. Symptom
    when it was missing: the app hung in ~SProject's join on File -> Open, with
-   a worker faulting in Qt's per-thread teardown (workers are Qt-adopted —
-   SObject::revalCompleted posts a queued invokeMethod), i.e. nowhere near the
+   a worker faulting in Qt's per-thread teardown (workers were Qt-adopted
+   then), i.e. nowhere near the
    object that had been freed under it. See tw/schedule CONTRACT inv. 11.
 
 7. An external file reference is PORTABLE ON DISK and ABSOLUTE IN MEMORY.
@@ -358,11 +358,54 @@ Invariants:
    save/load actions maintain — never the serialized fileName attribute.
    Nothing in the model ever hands a stored spelling to a file API, and
    nothing hands an absolute path to a serializer.
-8. addRef()/removeRef() are main-thread-only (asserted). removeRef()'s
-   deleteLater() is re-checked in SObject::event(): a re-referenced
-   (1→0→1) or reval-pinned object swallows the stale DeferredDelete (the
-   last unpin re-arms it via deletePending_), and ~SObject warns if it ever
-   runs with live references.
+8. addRef()/removeRef() are main-thread-only (asserted). A drop to zero
+   posts a RE-CHECKING deletion (8a), never a deleteLater(); ~SObject warns
+   if it ever runs with live references. SObject::event() still swallows a
+   DeferredDelete from anyone else while the object is referenced or pinned.
+8a. **DEATH IS A QUEUED, RE-CHECKING FUNCTOR, AND THE LOOP-LESS DRAINS FLUSH
+   EVERYTHING** (QBX-306, the author's option (b), thinktank convention
+   `sobject-delete-via-checking-functor`). removeRef() at zero sets
+   `deletePending_` and calls `postCheckedDelete()`: a queued functor on
+   the APPLICATION object holding a QPointer, which at delivery calls
+   `deleteIfDead()` -- delete only if `nRefs_ == 0`, `revalPins_ == 0` and
+   `deletePending_` all still hold. Two measured facts forced it:
+   - **Qt 6.11's deleteLater() is once-only per object.** The old scheme
+     let event() swallow the DeferredDelete of a pinned or resurrected
+     object and "re-armed" it with a second deleteLater(), which Qt drops
+     silently: such an object was never deleted until ~SProject.
+   - **deleteLater() on a raw std::thread makes Qt adopt it** (a
+     QAdoptedThread is constructed on it): THREADING rule 1, QBX-305's crash
+     at thread exit. revalRemoveRef() runs on a CaptureRevalidator worker.
+   The revalidator's LAST pin is not released on the worker at all: the
+   worker posts a functor to the object (context `this`) that releases it
+   on the main thread and, if the object is dead, posts the check. While
+   the pin is held nothing can delete the object, and the worker never
+   touches it after the post -- so there is no window in which an older
+   queued check frees it under the worker. Any other pin is released on
+   the spot. A resurrection (1->0->1->0) takes the same path again: the
+   stale check finds `nRefs_ > 0` and does nothing, the next zero posts
+   its own. Explicit deletes after a removeRef() (stakehelpers'
+   take-column collapse, ~SProject's cascade) stay safe: the QPointer is
+   null and the posted hand-off dies with its receiver.
+   The cost is on callers that collect WITHOUT an event loop -- the shell's
+   teardown (`smaragdOrderlyShutdown()`) and the `drain-pending-deletes`
+   verb. A `sendPostedEvents( nullptr, QEvent::DeferredDelete )` flush does
+   not deliver a functor, and a plain `sendPostedEvents()` does not deliver
+   DeferredDelete at loop level 0. Both therefore call
+   `SObject::drainPendingDeletes()`: all posted events, then DeferredDelete
+   (widgets still use deleteLater()), repeated until a round delivers
+   nothing (counted by an application event filter), at most 16 rounds and a
+   warning past that, since a queued slot may post more. At the teardown
+   everything is still alive (QApplication, window, project, speaker, scan
+   thread), so what the wider flush runs is what the runner's per-action
+   `processEvents()` would have run. And since that pump delivers posted
+   functors, a --test-case run now collects dead model objects between
+   actions, as the real app does; `drain-pending-deletes` matters only where
+   no pump falls between the removal and the claim. Gate:
+   `reval_rearm_test` (unit: no verb can schedule the pin/zero/unpin race,
+   and a .qxa cannot separate the drain from the pump). The plugin-UI test
+   verbs' DeferredDelete-only flushes (spluginuitestactions.cpp) are left
+   as they are: they collect editor widgets, which still use deleteLater().
 9. The preview NEVER moves a live play cursor. A sample-backed object reads
    its twRandomSource statelessly; a CONTAINER (no random source) reads its
    root component's FROZEN PAGES — requestPage() at FRAME_CAPACITY

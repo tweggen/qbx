@@ -6,6 +6,9 @@
 #include <qobject.h>
 #include <qtextstream.h>
 #include <QChildEvent>
+#include <QCoreApplication>
+#include <QMetaObject>
+#include <QPointer>
 #include <QEvent>
 #include <QThread>
 
@@ -817,13 +820,10 @@ void SObject::removeRef()
     }
     emit nRefsChanged();
     if( 0==nRefs_ ) {
-        // This will delete the object if the application reenters the main
-        // loop. deleteLater() cannot be rescinded — SObject::event() swallows
-        // the deferred delete if the object gets re-referenced (or is pinned
-        // by the revalidator) before then; deletePending_ lets the last unpin
-        // re-arm it.
+        // Death is a queued, RE-CHECKING functor, never deleteLater()
+        // (QBX-306, option (b)): see postCheckedDelete().
         deletePending_.store( true );
-        deleteLater();
+        postCheckedDelete();
     }
 }
 
@@ -840,15 +840,114 @@ void SObject::revalAddRef()
 
 void SObject::revalRemoveRef()
 {
-    if( revalPins_.fetch_sub( 1 ) == 1 ) {
-        // Last pin released. If a refcount-driven deletion arrived while we
-        // were pinned, event() swallowed it — re-arm it now. deleteLater() is
-        // thread-safe; event() re-checks everything on the object's thread,
-        // so a stale or duplicate post is harmless.
-        if( deletePending_.load() ) {
-            deleteLater();
-        }
+    // Any pin but the last is released here, on whatever thread this is.
+    int pins = revalPins_.load();
+    while( pins > 1 ) {
+        if( revalPins_.compare_exchange_weak( pins, pins - 1 ) ) return;
     }
+    if( pins <= 0 ) {
+        // Unbalanced. Touch nothing: no qWarning either, this may be a worker.
+        return;
+    }
+    // THE LAST PIN IS HANDED TO THE OBJECT'S OWN THREAD, still held (QBX-306).
+    //
+    // Why not release it here and re-arm the deletion: this runs on a
+    // CaptureRevalidator worker, a raw std::thread. deleteLater() there
+    // constructs a QAdoptedThread on it (THREADING rule 1, the mechanism of
+    // QBX-305's crash at thread exit) -- and on Qt 6.11 it would not even
+    // delete anything, because deleteLater() is once-only per object. A queued
+    // functor only POSTS an event and constructs no QObject on the caller.
+    //
+    // Why still held: while a pin is held, nothing can delete this object --
+    // deleteIfDead() re-checks the pins. Releasing it here and THEN posting
+    // would leave a window in which an already-queued checked delete runs on
+    // the main thread, sees no pin and frees the object under this very call.
+    // Posting first and dropping the pin on the main thread closes it: this
+    // thread never touches the object again after the post.
+    //
+    // Context is `this`: if the object is destroyed before delivery, ~QObject
+    // drops the posted functor and the pin with it.
+    QMetaObject::invokeMethod( this, [this] {
+        if( revalPins_.fetch_sub( 1 ) == 1 && deletePending_.load() )
+            postCheckedDelete();
+    }, Qt::QueuedConnection );
+}
+
+// Main thread only. Queue a deletion that decides AT DELIVERY whether it is
+// still wanted. Posted to the application object with a QPointer, so that (1)
+// an object deleted in the meantime by anyone (an explicit delete after a
+// removeRef, ~SProject's cascade) is simply skipped, and (2) the deletion never
+// runs inside the dying object's own event handler. Several may be queued; the
+// first that finds the object dead deletes it and the rest see a null pointer.
+void SObject::postCheckedDelete()
+{
+    QCoreApplication *app = QCoreApplication::instance();
+    if( !app ) return;   // no application, no loop: nothing could ever deliver it
+    QPointer<SObject> self( this );
+    QMetaObject::invokeMethod( app, [self] {
+        if( self ) self->deleteIfDead();
+    }, Qt::QueuedConnection );
+}
+
+// The re-check. Each condition has a reason:
+//  - nRefs_ == 0: a 1->0->1 resurrection re-linked it (addRef() also clears
+//    deletePending_); its next drop to zero posts a fresh check.
+//  - revalPins_ == 0: a revalidator job still holds a borrowed pointer; the
+//    last unpin posts a fresh check once it is released (revalRemoveRef()).
+//  - deletePending_: the zero was REACHED by removeRef() and no addRef() has
+//    rescinded it since. A refcount of zero alone does not mean dead: an
+//    object is born with nRefs_ == 0 and lives so until its first link.
+void SObject::deleteIfDead()
+{
+    Q_ASSERT( QThread::currentThread() == thread() );
+    if( nRefs_ != 0 || revalPins_.load() != 0 || !deletePending_.load() ) return;
+    delete this;
+}
+
+namespace {
+// Counts every event delivered through QCoreApplication::notify on the main
+// thread while installed on qApp. An application event filter sees events to
+// all of the thread's objects, DeferredDelete included.
+class SDeliveryCounter : public QObject
+{
+public:
+    int delivered = 0;
+    bool eventFilter( QObject *, QEvent * ) override
+    {
+        ++delivered;
+        return false;
+    }
+};
+}  // namespace
+
+int SObject::drainPendingDeletes( int maxRounds )
+{
+    QCoreApplication *app = QCoreApplication::instance();
+    if( !app ) return 0;
+    Q_ASSERT( QThread::currentThread() == app->thread() );
+
+    SDeliveryCounter counter;
+    app->installEventFilter( &counter );
+    int productive = 0;
+    bool settled = false;
+    for( int round = 0; round < maxRounds; ++round ) {
+        counter.delivered = 0;
+        // 1. Every posted event: a queued re-arm (revalRemoveRef), queued
+        //    slots. sendPostedEvents() with no type does NOT deliver
+        //    DeferredDelete at loop level 0, hence step 2.
+        QCoreApplication::sendPostedEvents();
+        // 2. The deletions, including the one step 1 just posted.
+        QCoreApplication::sendPostedEvents( nullptr, QEvent::DeferredDelete );
+        if( counter.delivered == 0 ) { settled = true; break; }
+        ++productive;
+    }
+    app->removeEventFilter( &counter );
+    if( !settled ) {
+        qWarning( "SObject::drainPendingDeletes(): still delivering after %d "
+                  "rounds; giving up (something keeps posting events)",
+                  maxRounds );
+    }
+    return productive;
 }
 
 /**
@@ -991,25 +1090,26 @@ void SObject::childEvent( QChildEvent *ce )
     }
 }
 
-// DeferredDelete is the model's GC tick (removeRef() -> deleteLater()). It
-// cannot be rescinded, so an object re-referenced after its refcount touched
-// zero would still be destroyed here — with live SLinks pointing at it.
-// Swallow the stale deletion instead; a later drop to zero posts a fresh one.
+// The model's own deaths no longer go through DeferredDelete (removeRef() posts
+// a re-checking functor, QBX-306), but a deleteLater() from anywhere else still
+// would, and it cannot be rescinded. So an object that is referenced, or pinned
+// by a revalidator job, swallows it. Note what that does NOT promise: Qt 6.11's
+// deleteLater() is once-only per object, so a swallowed one is never re-armed
+// by a later deleteLater(). The object is collected by removeRef()'s path when
+// its refcount next reaches zero, or by its owner.
 bool SObject::event( QEvent *e )
 {
     if( e->type() == QEvent::DeferredDelete ) {
         if( nRefs_ > 0 ) {
-            // 1->0->1 resurrection: something re-linked this object after its
-            // refcount touched zero. Dropping the stale deletion here is what
-            // makes that pattern safe.
-            qWarning( "SObject::event(): '%s' resurrected after a queued "
-                      "deletion (refcount %d) — deferred delete ignored.",
+            // A deleteLater() aimed at an object that is still referenced:
+            // honouring it would leave live SLinks dangling.
+            qWarning( "SObject::event(): '%s' still referenced (refcount %d) "
+                      "— deferred delete ignored.",
                       qPrintable( sName_ ), nRefs_ );
             return true;
         }
         if( revalPins_.load() > 0 ) {
-            // A reval job still holds a borrowed pointer to us; deletePending_
-            // is set, so the last revalRemoveRef() re-arms the deletion.
+            // A reval job still holds a borrowed pointer to us.
             return true;
         }
     }
