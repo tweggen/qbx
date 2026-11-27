@@ -784,11 +784,18 @@ SAutomationLaneUi &SStdMixerView::automationUi()
 // appendRowsFor, which owns the ORDER (track lane, take lanes, automation
 // lanes) - every one of them a sub-lane, so the track's single head spans the
 // whole group (laneGroupHeight) and assert-lane-alignment covers them for free.
+//
+// The set is read from the TRACK, so it must not depend on whether this view
+// has built its automation UI yet. An `if( !autoUi_ ) return;` stood here: right
+// while the set lived on SAutomationLaneUi (no UI object, nothing shown), and a
+// defect once proposal 46 M3 moved it onto STrack, because the UI is created
+// lazily by the first gesture or paint. An arranger built over a loaded project
+// therefore built no automation row until something touched automationUi()
+// (QBX-317; lane_view_persists.qxa read 4 rows, not 5).
 void SStdMixerView::appendAutomationRowsFor( STrack *tk, SLink *lk,
                                              SObject *container, int depth )
 {
-    if( !autoUi_ ) return;
-    const QVector<SAutoLaneRef> lanes = autoUi_->shownLanes( tk );
+    const QVector<SAutoLaneRef> lanes = automationUi().shownLanes( tk );
     for( const SAutoLaneRef &r : lanes ) {
         STrackRow row{ tk, lk, container, depth, false, false, -1 };
         row.subKind       = SubLaneKind::Automation;
