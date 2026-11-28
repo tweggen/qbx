@@ -1688,6 +1688,23 @@ std::uint64_t SLiveMonitor::pumpResyncFrames() const
     return pump_ ? pump_->resyncFrames() : 0;
 }
 
+std::uint64_t SLiveMonitor::pumpCatchUpResyncFrames() const
+{
+    return pump_ ? pump_->catchUpResyncFrames() : 0;
+}
+
+std::uint64_t SLiveMonitor::pumpCatchUps() const
+{
+    return pump_ ? pump_->catchUps() : 0;
+}
+
+bool SLiveMonitor::forcePumpLateForTest( qint64 frames )
+{
+    if( !pump_ ) return false;
+    pump_->forceLateForTest( (std::int64_t)frames );
+    return true;
+}
+
 QString SLiveMonitor::describe() const
 {
     QString s = QStringLiteral( "live=%1 tracks=%2 sources=%3" )

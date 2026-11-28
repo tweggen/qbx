@@ -256,6 +256,14 @@ public:
     /// QBX-320: live-input frames the pump dropped to resync after transport
     /// clock stalls (LiveGraphPump::resyncFrames()); 0 without a pump.
     std::uint64_t pumpResyncFrames() const;
+    /// QBX-323: live-input frames the pump dropped to resync after its own
+    /// catch-ups (LiveGraphPump::catchUpResyncFrames()), and how many
+    /// catch-ups it made; 0 without a pump.
+    std::uint64_t pumpCatchUpResyncFrames() const;
+    std::uint64_t pumpCatchUps() const;
+    /// TEST SEAM (QBX-323): LiveGraphPump::forceLateForTest(). False without
+    /// a pump.
+    bool forcePumpLateForTest( qint64 frames );
     /**
      * THE PUBLISHED PLAN, read back off the pump (QBX-307).
      *

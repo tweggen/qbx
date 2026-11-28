@@ -72,7 +72,9 @@ private:
  * Closure-suppressed short pull advanced instead (`discardedMissFrames`),
  * re-roots below the master published with the playhead's page current or not
  * (`warmReroots` / `coldReroots`), and live-input frames the pump dropped to
- * resync after a stall (`resyncFrames`). Every bound is unchecked unless given;
+ * resync after a stall (`resyncFrames`), and - QBX-323 - the pump's own
+ * catch-ups (`catchUps`) and the input frames it dropped to repay the positions
+ * they skipped (`catchUpResyncFrames`). Every bound is unchecked unless given;
  * min* and max* are separate claims, and the values are printed either way.
  */
 class SAssertFrozenLaneAction : public SAction
@@ -91,6 +93,29 @@ private:
     qint64 minDiscarded_ = -1, maxDiscarded_ = -1;
     qint64 minWarm_ = -1, maxCold_ = -1;
     qint64 minResync_ = -1, maxResync_ = -1;
+    qint64 minCatchUps_ = -1;
+    qint64 minCatchUpResync_ = -1, maxCatchUpResync_ = -1;
+};
+
+/**
+ * `inject-pump-late` - TEST SEAM (QBX-323): the live pump renders nothing
+ * until the clock has passed its own position by `frames`, then carries on -
+ * the state a descheduled pump wakes up in, forced without load
+ * (LiveGraphPump::forceLateForTest).
+ */
+class SInjectPumpLateAction : public SAction
+{
+public:
+    SInjectPumpLateAction() = default;
+    QString name() const override
+    { return QStringLiteral( "inject-pump-late" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    qint64 frames_ = 1024;
 };
 
 /**

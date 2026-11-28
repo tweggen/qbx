@@ -222,7 +222,10 @@ QStringList SAssertFrozenLaneAction::knownAttributes() const
              QStringLiteral( "minDiscardedMissFrames" ),
              QStringLiteral( "maxDiscardedMissFrames" ),
              QStringLiteral( "minWarmReroots" ),     QStringLiteral( "maxColdReroots" ),
-             QStringLiteral( "minResyncFrames" ),    QStringLiteral( "maxResyncFrames" ) };
+             QStringLiteral( "minResyncFrames" ),    QStringLiteral( "maxResyncFrames" ),
+             QStringLiteral( "minCatchUps" ),
+             QStringLiteral( "minCatchUpResyncFrames" ),
+             QStringLiteral( "maxCatchUpResyncFrames" ) };
 }
 
 SApplyResult SAssertFrozenLaneAction::apply( SProject * )
@@ -237,10 +240,16 @@ SApplyResult SAssertFrozenLaneAction::apply( SProject * )
     const qint64 disc   = (qint64) spk->frozenDiscardedMissFrames();
     const qint64 warm   = (qint64) spk->warmReroots();
     const qint64 cold   = (qint64) spk->coldReroots();
-    const qint64 resync = app.liveMonitor() ? (qint64) app.liveMonitor()->pumpResyncFrames() : 0;
+    SLiveMonitor *lm    = app.liveMonitor();
+    const qint64 resync = lm ? (qint64) lm->pumpResyncFrames() : 0;
+    const qint64 cups   = lm ? (qint64) lm->pumpCatchUps() : 0;
+    const qint64 cuRes  = lm ? (qint64) lm->pumpCatchUpResyncFrames() : 0;
+    // Fields APPENDED (QBX-323), never inserted: assertions match substrings.
     const QString desc = QStringLiteral( "stallFrames=%1 discardedMissFrames=%2 "
-                                         "warmReroots=%3 coldReroots=%4 resyncFrames=%5" )
-                             .arg( stall ).arg( disc ).arg( warm ).arg( cold ).arg( resync );
+                                         "warmReroots=%3 coldReroots=%4 resyncFrames=%5 "
+                                         "catchUps=%6 catchUpResyncFrames=%7" )
+                             .arg( stall ).arg( disc ).arg( warm ).arg( cold ).arg( resync )
+                             .arg( cups ).arg( cuRes );
     bool ok = true;
     auto check = [&]( const char *what, qint64 v, qint64 lo, qint64 hi ) {
         if( lo >= 0 && v < lo ) {
@@ -257,6 +266,8 @@ SApplyResult SAssertFrozenLaneAction::apply( SProject * )
     check( "warmReroots", warm, minWarm_, -1 );
     check( "coldReroots", cold, -1, maxCold_ );
     check( "resyncFrames", resync, minResync_, maxResync_ );
+    check( "catchUps", cups, minCatchUps_, -1 );
+    check( "catchUpResyncFrames", cuRes, minCatchUpResync_, maxCatchUpResync_ );
     if( !ok ) return { false, nullptr };
     qDebug() << "assert-frozen-lane: OK -" << desc;
     return { true, nullptr };
@@ -272,6 +283,9 @@ void SAssertFrozenLaneAction::writeXml( QDomElement &elem ) const
     put( "maxDiscardedMissFrames", maxDiscarded_ );
     put( "minWarmReroots", minWarm_ );         put( "maxColdReroots", maxCold_ );
     put( "minResyncFrames", minResync_ );      put( "maxResyncFrames", maxResync_ );
+    put( "minCatchUps", minCatchUps_ );
+    put( "minCatchUpResyncFrames", minCatchUpResync_ );
+    put( "maxCatchUpResyncFrames", maxCatchUpResync_ );
 }
 
 bool SAssertFrozenLaneAction::readXml( const QDomElement &elem, int )
@@ -285,7 +299,41 @@ bool SAssertFrozenLaneAction::readXml( const QDomElement &elem, int )
     maxCold_      = get( "maxColdReroots" );
     minResync_    = get( "minResyncFrames" );
     maxResync_    = get( "maxResyncFrames" );
+    minCatchUps_      = get( "minCatchUps" );
+    minCatchUpResync_ = get( "minCatchUpResyncFrames" );
+    maxCatchUpResync_ = get( "maxCatchUpResyncFrames" );
     return true;
+}
+
+// --- inject-pump-late (QBX-323 test seam) -----------------------------------
+
+QStringList SInjectPumpLateAction::knownAttributes() const
+{
+    return { QStringLiteral( "frames" ) };
+}
+
+SApplyResult SInjectPumpLateAction::apply( SProject * )
+{
+    SLiveMonitor *lm = SApplication::app().liveMonitor();
+    if( !lm || !lm->forcePumpLateForTest( frames_ ) ) {
+        qWarning() << "inject-pump-late: no live pump";
+        return { false, nullptr };
+    }
+    qWarning() << "inject-pump-late: TEST FAULT - the live pump idles until the clock"
+               << "has passed its position by" << frames_ << "frame(s)";
+    return { true, nullptr };
+}
+
+void SInjectPumpLateAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "frames", QString::number( frames_ ) );
+}
+
+bool SInjectPumpLateAction::readXml( const QDomElement &elem, int )
+{
+    bool ok = false;
+    frames_ = elem.attribute( "frames", "1024" ).toLongLong( &ok );
+    return ok && frames_ > 0;
 }
 
 // --- inject-frozen-miss (QBX-320 test seam) ---------------------------------
@@ -1106,6 +1154,9 @@ static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "inject-frozen-miss" ),
         []{ return new SInjectFrozenMissAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "inject-pump-late" ),
+        []{ return new SInjectPumpLateAction; } ),
     SActionRegistry::instance().registerType(
         QStringLiteral( "set-reroot-stale" ),
         []{ return new SSetRerootStaleAction; } ),

@@ -68,6 +68,7 @@ void LiveGraphPump::resetStats()
     ringFull_.store( 0, std::memory_order_relaxed );
     resyncFrames_.store( 0, std::memory_order_relaxed );
     resyncs_.store( 0, std::memory_order_relaxed );
+    catchUpResyncFrames_.store( 0, std::memory_order_relaxed );
 }
 
 // --------------------------------------------------------------- the thread
@@ -78,6 +79,8 @@ void LiveGraphPump::start()
     stopFlag_.store( false, std::memory_order_relaxed );
     stallSynced_ = false;   // QBX-320: no debt carried in from another run
     resyncDebt_  = 0;
+    catchUpDebt_ = 0;       // QBX-323: likewise for skipped positions
+    lateUntil_   = -1;
     waiter_.open();
     running_.store( true, std::memory_order_release );
     thread_ = std::thread( [this] { loop(); } );
@@ -267,6 +270,23 @@ bool LiveGraphPump::renderOneBlock()
             if( nf < 0 ) nf = 0;
             const offset_t lead = plan->leadFrames;
 
+            // TEST SEAM (QBX-323): be late on purpose. Idle -- render
+            // nothing, so the RT drains the ring and the clock overtakes us --
+            // until the clock has passed our own position by the frames asked
+            // for; then fall through into the same decision a descheduled pump
+            // meets when it wakes up.
+            if( havePos_ ) {
+                if( lateReqForTest_.load( std::memory_order_relaxed ) != 0 ) {
+                    const std::int64_t late =
+                        lateReqForTest_.exchange( 0, std::memory_order_acq_rel );
+                    if( late > 0 ) lateUntil_ = nextPos_ + (offset_t)late;
+                }
+                if( lateUntil_ >= 0 ) {
+                    if( nf < lateUntil_ ) return false;
+                    lateUntil_ = -1;
+                }
+            }
+
             if( !havePos_ ) {
                 want = nf;
             } else if( nextPos_ < nf ) {
@@ -331,6 +351,15 @@ bool LiveGraphPump::renderOneBlock()
         // No new RUN: everything still queued is behind `want`, and the
         // consumer drops wholly-behind entries itself (twlivering.cc). No
         // forgetContinuity(): the processors' own catch-up rule sees the jump.
+        //
+        // THE SKIPPED POSITIONS ARE OWED TO THE INPUT (QBX-323). The pump
+        // pulls input only for the blocks it renders, and a catch-up renders
+        // none for [nextPos_, want) -- while a streaming input kept arriving at
+        // the device rate the whole time the pump was late. Without this the
+        // input stays exactly that much deeper, and everything monitored from
+        // it that much later, until disarm: inv. 16b's latency class, reached
+        // without any clock stall. Paid below with the stall debt.
+        catchUpDebt_ += (std::uint64_t)( want - nextPos_ );
         nextPos_ = want;
         catchUps_.fetch_add( 1, std::memory_order_relaxed );
     }
@@ -354,20 +383,31 @@ bool LiveGraphPump::renderOneBlock()
     // A source that has not received the whole backlog yet pays what it has;
     // the rest stays owed to the next block. A plan with no streaming input
     // owes nothing.
-    if( resyncDebt_ > 0 ) {
+    //
+    // A CATCH-UP owes the same (QBX-323): the positions it skipped were never
+    // pulled. Both debts are paid by one discard, the stall's first, and
+    // counted apart.
+    const std::uint64_t owed = resyncDebt_ + catchUpDebt_;
+    if( owed > 0 ) {
         std::uint64_t paid = 0;
         bool          any  = false;
         for( const twLiveTrackPlan &t : plan->tracks ) {
             if( !t.input || !t.input->isStream() ) continue;
-            const std::uint64_t got = (std::uint64_t)t.input->discard( (std::size_t)resyncDebt_ );
+            const std::uint64_t got = (std::uint64_t)t.input->discard( (std::size_t)owed );
             paid = any ? std::min( paid, got ) : got;
             any  = true;
         }
         if( !any ) {
-            resyncDebt_ = 0;
+            resyncDebt_  = 0;
+            catchUpDebt_ = 0;
         } else {
-            resyncDebt_ -= std::min( paid, resyncDebt_ );
-            resyncFrames_.fetch_add( paid, std::memory_order_relaxed );
+            paid = std::min( paid, owed );
+            const std::uint64_t toStall = std::min( paid, resyncDebt_ );
+            const std::uint64_t toCatch = paid - toStall;
+            resyncDebt_  -= toStall;
+            catchUpDebt_ -= toCatch;
+            if( toStall ) resyncFrames_.fetch_add( toStall, std::memory_order_relaxed );
+            if( toCatch ) catchUpResyncFrames_.fetch_add( toCatch, std::memory_order_relaxed );
         }
     }
 

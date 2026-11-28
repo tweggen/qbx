@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-323: AFTER A LIVE-PUMP CATCH-UP THE LIVE INPUT IS RESYNCED, so a late
+  pump never leaves the monitored input permanently late.
+
+  A CATCH-UP (QBX-214) is the pump waking up behind the clock by no more than
+  twPluginSlotProcessor::kLiveCatchUpMaxFrames: it jumps to the clock and
+  renders on, and it never pulls input for the positions it skipped. The
+  device input kept arriving the whole time, so without a resync its backlog
+  is the skipped frames deeper for the rest of the arm - playback inv. 16b's
+  latency class, with no clock stall anywhere (seen once in 30 loaded runs of
+  closure_miss_keeps_clock: a dropout with stallFrames 0, lag 3072 -> 4096).
+
+  THE FAULT IS FORCED, not loaded: `inject-pump-late` makes the pump render
+  nothing until the clock has passed its own position by one block, then it
+  meets exactly the decision a descheduled pump meets on waking. The ring
+  drains meanwhile, so the monitored signal has a gap; the gap is NOT asserted
+  (a late pump costs those frames either way, like an xrun).
+
+  WHAT IS MEASURED: the DRIFT of the monitored lag between a window before the
+  injection (48000) and one after it (168000), which reads one block (1024)
+  when the skipped positions are not repaid and 0 when they are; and, as the
+  witness only the injection can produce, the counters - at least one
+  catch-up, and at least one block of input dropped for it.
+
+  THE FIXTURE is frozen_stall_resync's: the armed track carries
+  test_sawtooth.wav through a 0.25 gain, the unarmed one test_autosaw.wav at
+  -60 dB, the plan is linear.
+-->
+<SActionScript version="1" name="pump_catchup_resync">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2600"/>
+
+    <!-- THE FAULT: the pump falls one block behind the clock. -->
+    <inject-pump-late frames="1024"/>
+
+    <wait-ms ms="2600"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="0" maxCount="0"/>
+
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="pump_catchup_resync.wav" minFrames="216000"/>
+    <assert-monitor-latency filename="pump_catchup_resync.wav"
+                            inputFile="../test_sawtooth.wav" channel="0"
+                            startFrame="168000" frameCount="24000"
+                            refStartFrame="48000" maxDriftFrames="64"
+                            maxFrames="24000" searchFrames="24000"/>
+    <assert-frozen-lane minCatchUps="1" minCatchUpResyncFrames="1024"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
