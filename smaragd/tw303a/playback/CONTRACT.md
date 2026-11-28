@@ -282,6 +282,28 @@ Invariants:
     NOT handled: two armed tracks reading ONE input each pop that input's live
     ring for themselves (pre-existing - they split one stream between them), so
     each would also discard the debt.
+    AMENDED BY QBX-323 (author's decision 2026-11-28) — A CATCH-UP OWES THE
+    SAME. The clock is not the only way the pump stops pulling: a pump that
+    wakes up BEHIND the clock and catches up (inv. 17's QBX-214 amendment)
+    jumps `nextPos` to the clock and renders nothing for the positions in
+    between, while the streaming input kept arriving the whole time. That is
+    inv. 16b's latency class without any stall (seen once in 30 loaded runs of
+    `closure_miss_keeps_clock`: a dropout with `stallFrames` 0 and the lag
+    3072 -> 4096). So the catch-up adds the skipped frames to a second debt,
+    paid by the SAME discard as the stall's, after it, and counted apart
+    (`catchUpResyncFrames()`, so "`resyncFrames` == the speaker's stall count"
+    still means what it says); re-anchored at `start()` like it. A REPOSITION
+    owes nothing: it cannot tell a late pump from a seek, and a seek moves the
+    timeline, not the input. So a pump late by MORE than
+    `kLiveCatchUpMaxFrames` still leaves its lateness as latency - NOT handled,
+    and not reached by any case. As with a stall, the GAP is not given back.
+    Gates: `qxa.pump_catchup_resync` (`inject-pump-late` makes the pump idle
+    until the clock has passed it by a block - the state a descheduled pump
+    wakes in, without load; drift of the monitored lag 0, against 1024 with
+    the debt not taken) and `playback_test`'s QBX-323 stream case (the pump
+    not run for three callbacks: one catch-up, the material at a position at
+    the same offset after it as before, exactly the skipped frames dropped and
+    none counted as a stall's).
 
 17. ONE EXPLICIT REPOSITION per start/stop/seek/wrap, decided by the pump and
     applied THROUGH THE PLAN (`applyReposition()`: move the position, count it,
