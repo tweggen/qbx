@@ -90,3 +90,19 @@ jobs:
           #                           Environmental, like the macOS-only AU
           #                           cases. LINUX_GATE.md 1.
           CTEST_EXCLUDE: '^(qxa\.asset_clip_preview|secret_store_test)$'
+
+      # QBX-322: what ci/gates.sh collected from the FAILED tests -- per test, its
+      # run.log and a copy of its --test-output-dir (the playback-capture .wav
+      # above all). `if: failure()` keeps a green run from uploading anything;
+      # a red run before ctest (build, checkers) has no directory, hence
+      # if-no-files-found: ignore. Seven days covers a weekend's triage; the
+      # collector caps the copied output at 200 MB for a run where everything
+      # fails.
+      - name: Upload failed cases
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-cases-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smaragd/build/failed-cases/
+          if-no-files-found: ignore
+          retention-days: 7
