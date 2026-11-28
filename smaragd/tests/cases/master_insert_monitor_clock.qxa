@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-320: A MASTER INSERT LANDING WHILE A LANE IS MONITORED MUST NOT STALL THE
+  TRANSPORT CLOCK, and so must not gap the monitored input or leave it late.
+
+  THE DEFECT (QBX-318 mechanism B, measured there and in QBX-320). The insert
+  flips the live plan to a Closure, and the Closure re-roots the frozen lane
+  BELOW the master chain. At that moment the new root's page under the
+  playhead was stale in 14 of 15 runs, the readahead restarted its frontier
+  at the page start, and the next callback found nothing to pull: the engine
+  position stood still for one 1024-frame block. The pump paces on that clock,
+  so the ring entry it had queued was a block in the future (a silent block in
+  the monitored signal), and the live input, which kept arriving, sat one
+  block deeper for the rest of the arm: everything monitored after the flip
+  was 1024 frames late.
+
+  THE FIX is three remedies (author's decision, 2026-11-28); this case gates
+  the TRIGGER as a user meets it, with no fault injected:
+    2. the re-root warms the new root's pages and is published only when the
+       page under the playhead is current - `warmReroots` >= 1 and
+       `coldReroots` = 0 below;
+    3. under the Closure a short frozen pull advances the clock anyway, its
+       audio being discarded;
+    1. a stall that does happen is repaid out of the input backlog.
+  Each remedy has its own isolated case: reroot_warm_stale (2),
+  frozen_stall_resync (1), closure_miss_keeps_clock (3).
+
+  THE FIXTURE IS master_insert_while_monitoring's, unchanged: the armed track
+  carries test_sawtooth.wav through a 0.25 gain, the unarmed one carries
+  test_autosaw.wav at -60 dB (it is below the measurement's floor), and the
+  2.0x master insert lands about 2.6 s into the roll - at engine position
+  129024 on the reference box, capture frame ~132096.
+
+  WHAT IS MEASURED, and why each is box-independent:
+    - CONTINUITY over [100000, 190000): the flip sits inside it, and the
+      fixture's own silent head (762 frames at the input file's loop seam,
+      ~196000 in the capture) lies outside it. The longest natural run below
+      0.001 in this window is a few frames of a sawtooth's zero crossing; the
+      stall's gap is 1024.
+    - THE DRIFT of the monitored lag between a window before the flip
+      (48000) and one after it (168000). The absolute lag carries the device
+      start, a wall-clock quantity (QBX-222/228, which is also why
+      master_insert_while_monitoring's absolute window flakes and is QBX-321's
+      to anchor); the drift does not. One stalled block reads as 1024.
+-->
+<SActionScript version="1" name="master_insert_monitor_clock">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2600"/>
+
+    <!-- THE GESTURE: the plan flips to a Closure and the frozen lane re-roots
+         below the master, with the transport rolling. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <wait-ms ms="2600"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="1"/>
+
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="master_insert_monitor_clock.wav" minFrames="216000"/>
+    <assert-audio-continuity filename="master_insert_monitor_clock.wav" channel="0"
+                             startFrame="100000" frameCount="90000"
+                             maxGapFrames="256"/>
+    <assert-monitor-latency filename="master_insert_monitor_clock.wav"
+                            inputFile="../test_sawtooth.wav" channel="0"
+                            startFrame="168000" frameCount="24000"
+                            refStartFrame="48000" maxDriftFrames="64"
+                            maxFrames="24000" searchFrames="24000"/>
+    <assert-frozen-lane minWarmReroots="1" maxColdReroots="0"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

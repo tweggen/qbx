@@ -391,8 +391,37 @@ void twSpeaker::setLiveMasterClosure(
     const bool entering = closure && !liveMasterClosure_.load(std::memory_order_acquire);
     if (entering) {
         liveFrozenRootUnderMaster_ = frozenRootUnderMaster;
-        if (auto e = engineSnapshot())
+        if (auto e = engineSnapshot()) {
+            // QBX-320 remedy 2: WARM BEFORE PUBLISHING. A re-root drops the
+            // RT's held page and restarts the readahead at the new root, so if
+            // the new root's page under the playhead is not current the very
+            // next callback has nothing to serve: QBX-318 measured exactly
+            // that, a whole block short at the master-insert flip. Entering
+            // only: the root below the master never reaches the master lane's
+            // processors, so freezing it here races nothing the pump renders.
+            // (Leaving is NOT warmed: the old closure plan is still the pump's
+            // until SLiveMonitor publishes the linear one, and the root above
+            // the master runs exactly those processors.)
+            const std::shared_ptr<twComponent> &nr = liveFrozenRootUnderMaster_;
+            if (nr && e->readaheadActive()) {
+                if (staleRerootForTest_.exchange(false, std::memory_order_relaxed))
+                    nr->bumpContentEpoch();
+                warmRerootTarget(*e, nr);
+                // Probed apart from the warm-up, so a gate sees a cold re-root
+                // whether or not the warm-up ran.
+                const offset_t cap = (offset_t) twOutputPage::FRAME_CAPACITY;
+                const offset_t ps  = twFloorAlign((offset_t) e->currentPosition(), cap);
+                auto pg = nr->getPageIfExists(ps);
+                const bool current = pg && pg->validAspects != 0 &&
+                                     pg->contentEpoch.load() >= nr->contentEpochNow() &&
+                                     pg->startPosition == ps;
+                (current ? warmReroots_ : coldReroots_).fetch_add(1, std::memory_order_relaxed);
+                if (!current)
+                    TWSPK_LOG( "re-root below the master published COLD: the new root's "
+                               "page at %lld is not current (QBX-320)", (long long) ps );
+            }
             e->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
+        }
         liveMasterClosure_.store(closure, std::memory_order_release);
         return;
     }
@@ -401,6 +430,47 @@ void twSpeaker::setLiveMasterClosure(
                                          : std::shared_ptr<twComponent>();
     if (auto e = engineSnapshot())
         e->setFrozenDemandRoot(liveFrozenRootUnderMaster_);
+}
+
+void twSpeaker::warmRerootTarget(audio::AudioEngine &engine,
+                                 const std::shared_ptr<twComponent> &root)
+{
+    // MAIN THREAD. Bounded: past the bound the re-root is published anyway and
+    // counted cold -- remedies 1 and 3 then bound what a miss can cost. The
+    // wait is a demand's own condition variable, never a sleep.
+    if (!pageScheduler_ || !root) return;
+    constexpr int kBoundMs = 250;
+    const offset_t cap = (offset_t) twOutputPage::FRAME_CAPACITY;
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto deadline = t0 + std::chrono::milliseconds(kBoundMs);
+    auto isCurrent = [&](offset_t ps) {
+        auto pg = root->getPageIfExists(ps);
+        return pg && pg->validAspects != 0 &&
+               pg->contentEpoch.load() >= root->contentEpochNow() &&
+               pg->startPosition == ps;
+    };
+    int demands = 0;
+    bool warm = false;
+    // Re-read the playhead on every pass: it keeps moving while we wait, and
+    // the page that matters is the one under it at PUBLICATION. A completed
+    // demand does not promise a current page (verify-at-publish may re-stale
+    // it), so completion is followed by a re-check and, if needed, a re-demand.
+    while (std::chrono::steady_clock::now() < deadline) {
+        const offset_t ps = twFloorAlign((offset_t) engine.currentPosition(), cap);
+        if (isCurrent(ps) && isCurrent(ps + cap)) { warm = true; break; }
+        // Two pages: the playhead's, and the next, so a playhead close to a
+        // page boundary does not cross into a cold page before the readahead,
+        // restarted at the new root, has caught up.
+        auto d = pageScheduler_->requestGraphPages(root, ps, 2, 9);
+        ++demands;
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (left.count() <= 0 || !d->waitFor(left)) break;
+    }
+    const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    TWSPK_LOG( "re-root warm-up: %s after %d demand(s), %.1f ms (QBX-320)",
+               warm ? "current" : "NOT current", demands, ms );
 }
 
 void twSpeaker::warmFrozenLane(offset_t pos)
@@ -896,10 +966,42 @@ std::size_t twSpeaker::renderCallbackBody(float *out, std::size_t frames,
 
     if (frozenPlaying) {
         blockStart = (std::int64_t) engine->currentPosition();
-        outFrames  = (std::size_t) engine->pullBlock(chans, pullCh, frames);
+        // QBX-320 test seam: a forced miss is what a real one leaves behind --
+        // nothing produced, every buffer defined, the position unmoved.
+        int forced = forcedMisses_.load(std::memory_order_relaxed);
+        while (forced > 0 &&
+               !forcedMisses_.compare_exchange_weak(forced, forced - 1,
+                                                    std::memory_order_relaxed)) {}
+        if (forced > 0) {
+            std::fill(cbBuf_.begin(),
+                      cbBuf_.begin() + (std::ptrdiff_t)(pullCh * frames), 0.0f);
+            outFrames = 0;
+        } else {
+            outFrames = (std::size_t) engine->pullBlock(chans, pullCh, frames);
+        }
         if (outFrames > 0) {
             haveRoot  = true;
             rootEpoch = engine->servedContentEpoch();
+        }
+        // A SHORT PULL STOPS THE CLOCK for the frames it did not produce: the
+        // position is published from engine->currentPosition() below, and the
+        // pull advanced it only by what it served (QBX-318 mechanism B).
+        if (outFrames < frames) {
+            const std::size_t lost = frames - outFrames;
+            if (closureLive) {
+                // Remedy 3: under a Closure plan this pull's audio is
+                // discarded a few lines down anyway -- the frozen lane is only
+                // the clock here -- so a miss must not stop it. Advance the
+                // playhead as if the block had been served.
+                engine->advanceWithoutAudio((length_t) lost);
+                discardedMissFrames_.fetch_add(lost, std::memory_order_relaxed);
+            } else {
+                // Remedy 1's input: the clock DID stall. The pump, which paces
+                // on it, idled for these frames while the device input kept
+                // arriving; it drops exactly this much backlog on its next
+                // block (twlivepump.cc).
+                engineClock_.noteStall((std::uint64_t) lost);
+            }
         }
         // pullBlock() writes every buffer for the full nFrames on every path,
         // including the misses — so the planar scratch is defined either way.

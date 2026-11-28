@@ -253,6 +253,36 @@ Invariants:
     deadline. The waiter is opened in `start()` and closed after the join in
     `stop()`, which wakes it first.
 
+16b. A CLOCK STALL IS REPAID OUT OF THE INPUT BACKLOG (QBX-320, remedy 1 of
+    three; author's decision 2026-11-28). Inv. 16 has a corollary nobody wrote
+    down: when the engine clock STANDS STILL while the device keeps playing - a
+    frozen pull that comes up short (inv. 21's clock half) - the pump idles,
+    because it paces on that clock, but a STREAMING input (a device ring) does
+    not: it keeps arriving at the device rate. Its backlog is then exactly the
+    stalled frames deeper, and everything monitored from it stays that much late
+    until disarm (QBX-318 mechanism B: one 1024-frame block per stall, measured).
+    So the RT notes every short frozen pull on the live clock
+    (`twEngineClock::noteStall`, cumulative), the pump folds the difference into
+    a debt on every call, and before it pulls the inputs for its next rendered
+    block it asks each one to `discard()` the debt - a device ring pops and
+    drops that many of its OLDEST frames (`CaptureBridge::discardLive`, pump
+    thread, no lock, no allocation); a positional source (the harness, the
+    metronome) has no backlog and drops nothing. A source that has not received
+    the whole backlog yet pays what it has and owes the rest. The debt is
+    re-anchored at `start()`, so a stall from before this run of the pump is
+    never repaid out of a fresh input. WHAT IT DOES NOT DO: give back the GAP -
+    the block the stall cost is silence in the monitored signal either way
+    (`mixStream`'s `notYet`); only not stalling avoids that (property 7 of the
+    re-root section, and inv. 21's amendment). Recording is untouched: the
+    pages and the WAV are fed from the bridge's other sinks, not from the live
+    ring. Gates: `qxa.frozen_stall_resync` (a forced miss under a LINEAR plan,
+    drift of the monitored lag 0 against 1024 unrepaid) and `playback_test`'s
+    QBX-320 stream case (the material stamped at a position is exactly one
+    block newer after the stall, and exactly the stalled frames were dropped).
+    NOT handled: two armed tracks reading ONE input each pop that input's live
+    ring for themselves (pre-existing - they split one stream between them), so
+    each would also discard the debt.
+
 17. ONE EXPLICIT REPOSITION per start/stop/seek/wrap, decided by the pump and
     applied THROUGH THE PLAN (`applyReposition()`: move the position, count it,
     open a new RING RUN, `forgetContinuity()` on every plan processor), never by
@@ -384,6 +414,20 @@ Invariants:
     output by 0.46 %, against the 41 % the closed form calls for. Design D4b
     framed this as processor ownership; the CLOCK is a second thing the frozen
     lane owns, and it did not anticipate that.
+
+    AMENDED BY QBX-320 (remedy 3) - A DISCARDED MISS KEEPS THE CLOCK RUNNING.
+    The other half of the same fact: the pull is kept for the CLOCK, so a pull
+    that comes up SHORT under a Closure stopped the playhead for the missing
+    frames - the very failure this invariant was written against, in miniature
+    (a block of silence in the monitored ring and a block of latency). Its
+    audio was going to be zeroed anyway, so `renderCallbackBody` now advances
+    the engine across the shortfall (`AudioEngine::advanceWithoutAudio`, RT
+    pull thread, wrapping at the cycle end exactly as the pull does) and counts
+    it (`frozenDiscardedMissFrames`) instead of noting a stall. Outside a
+    Closure a short pull is still a stall - the arrangement's own audio is
+    missing there and the playhead must not run past it - and inv. 16b repays
+    it. Gates: `qxa.closure_miss_keeps_clock` (a forced miss under a Closure:
+    no gap, `stallFrames` 0) and `playback_test`'s advanceWithoutAudio case.
 
 How to test: manual GUI playback (scripted toggle-playback segfaults under
 the runner — pre-existing, see the headless-testing notes); the render path
@@ -580,7 +624,7 @@ plug for the closure exclusion to work through.
 
 `AudioEngine::setFrozenDemandRoot()` installs the mixer's `twMixer` — the bus
 sum, BELOW the master chain — and every frozen-lane use of `synthOutput_` goes
-through the published root (property 6). Six properties are contractual:
+through the published root (property 6). Seven properties are contractual:
 
 1. **`graphChannels()` still reports `synthOutput_`'s width.** That number is
    the PROJECT's width and feeds twSpeaker's device rule. A re-rooting says
@@ -689,6 +733,33 @@ through the published root (property 6). Six properties are contractual:
      chain restart. Removing either leaves every assertion green; both cover an
      ordering window (pointer seen before the seek, a demand at an equal epoch)
      that the case does not force.
+
+7. **A re-root BELOW the master is published WARM (QBX-320, remedy 2).** The
+   re-root drops the RT's held page (property 6) and restarts the readahead at
+   the new root, so the very next callback can serve only a page the new root
+   already has CURRENT under the playhead. At the master-insert flip it did not
+   (stale in 14 of 15 runs, measured): the readahead's restart stored its
+   frontier at the page START, behind the playhead, and demanded the re-freeze,
+   and `pullBlock`'s frontier test underran for a whole block - QBX-318's
+   mechanism B. So `twSpeaker::setLiveMasterClosure` (entering) demands the new
+   root's page under the playhead and the next one, waits on the demand's own
+   condition variable (`GraphDemand::waitFor`; bounded at 250 ms, re-reading
+   the playhead and re-demanding after a completion that verify-at-publish
+   re-staled), and only then publishes. Right before the publication it probes
+   the page and counts the re-root `warm` or `cold`, independently of the
+   warm-up. And the readahead's restart no longer DIPS: it probes the new
+   root's contiguous current pages from the playhead's page and stores the
+   frontier once, at their end, so a callback landing between two stores
+   cannot underrun a warm root. LEAVING a Closure is not warmed: the old
+   Closure plan is still the pump's until SLiveMonitor publishes the linear
+   one, and the root above the master runs exactly the processors that plan
+   renders, so a warm-up there would be AC3.1's hazard; a cold re-root back is
+   a stall, and inv. 16b repays its latency. Gates:
+   `qxa.reroot_warm_stale` (`set-reroot-stale` makes the page stale on every
+   run; warm-up removed reads `coldReroots` 1 on every run) and
+   `qxa.master_insert_monitor_clock` (the gesture as a user makes it). NOT
+   gated on its own: the no-dip restart - it closes a window of microseconds
+   between two stores, which no case forces.
 
 **Ownership order is asymmetric**, because the guard fires on whoever is not the
 pump: **entering** a closure re-roots FIRST and then takes ownership; **leaving**

@@ -8,6 +8,7 @@
 #include <vector>
 #include <thread>
 #include <mutex>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <atomic>
@@ -225,6 +226,11 @@ public:
         // Block until every demanded root page is frozen, or the revalidator
         // shuts down (abort). NOT for the RT audio thread.
         void wait();
+        // wait(), bounded: true once every demanded root page is frozen (or
+        // the revalidator aborted), false if `timeout` ran out first. For a
+        // non-RT caller that must not hang on a stuck demand (QBX-320's
+        // re-root warm-up runs on the main thread).
+        bool waitFor( std::chrono::milliseconds timeout );
         bool done() const;
 
         // How many of this demand's root pages completed WITHOUT a page

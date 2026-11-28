@@ -72,6 +72,11 @@ std::size_t SLiveAudioInputSource::pull( float *const *out, std::size_t channels
     return n;
 }
 
+std::size_t SLiveAudioInputSource::discard( std::size_t frames )
+{
+    return bridge_ ? bridge_->discardLive( frames ) : 0;
+}
+
 double SLiveAudioInputSource::takePeak()
 {
     return peak_.exchange( 0.0, std::memory_order_relaxed );

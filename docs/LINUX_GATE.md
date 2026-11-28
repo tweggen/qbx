@@ -395,7 +395,7 @@ failure is a 37 % shortfall. **But that family is real and has a live member**:
 loadavg >= 12, because it anchors its grid on a first click the capture start
 truncates. That one reproduces on demand and is filed as QBX-227.
 
-## `qxa.master_insert_while_monitoring` — MECHANISM ESTABLISHED, half of it a product glitch, NOT fixed and NOT excluded (QBX-318)
+## `qxa.master_insert_while_monitoring` — MECHANISM ESTABLISHED; B FIXED by QBX-320, C still open (QBX-321); NOT excluded (QBX-318)
 
 **Not excluded.** It went red on three unrelated PRs on 2026-11-24, and on two
 `main` pushes on 2026-11-10 that were found later by scanning every CI job
@@ -470,7 +470,63 @@ composition. CI's `[READAHEAD] … playhead=` samples, 3072 behind this box afte
 the flip, are **not** evidence either way: they are readahead-tick samples, and
 locally they move by ±2048 from run to run.
 
-### Why it is not fixed here
+### Confirmed from CI's own captures (QBX-320)
+
+Since QBX-322, CI uploads the capture of a failing playback-capture case. Two
+red runs on 2026-11-28 (`46118704137` and `46120153235`, both `0.17129`) decode
+identically: **onset 8872** (C), a **1024-frame silent block at capture frame
+132096** (B's gap), and the monitored lag **6144 at frame 48000 against 7168 at
+168000** (B's permanent block of latency). So CI's value is C + B×1, read off the
+audio rather than from the printed digits.
+
+### B is fixed (QBX-320)
+
+The author picked all three remedies on 2026-11-28, and all three are in.
+Each one is in `smaragd/tw303a/playback/CONTRACT.md`: inv. 16b, inv. 21's
+amendment, and re-root property 7.
+
+1. **The live input is resynced after any clock stall.** The RT notes each
+   short frozen pull on the live clock. The pump then drops exactly that many
+   of the input's oldest frames, so a stall costs its block once and never
+   becomes latency.
+2. **A re-root below the master is published warm.** The probe showed that the
+   cause was the readahead's frontier, not a missing page lookup. At the
+   re-root, the new root's page under the playhead was stale in 14 of 15
+   runs. The restart then set the frontier back to the page start and
+   underran. Now the speaker demands that page and the next one, and waits
+   for them (2.5 ms measured, bounded at 250 ms) before it publishes. The
+   restart also probes before it stores the frontier.
+3. **Under a Closure, a short frozen pull advances the clock** rather than
+   stalling it, because its audio is discarded anyway.
+
+Measured with the binary run under ctest's ENVIRONMENT, and every capture
+decoded. B shows as a 1024-frame silent block near 132096 plus a lag drift of
++1024 between windows at 48000 and 168000:
+
+| build | case | regime | runs | B (gap + drift) |
+|---|---|---|---|---|
+| `main` (`10b338c0`) | this case | load decaying 20 → 4 | 20 | **17** (plus one C) |
+| `main` | this case | 36 spinners on 12 cores, load 15–36 | 20 | **9** |
+| fix | this case | idle, load ≤ 4 | 20 | 0 |
+| fix | this case | 36 spinners, load 39–40 | 20 | 0 |
+| fix | `master_insert_monitor_clock` (new) | idle / 36 spinners | 20 / 20 | 0 / 0 |
+
+This case still passes on `main` whenever C is absent, because its band
+tolerates up to two blocks of B. That is why B is gated by its own case,
+`master_insert_monitor_clock`, which asserts the drift and the gap directly.
+On a build with all three remedies reverted that case failed 9 of 10 idle and
+7 of 10 under 36 spinners. In the 3 passing runs B did not fire at all.
+
+C is untouched: its onset of 8872 still appears, 1 in 20 on `main` idle. With B
+gone, anchoring the window on the onset no longer hides anything, and that is
+QBX-321.
+
+One run in 40 of this case on the fixed build failed `assert-log` rather than
+the audio. The Closure line was logged 4 ms before the `wait-ms` that opens
+the assertion's window. That happened in none of the 40 `main` runs, and it is
+not explained.
+
+### Why it was not fixed in QBX-318
 
 C is the case's fault, and anchoring on the onset would remove it. B is not the
 case's fault. A master edit while monitoring costs the monitored input a dropout
@@ -479,7 +535,7 @@ notices this because the window reads position. Anchoring alone would make CI's
 failing state pass at `0.166585` and leave B tolerated up to two blocks. That is
 relaxing the case around a live glitch, so it was not done.
 
-Every remedy for B needs a decision:
+Every remedy for B needed a decision (taken 2026-11-28; see above):
 
 - keep the clock running when a Closure-suppressed frozen pull misses;
 - warm the new root's current page before publishing the re-root, as the

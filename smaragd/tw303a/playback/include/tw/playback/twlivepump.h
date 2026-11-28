@@ -115,6 +115,12 @@ public:
     std::uint64_t frozenInputMisses() const { return frozenMisses_.load( std::memory_order_relaxed ); }
     std::uint64_t inputShortfalls()   const { return shortfalls_.load( std::memory_order_relaxed ); }
     std::uint64_t ringFull()          const { return ringFull_.load( std::memory_order_relaxed ); }
+    // QBX-320: frames of live INPUT the pump threw away to resync after a
+    // clock stall (twEngineClock::noteStall), and how many stalls it saw. A
+    // gate pairs the first with the speaker's stall count: equal means every
+    // stalled frame was given back, and nothing else was dropped.
+    std::uint64_t resyncFrames()      const { return resyncFrames_.load( std::memory_order_relaxed ); }
+    std::uint64_t resyncs()           const { return resyncs_.load( std::memory_order_relaxed ); }
     // The position the last block was rendered at (diagnostics and tests).
     offset_t      lastPosition()      const { return lastPos_.load( std::memory_order_relaxed ); }
     void resetStats();
@@ -167,6 +173,13 @@ private:
     std::uint64_t blockIndex_ = 0;     // blocks since the last reposition
     std::uint64_t lastSeq_    = 0;
     std::atomic<bool> repositionReq_{ false };
+    // The clock's stall counter as last seen, and the input frames still owed
+    // to a resync (QBX-320). Re-anchored at start(), so a stall from before
+    // this run of the pump -- a different arm, a different input backlog --
+    // is never "repaid" out of the new one.
+    std::uint64_t     stallSeen_   = 0;
+    bool              stallSynced_ = false;
+    std::uint64_t     resyncDebt_  = 0;
     std::uint64_t     runId_ = 0;
     bool              loggedShallowRing_ = false;
 
@@ -183,6 +196,8 @@ private:
     std::atomic<std::uint64_t> frozenMisses_{ 0 };
     std::atomic<std::uint64_t> shortfalls_{ 0 };
     std::atomic<std::uint64_t> ringFull_{ 0 };
+    std::atomic<std::uint64_t> resyncFrames_{ 0 };
+    std::atomic<std::uint64_t> resyncs_{ 0 };
     std::atomic<offset_t>      lastPos_{ 0 };
 };
 

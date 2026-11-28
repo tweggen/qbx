@@ -56,6 +56,81 @@ private:
     qint64  maxFrames_    = 8192;
     qint64  searchFrames_ = 24000;
     double  minCorrelation_ = 0.5;
+    // QBX-320: a SECOND window in the same capture, and a bound on how far
+    // the lag at `startFrame` may differ from the lag there. A drift is a
+    // property of the run, not of the box: the absolute lag carries the
+    // device-start offset (a wall-clock quantity), the difference does not.
+    qint64  refStartFrame_  = -1;    // < 0 == no reference window
+    qint64  maxDriftFrames_ = -1;    // < 0 == not checked
+};
+
+/**
+ * `assert-frozen-lane` - what the frozen lane's CLOCK went through (QBX-320).
+ *
+ * Reads the speaker's and the pump's cumulative counters: frames the
+ * transport clock lost to short frozen pulls (`stallFrames`), frames a
+ * Closure-suppressed short pull advanced instead (`discardedMissFrames`),
+ * re-roots below the master published with the playhead's page current or not
+ * (`warmReroots` / `coldReroots`), and live-input frames the pump dropped to
+ * resync after a stall (`resyncFrames`). Every bound is unchecked unless given;
+ * min* and max* are separate claims, and the values are printed either way.
+ */
+class SAssertFrozenLaneAction : public SAction
+{
+public:
+    SAssertFrozenLaneAction() = default;
+    QString name() const override
+    { return QStringLiteral( "assert-frozen-lane" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    qint64 minStall_ = -1, maxStall_ = -1;
+    qint64 minDiscarded_ = -1, maxDiscarded_ = -1;
+    qint64 minWarm_ = -1, maxCold_ = -1;
+    qint64 minResync_ = -1, maxResync_ = -1;
+};
+
+/**
+ * `inject-frozen-miss` - TEST SEAM (QBX-320): the next `blocks` callbacks in
+ * which the frozen lane plays skip the pull, as a real miss leaves it. A stall
+ * forced by something that is not a re-root.
+ */
+class SInjectFrozenMissAction : public SAction
+{
+public:
+    SInjectFrozenMissAction() = default;
+    QString name() const override
+    { return QStringLiteral( "inject-frozen-miss" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    int blocks_ = 1;
+};
+
+/**
+ * `set-reroot-stale` - TEST SEAM (QBX-320): the next re-root below the master
+ * finds the new root's pages stale (one content-epoch bump before the
+ * warm-up), so the warm-up is exercised on every run.
+ */
+class SSetRerootStaleAction : public SAction
+{
+public:
+    SSetRerootStaleAction() = default;
+    QString name() const override
+    { return QStringLiteral( "set-reroot-stale" ); }
+    QStringList knownAttributes() const override;
+    SApplyResult apply( SProject *project ) override;
+    void writeXml( QDomElement &elem ) const override;
+    bool readXml( const QDomElement &elem, int version ) override;
+
+private:
+    bool stale_ = true;
 };
 
 /**

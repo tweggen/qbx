@@ -78,6 +78,23 @@ public:
                        length_t nFrames);
 
     /**
+     * Move the playhead `nFrames` forward WITHOUT reading a page, wrapping at
+     * the cycle end exactly as pullBlock() does (QBX-320, remedy 3).
+     *
+     * For the one caller whose pull came up short and whose audio it was
+     * going to DISCARD anyway: under a Closure plan the frozen lane is not
+     * heard, it is only the transport CLOCK (playback inv. 21). A miss there
+     * used to stop that clock for the missing frames, and the monitored input
+     * then played a block of silence and stayed a block late. Advancing the
+     * position keeps "where the playhead is" == "how much the device has
+     * played", which is all the frozen lane is for while the pump renders the
+     * master. RT pull thread only -- the same thread that owns currentPos_ and
+     * the page cursor; updateFrozenPage() re-derives the cursor from the new
+     * position on the next pull (inv. 6).
+     */
+    void advanceWithoutAudio(length_t nFrames);
+
+    /**
      * The width the graph is currently producing — synthOutput_'s declared
      * channel count. A caller sizes its buffers from this; it may still ask
      * pullBlock() for more or fewer (see the §4.4 clamp above).
@@ -244,6 +261,12 @@ public:
      * root, so that the old root is never released under it.
      */
     void setFrozenDemandRoot( const std::shared_ptr<twComponent> &root );
+
+    /// Whether the readahead thread is running, i.e. whether a re-root lands
+    /// on a lane that is already serving pages (QBX-320: only then is there a
+    /// held page and a frontier for the new root to be cold against).
+    bool readaheadActive() const
+    { return readaheadRunning_.load(std::memory_order_relaxed); }
 
     /// The component the FROZEN lane demands and reads, as an owning handle:
     /// `synthOutput_` unless setFrozenDemandRoot installed another. NOT for the

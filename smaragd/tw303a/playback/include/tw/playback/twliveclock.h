@@ -100,6 +100,19 @@ public:
 
     void revalidate() { valid_.store( true, std::memory_order_release ); }
 
+    // CLOCK STALLS (QBX-320). Frames the device consumed while the frozen lane
+    // was playing but the transport position did NOT advance -- a frozen pull
+    // that came up short. Cumulative and monotone; the RT adds, the PUMP reads
+    // the difference since its last look and drops exactly that much of its
+    // live input backlog, because the input kept arriving at the device rate
+    // while the clock it paces on stood still (playback inv. 16b). A separate
+    // relaxed counter rather than a seqlock field: a reader only ever wants a
+    // difference, and a stall noted one block late is resynced one block late.
+    void noteStall( std::uint64_t frames )
+    { stalled_.fetch_add( frames, std::memory_order_relaxed ); }
+    std::uint64_t stalledFrames() const
+    { return stalled_.load( std::memory_order_relaxed ); }
+
     // Any thread. Returns an invalid reading (seq == 0) when nothing has been
     // published, when the clock has been invalidated, or when four consecutive
     // attempts were torn by the writer.
@@ -132,6 +145,7 @@ private:
     std::atomic<std::int64_t>  next_{ 0 };
     std::atomic<std::int64_t>  host_{ 0 };
     std::atomic<bool>          valid_{ true };
+    std::atomic<std::uint64_t> stalled_{ 0 };   // QBX-320, see noteStall()
 };
 
 #endif  // _TW_LIVE_CLOCK_H_

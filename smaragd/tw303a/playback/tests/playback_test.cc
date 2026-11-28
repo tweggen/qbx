@@ -3451,6 +3451,115 @@ int main()
         spk->closeLive();
     }
 
+    // QBX-320 remedy 1: A CLOCK STALL IS REPAID OUT OF THE INPUT BACKLOG.
+    // A STREAM input (a device ring's shape: sequential, `pos` ignored) under a
+    // playing plan, paced by a hand-stamped clock. One block, the clock does
+    // NOT advance and the RT notes the stall, exactly as twSpeaker does for a
+    // short frozen pull. On the next rendered block the pump must have dropped
+    // exactly that block of input, so the material it stamps at position P is
+    // the same distance from P after the stall as before it -- in a device ring
+    // that distance IS the monitoring latency. Without the resync it is one
+    // block less: the stall's frames sit in the input for the rest of the arm.
+    {
+        printf("\n=== QBX-320: a clock stall is repaid out of the input backlog ===\n");
+        const length_t BLOCK = 1024;
+
+        class StreamInput : public twLiveInputSource {
+        public:
+            std::size_t pull(float *const *out, std::size_t channels,
+                             std::size_t frames, offset_t) override {
+                for (std::size_t c = 0; c < channels; ++c)
+                    for (std::size_t i = 0; i < frames; ++i)
+                        out[c][i] = (float)(next_ + i);
+                next_ += frames;
+                return frames;
+            }
+            bool isStream() const override { return true; }
+            std::size_t discard(std::size_t frames) override {
+                next_ += frames; discarded_ += frames; return frames;
+            }
+            std::uint64_t next_ = 0, discarded_ = 0;
+        };
+        auto in = std::make_shared<StreamInput>();
+
+        auto plan = std::make_shared<twLivePlan>();
+        plan->blockFrames = BLOCK;
+        plan->sampleRate  = (int)env.getSRate();
+        plan->leadFrames  = 2 * BLOCK;
+        plan->outputTrack = 0;
+        plan->transport.playing = true;
+        {
+            twLiveTrackPlan t;
+            t.name = "stream"; t.channels = 1; t.input = in;
+            plan->tracks.push_back(std::move(t));
+        }
+        CHECK(plan->finalize(), "QBX-320: the plan finalizes");
+
+        twLiveMixRing ring;
+        ring.reset(1, (std::uint32_t)BLOCK, 4);
+        twEngineClock clock;
+        LiveGraphPump pump(ring, clock);
+        pump.setPlan(plan);
+
+        // entry start position -> (first sample value - position)
+        std::vector<std::pair<std::int64_t, std::int64_t>> seen;
+        std::thread harness([&] {
+            std::int64_t nf = 0;
+            for (int b = 0; b < 24; ++b) {
+                if (b == 10) clock.noteStall((std::uint64_t)BLOCK);   // the RT stalled...
+                else if (b > 0) nf += BLOCK;                          // ...and did not advance
+                clock.stamp(nf - BLOCK, nf, 0);
+                while (pump.renderOneBlock()) {}
+                twLiveRingEntry e;
+                // The RT drains exactly what it plays: everything wholly behind nf.
+                while (ring.peek(e) && e.startPos < nf) {
+                    seen.emplace_back(e.startPos, (std::int64_t)e.channel(0)[0] - e.startPos);
+                    ring.pop();
+                }
+            }
+        });
+        harness.join();
+
+        std::int64_t before = INT64_MIN, after = INT64_MIN;
+        for (const auto &p : seen) {
+            if (p.first < 8 * BLOCK) before = p.second;
+            if (p.first >= 16 * BLOCK && after == INT64_MIN) after = p.second;
+        }
+        printf("     input offset before the stall %lld, after %lld; resynced %llu frame(s), "
+               "discarded %llu\n", (long long)before, (long long)after,
+               (unsigned long long)pump.resyncFrames(), (unsigned long long)in->discarded_);
+        CHECK(before != INT64_MIN && after != INT64_MIN,
+              "QBX-320: blocks were rendered on both sides of the stall");
+        CHECK(after - before == (std::int64_t)BLOCK,
+              "QBX-320: after the stall the input is exactly one block NEWER at the "
+              "same position (the stalled block was dropped, not kept as latency)");
+        CHECK(pump.resyncFrames() == (std::uint64_t)BLOCK && in->discarded_ == (std::uint64_t)BLOCK,
+              "QBX-320: exactly the stalled frames were resynced, once");
+    }
+
+    // QBX-320 remedy 3's engine half: advanceWithoutAudio() moves the playhead
+    // by exactly the frames asked for and wraps at the cycle end the way the
+    // pull does -- a step never crosses loopEnd, a position at loopEnd goes to
+    // loopStart.
+    {
+        printf("\n=== QBX-320: advanceWithoutAudio moves the clock, wrapping like the pull ===\n");
+        auto base = std::make_shared<ToneComponent>(env);
+        base->init();
+        audio::AudioEngine engine(base, (uint32_t)env.getSRate());
+        engine.seekTo(0);
+        engine.advanceWithoutAudio(1024);
+        CHECK(engine.currentPosition() == 1024, "QBX-320: no cycle: 0 + 1024 = 1024");
+        engine.setLoopBoundaries(true, 1000, 5000);
+        engine.seekTo(4500);
+        engine.advanceWithoutAudio(1024);
+        CHECK(engine.currentPosition() == 1524,
+              "QBX-320: cycling: 4500 + 1024 wraps at 5000 to 1000 and lands on 1524");
+        engine.seekTo(5000);
+        engine.advanceWithoutAudio(100);
+        CHECK(engine.currentPosition() == 1100,
+              "QBX-320: cycling: a playhead AT loopEnd goes to loopStart first");
+    }
+
     printf(failures ? "\n%d FAILURE(S)\n" : "\nall playback tests passed\n",
            failures);
     return failures ? 1 : 0;

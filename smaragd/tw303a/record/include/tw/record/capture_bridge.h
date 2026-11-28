@@ -226,6 +226,12 @@ public:
     std::size_t pullLive( float *const *out, std::size_t channels,
                           std::size_t frames, offset_t pos = 0 );
 
+    /// Drop up to `frames` of the OLDEST frames the live ring holds and return
+    /// how many were dropped (QBX-320: the pump's resync after a transport
+    /// clock stall). Same thread and the same rules as pullLive() -- it is a
+    /// pop into the pull's own scratch, so no lock and no allocation.
+    std::size_t discardLive( std::size_t frames );
+
     /// Drop everything the live ring holds. Control plane (a reposition or an
     /// arm), never called concurrently with pullLive().
     void clearLive();

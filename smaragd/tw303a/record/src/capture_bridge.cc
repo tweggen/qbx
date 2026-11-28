@@ -574,6 +574,22 @@ std::size_t CaptureBridge::pullLive( float *const *out, std::size_t channels,
     return got;
 }
 
+std::size_t CaptureBridge::discardLive( std::size_t frames )
+{
+    if( !liveRing_ || frames == 0 ) return 0;
+    const std::size_t ringCh = liveRing_->channels();
+    const std::size_t cap    = liveScratch_.size() / ( ringCh ? ringCh : 1 );
+    if( cap == 0 ) return 0;
+    std::size_t dropped = 0;
+    while( dropped < frames ) {
+        const std::size_t want = std::min( frames - dropped, cap );
+        const std::size_t got  = liveRing_->pop( liveScratch_.data(), want );
+        dropped += got;
+        if( got < want ) break;   // the ring is empty: the rest is not here yet
+    }
+    return dropped;
+}
+
 void CaptureBridge::clearLive()
 {
     if( liveRing_ ) liveRing_->clear();

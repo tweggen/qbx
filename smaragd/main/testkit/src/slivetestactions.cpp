@@ -51,7 +51,8 @@ QStringList SAssertMonitorLatencyAction::knownAttributes() const
              QStringLiteral( "channel" ),    QStringLiteral( "startFrame" ),
              QStringLiteral( "frameCount" ), QStringLiteral( "maxFrames" ),
              QStringLiteral( "searchFrames" ),
-             QStringLiteral( "minCorrelation" ) };
+             QStringLiteral( "minCorrelation" ),
+             QStringLiteral( "refStartFrame" ), QStringLiteral( "maxDriftFrames" ) };
 }
 
 SApplyResult SAssertMonitorLatencyAction::apply( SProject *project )
@@ -68,14 +69,7 @@ SApplyResult SAssertMonitorLatencyAction::apply( SProject *project )
 
     std::string err;
     int capRate = 0, inRate = 0;
-    std::vector<float> cap, in;
-    if( !audio::readAudioRegion( capPath.toStdString(), startFrame_, frameCount_,
-                                 channel_, cap, capRate, err )
-        || cap.empty() ) {
-        qWarning() << "assert-monitor-latency: cannot read capture window from"
-                   << capPath << QString::fromStdString( err );
-        return { false, nullptr };
-    }
+    std::vector<float> in;
     // The input side has to cover the window PLUS the search range on both
     // sides: a monitored block is LATER than the input frame it carries, so
     // the match sits earlier in the file, and the whole file is short enough
@@ -86,58 +80,102 @@ SApplyResult SAssertMonitorLatencyAction::apply( SProject *project )
                    << QString::fromStdString( err );
         return { false, nullptr };
     }
-    if( capRate != inRate ) {
-        qWarning() << "assert-monitor-latency: rate mismatch, capture" << capRate
-                   << "vs input" << inRate
-                   << "- the live lane only runs at the project rate";
-        return { false, nullptr };
-    }
 
-    // NORMALISED cross-correlation. The peak is then a SIMILARITY in [-1, 1]
-    // rather than an energy, so `minCorrelation` means the same thing whatever
-    // the level is - which matters because a monitored signal has been through
-    // a fader and an insert.
-    const std::size_t n = cap.size();
-    double capEnergy = 0.0;
-    for( float v : cap ) capEnergy += (double) v * v;
-    if( capEnergy <= 0.0 ) {
-        qWarning() << "assert-monitor-latency: the capture window is SILENT -"
-                   << "nothing was monitored";
-        return { false, nullptr };
-    }
-
-    double  bestCorr = -2.0;
-    qint64  bestLag  = -1;
-    // Lag L means "the capture frame at startFrame_ carries the input frame at
-    // (startFrame_ - L)", i.e. the output is L frames behind the input. The
-    // file is LOOPED by FileAudioInput, so the index wraps.
-    const qint64 inLen = (qint64) in.size();
-    for( qint64 lag = 0; lag <= searchFrames_; ++lag ) {
-        qint64 base = ( startFrame_ - lag ) % inLen;
-        if( base < 0 ) base += inLen;
-        double dot = 0.0, inEnergy = 0.0;
-        for( std::size_t i = 0; i < n; ++i ) {
-            const float b = in[(std::size_t) ( ( base + (qint64) i ) % inLen )];
-            dot      += (double) cap[i] * b;
-            inEnergy += (double) b * b;
+    // ONE measurement, at a window start. Returns false (having said why) when
+    // the window cannot be read, is silent, or correlates with nothing.
+    auto measure = [&]( qint64 start, qint64 &lagOut, double &corrOut ) -> bool {
+        std::vector<float> cap;
+        if( !audio::readAudioRegion( capPath.toStdString(), start, frameCount_,
+                                     channel_, cap, capRate, err )
+            || cap.empty() ) {
+            qWarning() << "assert-monitor-latency: cannot read capture window from"
+                       << capPath << "at" << start << QString::fromStdString( err );
+            return false;
         }
-        if( inEnergy <= 0.0 ) continue;
-        const double corr = dot / std::sqrt( capEnergy * inEnergy );
-        if( corr > bestCorr ) { bestCorr = corr; bestLag = lag; }
-    }
+        if( capRate != inRate ) {
+            qWarning() << "assert-monitor-latency: rate mismatch, capture" << capRate
+                       << "vs input" << inRate
+                       << "- the live lane only runs at the project rate";
+            return false;
+        }
 
-    if( bestCorr < minCorrelation_ ) {
-        qWarning() << "assert-monitor-latency: the capture does not correlate with"
-                   << "the input at any lag - best" << bestCorr << "at" << bestLag
-                   << "frames, needed" << minCorrelation_;
-        return { false, nullptr };
-    }
+        // NORMALISED cross-correlation. The peak is then a SIMILARITY in
+        // [-1, 1] rather than an energy, so `minCorrelation` means the same
+        // thing whatever the level is - which matters because a monitored
+        // signal has been through a fader and an insert.
+        const std::size_t n = cap.size();
+        double capEnergy = 0.0;
+        for( float v : cap ) capEnergy += (double) v * v;
+        if( capEnergy <= 0.0 ) {
+            qWarning() << "assert-monitor-latency: the capture window at" << start
+                       << "is SILENT - nothing was monitored";
+            return false;
+        }
+
+        double  bestCorr = -2.0;
+        qint64  bestLag  = -1;
+        // Lag L means "the capture frame at `start` carries the input frame at
+        // (start - L)", i.e. the output is L frames behind the input. The file
+        // is LOOPED by FileAudioInput, so the index wraps.
+        const qint64 inLen = (qint64) in.size();
+        for( qint64 lag = 0; lag <= searchFrames_; ++lag ) {
+            qint64 base = ( start - lag ) % inLen;
+            if( base < 0 ) base += inLen;
+            double dot = 0.0, inEnergy = 0.0;
+            for( std::size_t i = 0; i < n; ++i ) {
+                const float b = in[(std::size_t) ( ( base + (qint64) i ) % inLen )];
+                dot      += (double) cap[i] * b;
+                inEnergy += (double) b * b;
+            }
+            if( inEnergy <= 0.0 ) continue;
+            const double corr = dot / std::sqrt( capEnergy * inEnergy );
+            if( corr > bestCorr ) { bestCorr = corr; bestLag = lag; }
+        }
+
+        if( bestCorr < minCorrelation_ ) {
+            qWarning() << "assert-monitor-latency: the capture at" << start
+                       << "does not correlate with the input at any lag - best"
+                       << bestCorr << "at" << bestLag << "frames, needed" << minCorrelation_;
+            return false;
+        }
+        lagOut  = bestLag;
+        corrOut = bestCorr;
+        return true;
+    };
+
+    qint64 bestLag = -1;
+    double bestCorr = 0.0;
+    if( !measure( startFrame_, bestLag, bestCorr ) ) return { false, nullptr };
     if( bestLag > maxFrames_ ) {
         qWarning() << "assert-monitor-latency: monitored lag" << bestLag
                    << "frames exceeds the budget" << maxFrames_
                    << "(correlation" << bestCorr << ")";
         return { false, nullptr };
     }
+
+    // QBX-320: the DRIFT against a reference window of the same run. A clock
+    // stall that leaves the monitored input permanently late reads here as a
+    // drift of the stalled frames; the absolute lag cannot see it, because the
+    // device start moves it by more than that from box to box.
+    if( refStartFrame_ >= 0 ) {
+        qint64 refLag = -1;
+        double refCorr = 0.0;
+        if( !measure( refStartFrame_, refLag, refCorr ) ) return { false, nullptr };
+        const qint64 drift = bestLag - refLag;
+        if( maxDriftFrames_ >= 0 && std::llabs( drift ) > maxDriftFrames_ ) {
+            qWarning() << "assert-monitor-latency FAILED: the monitored lag DRIFTED by"
+                       << drift << "frames - lag" << bestLag << "at" << startFrame_
+                       << "against" << refLag << "at" << refStartFrame_
+                       << "(correlations" << bestCorr << refCorr << "), budget"
+                       << maxDriftFrames_;
+            return { false, nullptr };
+        }
+        qDebug() << "assert-monitor-latency: drift" << drift << "frames - lag"
+                 << bestLag << "at" << startFrame_ << "against" << refLag << "at"
+                 << refStartFrame_ << "(correlations" << bestCorr << refCorr
+                 << "), budget" << maxDriftFrames_;
+    }
+
     qDebug() << "assert-monitor-latency: lag" << bestLag << "frames ("
              << ( 1000.0 * (double) bestLag / (double) ( capRate ? capRate : 48000 ) )
              << "ms ), correlation" << bestCorr << ", budget" << maxFrames_;
@@ -155,6 +193,10 @@ void SAssertMonitorLatencyAction::writeXml( QDomElement &elem ) const
     if( searchFrames_ != 24000 )elem.setAttribute( "searchFrames", QString::number( searchFrames_ ) );
     if( minCorrelation_ != 0.5 )
         elem.setAttribute( "minCorrelation", QString::number( minCorrelation_ ) );
+    if( refStartFrame_ >= 0 )
+        elem.setAttribute( "refStartFrame", QString::number( refStartFrame_ ) );
+    if( maxDriftFrames_ >= 0 )
+        elem.setAttribute( "maxDriftFrames", QString::number( maxDriftFrames_ ) );
 }
 
 bool SAssertMonitorLatencyAction::readXml( const QDomElement &elem, int )
@@ -167,6 +209,145 @@ bool SAssertMonitorLatencyAction::readXml( const QDomElement &elem, int )
     maxFrames_      = elem.attribute( "maxFrames", "8192" ).toLongLong();
     searchFrames_   = elem.attribute( "searchFrames", "24000" ).toLongLong();
     minCorrelation_ = elem.attribute( "minCorrelation", "0.5" ).toDouble();
+    refStartFrame_  = elem.attribute( "refStartFrame", "-1" ).toLongLong();
+    maxDriftFrames_ = elem.attribute( "maxDriftFrames", "-1" ).toLongLong();
+    return true;
+}
+
+// --- assert-frozen-lane (QBX-320) -------------------------------------------
+
+QStringList SAssertFrozenLaneAction::knownAttributes() const
+{
+    return { QStringLiteral( "minStallFrames" ),     QStringLiteral( "maxStallFrames" ),
+             QStringLiteral( "minDiscardedMissFrames" ),
+             QStringLiteral( "maxDiscardedMissFrames" ),
+             QStringLiteral( "minWarmReroots" ),     QStringLiteral( "maxColdReroots" ),
+             QStringLiteral( "minResyncFrames" ),    QStringLiteral( "maxResyncFrames" ) };
+}
+
+SApplyResult SAssertFrozenLaneAction::apply( SProject * )
+{
+    SApplication &app = SApplication::app();
+    std::shared_ptr<twSpeaker> spk = app.getSpeaker();
+    if( !spk ) {
+        qWarning() << "assert-frozen-lane: no speaker";
+        return { false, nullptr };
+    }
+    const qint64 stall  = (qint64) spk->frozenStallFrames();
+    const qint64 disc   = (qint64) spk->frozenDiscardedMissFrames();
+    const qint64 warm   = (qint64) spk->warmReroots();
+    const qint64 cold   = (qint64) spk->coldReroots();
+    const qint64 resync = app.liveMonitor() ? (qint64) app.liveMonitor()->pumpResyncFrames() : 0;
+    const QString desc = QStringLiteral( "stallFrames=%1 discardedMissFrames=%2 "
+                                         "warmReroots=%3 coldReroots=%4 resyncFrames=%5" )
+                             .arg( stall ).arg( disc ).arg( warm ).arg( cold ).arg( resync );
+    bool ok = true;
+    auto check = [&]( const char *what, qint64 v, qint64 lo, qint64 hi ) {
+        if( lo >= 0 && v < lo ) {
+            qWarning() << "assert-frozen-lane FAILED:" << what << v << "below" << lo << "-" << desc;
+            ok = false;
+        }
+        if( hi >= 0 && v > hi ) {
+            qWarning() << "assert-frozen-lane FAILED:" << what << v << "above" << hi << "-" << desc;
+            ok = false;
+        }
+    };
+    check( "stallFrames", stall, minStall_, maxStall_ );
+    check( "discardedMissFrames", disc, minDiscarded_, maxDiscarded_ );
+    check( "warmReroots", warm, minWarm_, -1 );
+    check( "coldReroots", cold, -1, maxCold_ );
+    check( "resyncFrames", resync, minResync_, maxResync_ );
+    if( !ok ) return { false, nullptr };
+    qDebug() << "assert-frozen-lane: OK -" << desc;
+    return { true, nullptr };
+}
+
+void SAssertFrozenLaneAction::writeXml( QDomElement &elem ) const
+{
+    auto put = [&]( const char *k, qint64 v ) {
+        if( v >= 0 ) elem.setAttribute( k, QString::number( v ) );
+    };
+    put( "minStallFrames", minStall_ );        put( "maxStallFrames", maxStall_ );
+    put( "minDiscardedMissFrames", minDiscarded_ );
+    put( "maxDiscardedMissFrames", maxDiscarded_ );
+    put( "minWarmReroots", minWarm_ );         put( "maxColdReroots", maxCold_ );
+    put( "minResyncFrames", minResync_ );      put( "maxResyncFrames", maxResync_ );
+}
+
+bool SAssertFrozenLaneAction::readXml( const QDomElement &elem, int )
+{
+    auto get = [&]( const char *k ) { return elem.attribute( k, "-1" ).toLongLong(); };
+    minStall_     = get( "minStallFrames" );
+    maxStall_     = get( "maxStallFrames" );
+    minDiscarded_ = get( "minDiscardedMissFrames" );
+    maxDiscarded_ = get( "maxDiscardedMissFrames" );
+    minWarm_      = get( "minWarmReroots" );
+    maxCold_      = get( "maxColdReroots" );
+    minResync_    = get( "minResyncFrames" );
+    maxResync_    = get( "maxResyncFrames" );
+    return true;
+}
+
+// --- inject-frozen-miss (QBX-320 test seam) ---------------------------------
+
+QStringList SInjectFrozenMissAction::knownAttributes() const
+{
+    return { QStringLiteral( "blocks" ) };
+}
+
+SApplyResult SInjectFrozenMissAction::apply( SProject * )
+{
+    std::shared_ptr<twSpeaker> spk = SApplication::app().getSpeaker();
+    if( !spk ) {
+        qWarning() << "inject-frozen-miss: no speaker";
+        return { false, nullptr };
+    }
+    spk->forceFrozenMissesForTest( blocks_ );
+    qWarning() << "inject-frozen-miss: TEST FAULT - the next" << blocks_
+               << "frozen-lane pull(s) will be skipped as misses";
+    return { true, nullptr };
+}
+
+void SInjectFrozenMissAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "blocks", QString::number( blocks_ ) );
+}
+
+bool SInjectFrozenMissAction::readXml( const QDomElement &elem, int )
+{
+    bool ok = false;
+    blocks_ = elem.attribute( "blocks", "1" ).toInt( &ok );
+    return ok && blocks_ >= 0;
+}
+
+// --- set-reroot-stale (QBX-320 test seam) -----------------------------------
+
+QStringList SSetRerootStaleAction::knownAttributes() const
+{
+    return { QStringLiteral( "stale" ) };
+}
+
+SApplyResult SSetRerootStaleAction::apply( SProject * )
+{
+    std::shared_ptr<twSpeaker> spk = SApplication::app().getSpeaker();
+    if( !spk ) {
+        qWarning() << "set-reroot-stale: no speaker";
+        return { false, nullptr };
+    }
+    spk->setStaleRerootForTest( stale_ );
+    qWarning() << "set-reroot-stale: TEST FAULT -" << ( stale_ ? "the next" : "no" )
+               << "re-root below the master will find the new root's pages stale";
+    return { true, nullptr };
+}
+
+void SSetRerootStaleAction::writeXml( QDomElement &elem ) const
+{
+    elem.setAttribute( "stale", stale_ ? "1" : "0" );
+}
+
+bool SSetRerootStaleAction::readXml( const QDomElement &elem, int )
+{
+    stale_ = elem.attribute( "stale", "1" ) != QLatin1String( "0" );
     return true;
 }
 
@@ -919,6 +1100,15 @@ static const bool s_reg_live_test_actions = (
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-live-plan" ),
         []{ return new SAssertLivePlanAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "assert-frozen-lane" ),
+        []{ return new SAssertFrozenLaneAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "inject-frozen-miss" ),
+        []{ return new SInjectFrozenMissAction; } ),
+    SActionRegistry::instance().registerType(
+        QStringLiteral( "set-reroot-stale" ),
+        []{ return new SSetRerootStaleAction; } ),
     SActionRegistry::instance().registerType(
         QStringLiteral( "assert-audio-onset" ),
         []{ return new SAssertAudioOnsetAction; } ),

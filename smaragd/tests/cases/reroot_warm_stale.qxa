@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-320 remedy 2: A RE-ROOT BELOW THE MASTER IS PUBLISHED WARM.
+
+  master_insert_monitor_clock's gesture, with one test seam added before it:
+  `set-reroot-stale` bumps the new root's content epoch right before the
+  re-root, so the page under the playhead is STALE on every run instead of on
+  most of them (14 of 15 measured without the seam). twSpeaker's warm-up must
+  then demand it and wait until it is current before it publishes the root.
+
+  THE CLAIM IS THE COUNTER, and the counter is independent of the code under
+  test: right before the publication twSpeaker probes the new root's page at
+  the playhead and counts the re-root `warm` or `cold`, whether or not a
+  warm-up ran. With the warm-up removed this case reads coldReroots=1 on every
+  run. The audio is not asserted here on purpose: under the Closure, remedy 3
+  keeps the clock running across a cold re-root's miss, so a missing warm-up is
+  inaudible in this fixture - which is exactly why it needs a gate of its own.
+  `maxDiscardedMissFrames="0"` is the RT-side witness that the warm page was
+  actually served: a cold re-root's miss is counted there (remedy 3 absorbed
+  it), so a warm-up that waited for the wrong page would read non-zero.
+-->
+<SActionScript version="1" name="reroot_warm_stale">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2600"/>
+
+    <!-- THE SEAM: the re-root below must find its page stale. -->
+    <set-reroot-stale stale="1"/>
+
+    <!-- THE GESTURE: the plan flips to a Closure and the frozen lane re-roots
+         below the master, with the transport rolling. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <wait-ms ms="2600"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="1"/>
+
+    <toggle-playback play="0"/>
+
+    <assert-frozen-lane minWarmReroots="1" maxColdReroots="0"
+                        maxDiscardedMissFrames="0"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

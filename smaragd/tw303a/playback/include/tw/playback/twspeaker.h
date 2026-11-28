@@ -386,6 +386,48 @@ public:
         attachHoldMsForTest_.store(ms, std::memory_order_relaxed);
     }
 
+    // --- the frozen lane's CLOCK (QBX-320) ----------------------------------
+    //
+    // The frozen lane is the transport clock as well as half the audio
+    // (inv. 21), and a pull that comes up short stops that clock for the
+    // missing frames. Three remedies, each counted here so a gate can say
+    // which one acted:
+    //   1. a stall is noted on the live clock (twEngineClock::noteStall) and
+    //      the pump drops that much of its live-input backlog -- the CLASS;
+    //   2. a re-root BELOW the master warms the new root's pages at the
+    //      playhead before it is published -- the TRIGGER QBX-318 measured;
+    //   3. under a Closure plan, where the frozen audio is discarded anyway, a
+    //      short pull advances the playhead instead of stalling it.
+
+    /// Frames the transport clock lost to short frozen pulls (remedy 1's
+    /// input). Cumulative over the speaker's life.
+    std::uint64_t frozenStallFrames() const { return engineClock_.stalledFrames(); }
+    /// Frames a Closure-suppressed short pull ADVANCED instead of stalling
+    /// (remedy 3). Cumulative.
+    std::uint64_t frozenDiscardedMissFrames() const
+    { return discardedMissFrames_.load(std::memory_order_relaxed); }
+    /// Re-roots below the master published with the new root's page at the
+    /// playhead CURRENT / NOT current (remedy 2). Probed right before the
+    /// publication, independently of the warm-up, so a missing warm-up shows
+    /// as a cold re-root rather than as nothing.
+    std::uint64_t warmReroots() const { return warmReroots_.load(std::memory_order_relaxed); }
+    std::uint64_t coldReroots() const { return coldReroots_.load(std::memory_order_relaxed); }
+
+    /// TEST SEAM (QBX-320): the next `blocks` callbacks in which the frozen
+    /// lane is PLAYING skip the pull, exactly as a miss leaves it (nothing
+    /// produced, the engine position unmoved). It forces a stall by a trigger
+    /// that is NOT a re-root, so remedies 1 and 3 can each be gated alone.
+    void forceFrozenMissesForTest(int blocks) {
+        forcedMisses_.store(blocks < 0 ? 0 : blocks, std::memory_order_relaxed);
+    }
+    /// TEST SEAM (QBX-320): make the next re-root below the master find the
+    /// new root's pages STALE (one content-epoch bump on it, main thread,
+    /// before the warm-up), so the warm-up has something to do on every run
+    /// instead of on most of them.
+    void setStaleRerootForTest(bool on) {
+        staleRerootForTest_.store(on, std::memory_order_relaxed);
+    }
+
 public:
     // THE FROZEN LANE. Unchanged in every respect except one: when the device is
     // already OPEN (the live lane opened it), it ATTACHES rather than re-opening
@@ -529,6 +571,15 @@ private:
     std::atomic<DeviceState>   deviceState_{ DeviceState::CLOSED };
     std::atomic<bool>          liveMasterClosure_{ false };  // proposal 45 M3
     std::atomic<int>           attachHoldMsForTest_{ 0 };   // QBX-275 seam
+    std::atomic<int>           forcedMisses_{ 0 };          // QBX-320 seam
+    std::atomic<bool>          staleRerootForTest_{ false };// QBX-320 seam
+    std::atomic<std::uint64_t> discardedMissFrames_{ 0 };   // QBX-320 remedy 3
+    std::atomic<std::uint64_t> warmReroots_{ 0 };           // QBX-320 remedy 2
+    std::atomic<std::uint64_t> coldReroots_{ 0 };
+    // Remedy 2, main thread: demand the new root's pages at the playhead and
+    // wait -- bounded -- until the one under the playhead is current.
+    void warmRerootTarget( audio::AudioEngine &engine,
+                           const std::shared_ptr<twComponent> &root );
     // The re-rooting that travels with that flag (AC3.1). Main-thread only:
     // written by setLiveMasterClosure, read when an engine is attached.
     std::shared_ptr<twComponent> liveFrozenRootUnderMaster_;
