@@ -274,6 +274,63 @@ run from saved copies, fail at `0.128151` / `0.237583`.
 anchored on — `over [ 169826 , 217826 ) "anchored on onset 19304 + 150522"` —
 so one failing log line is enough to tell a displacement from a level change.
 
+## `qxa.midi_rec_union_r2` — SEGFAULT, MECHANISM ESTABLISHED and FIXED by QBX-276, not excluded (QBX-308)
+
+**Not excluded, and not expected to crash again.** A failure here now is a new
+defect, not this flake.
+
+**The sightings.** Each one SEGFAULTed after the case's last assertion, and each
+went green when the identical tree was re-run:
+
+| when | PR / branch | commit | run / job | time to crash |
+|---|---|---|---|---|
+| 2026-10-31 | #326 | `eb2840e6` | `41230648835` / `124623977120` | 1.99 s |
+| 2026-11-01 | #327 | `aded0a91` | `41294517642` / `124812441412` | 1.62 s |
+| 2026-11-02 | `main` (QBX-276's report) | `aec8f613` | `41392830211` / `125153732045` | — |
+
+A passing run takes 0.07–0.10 s. Both crash logs end on the same line, the first
+`twTrackMix: removed 0 clip(s)` of `verify-undo`'s first undo, after the case's
+own `<redo/>`.
+
+**The mechanism is QBX-276's, established there under ASan**, where it was a
+heap-use-after-free on every run. `place-midi-recording` holds its plan and
+rebuilds it on every apply, so a redo deleted the first plan. But
+`SActionUndoCommand` kept the FIRST inverse, so the next undo's
+`unmerge-columns` read its operands out of a freed `SMergeColumnsAction`. A
+normal build usually hands the freed block straight back to the re-plan's own
+merge, which is why the case passed nearly always. Fixed by `0dc8d084` (PR #358,
+merged as `5175f19e` on 2026-11-08): `SActionHistory::reapply()` returns the
+redo's inverse and `SActionUndoCommand::redo()` adopts it (actions `CONTRACT.md`
+inv. 7). It is gated by `qxa.undo_redo_adopts_inverse`. QBX-308 was filed later
+from the two older sightings, without that link.
+
+**Measured at `main` `3670ccab`, 2026-11-27, on a 12-core box.** The loop ran
+the binary with ctest's ENVIRONMENT and a private `XDG_CONFIG_HOME`, and
+recorded the exit code. `repeat_test.sh` was not used, because it cannot tell a
+SEGFAULT from a failed assertion.
+
+| regime | `SMARAGD_REVAL_WORKERS` | runs | crashes |
+|---|---|---|---|
+| idle | default, 1, 4, 16 | 200 + 100 + 100 + 100 | 0 |
+| idle, poisoned heap (`glibc.malloc.perturb=65:tcache_count=0`) | default | 200 | 0 |
+| 36 spinners on 12 cores, load 36–39 | default, 1, 16 | 200 + 100 + 100 | 0 |
+| the same load, poisoned heap | default | 100 | 0 |
+
+**And the fix is what the zero rests on, measured by restoring the pre-fix
+behaviour in `SActionUndoCommand::redo()`** (keep the first inverse, delete the
+redo's; restored from saved bytes afterwards):
+
+| sabotaged build | runs | result |
+|---|---|---|
+| `midi_rec_union_r2`, ordinary heap | 100 | 0 crashes, as in the CI history |
+| `midi_rec_union_r2`, poisoned heap | 100 | **52 SEGFAULT** |
+| `undo_redo_adopts_inverse` | 5 | **5 FAIL**, `want stale= 0 … got stale= 2` |
+
+So the poisoned heap turns this use-after-free from rare into about one run in
+two, and the dedicated case catches it on every run. **No CI job has failed
+this case since the fix.** All 79 completed ctest jobs from 2026-11-08 to
+2026-11-27 were checked, re-run attempts included.
+
 ## `qxa.rec_union_cycle_inside` — reported as a local suite flake, NOT reproduced (QBX-220)
 
 **It has never failed in CI.** It is recorded here anyway so the next person
