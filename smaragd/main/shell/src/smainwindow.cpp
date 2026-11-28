@@ -62,6 +62,9 @@
 #include "app/objects/midi/smidiclipactions.h"
 #include "app/model/sarmcensus.h"
 #include "app/model/splacements.h"
+#include "app/model/sunusedclips.h"
+#include "app/persistence/spurgeunusedclipsaction.h"
+#include "app/servicesui/spurgeunusedclipsdialog.h"
 #include "app/model/ssolorules.h"
 #include "app/actions/scompositeaction.h"
 #include "app/actions/ssetpropertyaction.h"
@@ -2298,6 +2301,16 @@ SMainWindow::SMainWindow()
     // two; the dialog says which it is about before anything happens.
     editMenu->addAction( "Clean up &takes...", this,
                          SLOT( cleanupTakesFromMenu() ) );
+    // PURGE UNUSED CLIPS (QBX-319), beside Clean up takes: the other command
+    // that removes what the project carries and nothing plays. Greyed when
+    // there is nothing to purge, decided on aboutToShow (see the member).
+    editMenu_ = editMenu;
+    actPurgeUnusedClips_ = editMenu->addAction(
+        tr( "&Purge unused clips..." ), this,
+        SLOT( purgeUnusedClipsFromMenu() ) );
+    actPurgeUnusedClips_->setEnabled( false );
+    connect( editMenu, &QMenu::aboutToShow, this,
+             &SMainWindow::refreshPurgeUnusedClipsEnabled_ );
     editMenu->addSeparator();
     // THE SOLO INDICATOR'S COMMAND (QBX-257). On the menu as well as on the
     // status-bar badge: the badge is a mouse target that only exists while a
@@ -4362,6 +4375,70 @@ bool SMainWindow::sendDeselectAllShortcut()
 void SMainWindow::cleanupTakesFromMenu()
 {
     cleanupTakesGesture( false, false, false, false );
+}
+
+void SMainWindow::refreshPurgeUnusedClipsEnabled_()
+{
+    if( !actPurgeUnusedClips_ ) return;
+    // THE APP's project, not currentProject_: a scripted run sets it on
+    // SApplication directly. The same list the dialog shows and the verb
+    // indexes, so "enabled" and "the verb would accept a row" cannot differ.
+    SProject *proj = SApplication::app().getCurrentProject();
+    actPurgeUnusedClips_->setEnabled( !sunusedclips::list( proj ).isEmpty() );
+}
+
+void SMainWindow::purgeUnusedClipsFromMenu()
+{
+    purgeUnusedClipsGesture( nullptr );
+}
+
+int SMainWindow::purgeUnusedClipsGesture( const QList<int> *scriptedRows )
+{
+    SProject *proj = SApplication::app().getCurrentProject();
+    const QList<sunusedclips::Entry> entries = sunusedclips::list( proj );
+    if( entries.isEmpty() ) {
+        TW_LOGI( "ui.shell", "purge-unused-clips: nothing to purge" );
+        statusBar()->showMessage( tr( "No unused clips to purge." ), 4000 );
+        return 0;
+    }
+    QList<int> rows;
+    if( scriptedRows ) {
+        rows = *scriptedRows;
+    } else {
+        QStringList labels;
+        for( const sunusedclips::Entry &e : entries )
+            labels << e.label( proj->getSRate() );
+        if( !SPurgeUnusedClipsDialog::ask( this, labels, &rows ) ) return 0;
+    }
+    if( rows.isEmpty() ) return 0;
+
+    // The count comes back through the sink, never from the action after the
+    // submit: the history deletes an action that leaves no undo step.
+    int released = 0;
+    SPurgeUnusedClipsAction *act = new SPurgeUnusedClipsAction( rows, false );
+    act->reportTo( &released );
+    SApplication::app().submitAction( act );
+    if( released > 0 )
+        statusBar()->showMessage(
+            tr( "Purged %n unused clip(s).", "", released ), 4000 );
+    return released;
+}
+
+bool SMainWindow::purgeUnusedClipsMenuEnabled()
+{
+    if( !editMenu_ || !actPurgeUnusedClips_ ) return false;
+    emit editMenu_->aboutToShow();
+    return actPurgeUnusedClips_->isEnabled();
+}
+
+bool SMainWindow::triggerPurgeUnusedClipsMenu()
+{
+    if( !editMenu_ || !actPurgeUnusedClips_ ) return false;
+    emit editMenu_->aboutToShow();
+    // THE SEAM DOES THE REFUSAL ITSELF, as clickSoloIndicator() does.
+    if( !actPurgeUnusedClips_->isEnabled() ) return false;
+    actPurgeUnusedClips_->trigger();
+    return true;
 }
 
 bool SMainWindow::isolateTakeGesture( const QString &clipRef, int takeRow )

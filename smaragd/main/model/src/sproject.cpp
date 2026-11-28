@@ -531,6 +531,32 @@ void SProject::pinLoadedOrphan( SObject *obj )
     loadedOrphans_.append( QPointer<SObject>( obj ) );
 }
 
+QList<SObject *> SProject::loadedOrphans() const
+{
+    QList<SObject *> out;
+    for( const QPointer<SObject> &p : loadedOrphans_ )
+        if( p ) out.append( p.data() );
+    return out;
+}
+
+int SProject::releaseLoadedOrphans( const QList<SObject *> &clips )
+{
+    // The pins are taken off the list FIRST and dropped afterwards, for
+    // clearLoadedOrphans()' reason: nothing below may see a half-edited list.
+    QList<QPointer<SObject> > dropped;
+    for( int i = loadedOrphans_.size() - 1; i >= 0; --i ) {
+        SObject *p = loadedOrphans_.at( i ).data();
+        if( p && clips.contains( p ) ) {
+            dropped.append( loadedOrphans_.at( i ) );
+            loadedOrphans_.removeAt( i );
+        }
+    }
+    for( const QPointer<SObject> &p : dropped ) {
+        if( p ) p->removeRef();
+    }
+    return dropped.size();
+}
+
 void SProject::clearLoadedOrphans()
 {
     // Taken by value and cleared first: a removeRef() that reaches zero only

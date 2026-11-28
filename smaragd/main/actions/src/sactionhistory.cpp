@@ -95,6 +95,7 @@ void SActionHistory::onApplied_(quint64 id, SAction *inverse)
 
             // Read BEFORE `forward` can be deleted below.
             const bool markClean = forward->marksProjectClean();
+            const bool markModified = forward->marksProjectModified();
 
             // Push to QUndoStack as an SActionUndoCommand.
             if (inverse) {
@@ -111,6 +112,9 @@ void SActionHistory::onApplied_(quint64 id, SAction *inverse)
             // this only ever fires from the `else` branch (save-project is
             // not undoable), but the ordering is correct either way.
             if (markClean) undoStack_->setClean();
+            // A NON-undoable change to what the next save writes (QBX-319):
+            // no push moved the stack off its clean index, so say it here.
+            if (markModified && !markClean) undoStack_->resetClean();
             return;
         }
     }

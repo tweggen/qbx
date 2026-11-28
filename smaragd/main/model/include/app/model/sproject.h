@@ -276,6 +276,18 @@ public:
     // nothing deletes it.
     void pinLoadedOrphan( SObject *obj );
     void clearLoadedOrphans();
+    // The pinned orphans still alive, in the order they were pinned, which is
+    // their order in the file (SProjectLoader::createObjects pins in document
+    // order). sunusedclips::list() is the one reader; it sorts and filters.
+    QList<SObject *> loadedOrphans() const;
+    // THE ONE RELEASE OF SINGLE PINS (QBX-319, `purge-unused-clips`). Drops
+    // this project's pin on each of `clips` that it holds, and returns how
+    // many it dropped. An object that is not pinned is ignored, so a caller
+    // can never removeRef() what the project does not hold. The released
+    // clip then dies by the ordinary path (removeRef's queued check) if
+    // nothing else holds it. Not undoable: see model/CONTRACT.md "Loaded
+    // orphans" for why an undo pin would make the purge undo itself.
+    int releaseLoadedOrphans( const QList<SObject *> &clips );
 
     // --- Arrangement registry (proposal 09 D3) ---------------------------
     // An ARRANGEMENT is a named summing root that is NOT the project's master

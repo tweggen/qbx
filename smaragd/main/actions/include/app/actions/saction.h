@@ -130,6 +130,16 @@ public:
     // MUTATION, not a write of it to disk.
     virtual bool marksProjectClean() const { return false; }
 
+    // Opt-in: this action, once APPLIED, marks the project MODIFIED although
+    // it pushes no undo step. An undoable action needs no such hook: its push
+    // moves the stack off the clean index. A NON-undoable action that still
+    // changes what the next save writes does, or "unsaved changes" would stay
+    // clear after it and the change could be lost on close. `purge-unused-
+    // clips` (QBX-319) is the first override. Same reason as
+    // marksProjectClean() for being a hook: every route through
+    // SActionHistory then says the same thing.
+    virtual bool marksProjectModified() const { return false; }
+
 protected:
     // The two halves of the gesture boundary, for an implementation that has a
     // mergeKey(). BOTH are required: QBX-203 measured that reverting either
