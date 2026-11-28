@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A PURGED CLIP TAKES WHAT ONLY IT WINDOWED WITH IT (QBX-319).
+
+  The confirmation says so ("Purging a clip also removes what only that clip
+  shows"), and the author accepted it (2026-11-27). This is the case that
+  holds the dialog to its word. sample_missing_survives.qxp places one clip
+  over test_sawtooth.wav and holds one orphan, cut2, over a sample that does
+  not exist, so the load gives it a missing-media placeholder. Two extern
+  files, one of them missing.
+
+  After purging the orphan and the turn of the event loop that deletes it
+  (drain-pending-deletes), only the placed sample's file is left and nothing
+  is missing; the next save names the placed sample and not the missing one.
+  The witness before the purge (count 2, missing 1) is what makes the counts
+  after it mean the purge did it.
+-->
+<SActionScript version="1" name="purge_unused_clips_placeholder">
+
+  <setup project="new"/>
+
+  <actions>
+    <load-project path="../sample_missing_survives.qxp"/>
+    <drain-pending-deletes/>
+    <assert-extern-files count="2" missing="1"/>
+    <assert-unused-clips count="1" contains="0:__missing_sample__.wav, 2.000 s from 0.000 s"/>
+
+    <purge-unused-clips rows="0"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="0"/>
+    <assert-extern-files count="1" missing="0"/>
+
+    <save-project path="../../build/test-output/purge_unused_clips_placeholder/after.qxp"/>
+    <assert-file-contains path="../../build/test-output/purge_unused_clips_placeholder/after.qxp"
+                          text="test_sawtooth.wav"/>
+    <assert-file-contains path="../../build/test-output/purge_unused_clips_placeholder/after.qxp"
+                          text="__missing_sample__.wav" absent="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

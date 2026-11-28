@@ -39,6 +39,7 @@ set(APP_MODEL_FILES
     model/include/app/model/seditgroups.h
     model/include/app/model/sautofade.h
     model/include/app/model/srecordingfiles.h
+    model/include/app/model/sunusedclips.h
     model/include/app/model/sprojectprops.h
     model/include/app/model/sarmcensus.h
     model/include/app/model/ssolorules.h
@@ -63,6 +64,7 @@ set(APP_MODEL_FILES
     model/src/splacements.cpp
     model/src/sproject.cpp
     model/src/srecordingfiles.cpp
+    model/src/sunusedclips.cpp
     model/src/sroutinggraph.cpp
 )
 
@@ -130,9 +132,11 @@ set(APP_CORE_FILES
     persistence/include/app/persistence/sloadprojectaction.h
     persistence/include/app/persistence/sprojectloader.h
     persistence/include/app/persistence/ssaveprojectaction.h
+    persistence/include/app/persistence/spurgeunusedclipsaction.h
     persistence/src/sloadprojectaction.cpp
     persistence/src/sprojectloader.cpp
     persistence/src/ssaveprojectaction.cpp
+    persistence/src/spurgeunusedclipsaction.cpp
     # --- app/selection
     selection/include/app/selection/saddtoselectionaction.h
     selection/include/app/selection/sclearselectionaction.h
@@ -489,6 +493,7 @@ set(APP_UI_FILES
     samplerui/src/ssamplerzones.cpp
     # --- app/servicesui
     servicesui/include/app/servicesui/scleanuptakesdialog.h
+    servicesui/include/app/servicesui/spurgeunusedclipsdialog.h
     servicesui/include/app/servicesui/slogmodel.h
     servicesui/include/app/servicesui/slogview.h
     servicesui/include/app/servicesui/soptions.h
@@ -498,6 +503,7 @@ set(APP_UI_FILES
     servicesui/include/app/servicesui/srenderprogress.h
     servicesui/include/app/servicesui/stransportoptionactions.h
     servicesui/src/scleanuptakesdialog.cpp
+    servicesui/src/spurgeunusedclipsdialog.cpp
     servicesui/src/slogmodel.cpp
     servicesui/src/slogview.cpp
     servicesui/src/soptions.cpp
@@ -603,6 +609,7 @@ set(APP_UI_FILES
     testkit/include/app/testkit/sreportpagememoryaction.h
     testkit/include/app/testkit/sscreenshotaction.h
     testkit/include/app/testkit/sclicklaneaction.h
+    testkit/include/app/testkit/spurgeunusedclipstestactions.h
     testkit/include/app/testkit/sfollowtestactions.h
     testkit/include/app/testkit/sassertsignalreceiversaction.h
     testkit/include/app/testkit/ssidecartestactions.h
@@ -662,6 +669,7 @@ set(APP_UI_FILES
     testkit/src/smidirecordtestactions.cpp
     testkit/src/sassertsourcepositionaction.cpp
     testkit/src/sclicklaneaction.cpp
+    testkit/src/spurgeunusedclipstestactions.cpp
     testkit/src/sfollowtestactions.cpp
     testkit/src/sassertsignalreceiversaction.cpp
     testkit/src/sdragclipedgeaction.cpp
@@ -1405,6 +1413,19 @@ target_link_libraries(cleanup_takes_dialog_test
 )
 add_test(NAME cleanup_takes_dialog_test COMMAND cleanup_takes_dialog_test)
 set_tests_properties(cleanup_takes_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The purge confirmation (QBX-319). A unit test for cleanup_takes_dialog_test's
+# reason: a modal is never opened by a --test-case run, so the widget's own
+# surface (one box per row, all off, Cancel default, OK disabled until a tick)
+# is reachable only by constructing it.
+add_executable(purge_unused_clips_dialog_test testkit/src/purge_unused_clips_dialog_test.cpp)
+target_link_libraries(purge_unused_clips_dialog_test
+    PRIVATE
+        app_ui app_objects app_core app_model
+)
+add_test(NAME purge_unused_clips_dialog_test COMMAND purge_unused_clips_dialog_test)
+set_tests_properties(purge_unused_clips_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # SLaneFragment (proposal 41 M1): a path container with no track identity.

@@ -103,6 +103,19 @@ if [ -n "${CTEST_EXCLUDE:-}" ]; then
     CTEST_ARGS+=( -E "$CTEST_EXCLUDE" )
     echo "  excluding: $CTEST_EXCLUDE   (see the platform gate doc for why)"
 fi
-ctest "${CTEST_ARGS[@]}"
+# A FAILED CASE MUST LEAVE ITS EVIDENCE, NOT ONLY ITS LOG (QBX-322). QBX-318's
+# failing value could only be decoded from the six digits qDebug printed,
+# because the capture .wav it was measured on died with the runner. So when
+# ctest fails, ci/collect_failed.py copies each failed test's --test-output-dir
+# (captures, renders, screenshots) and its own run.log into FAILED_CASES_DIR,
+# and CI uploads that directory -- only on failure, so a green run uploads
+# nothing. Cleared first, so a green run never leaves an earlier run's there.
+FAILED_CASES_DIR="${FAILED_CASES_DIR:-smaragd/build/failed-cases}"
+rm -rf "$FAILED_CASES_DIR"
+if ! ctest "${CTEST_ARGS[@]}"; then
+    say "Collecting failed cases into $FAILED_CASES_DIR"
+    python3 ci/collect_failed.py smaragd/build "$FAILED_CASES_DIR" || true
+    exit 1
+fi
 
 say "Pass"

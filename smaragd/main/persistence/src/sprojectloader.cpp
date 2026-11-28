@@ -4,6 +4,10 @@
 #include <qfile.h>
 #include <QDebug>
 #include <QSet>
+#include <QPair>
+
+#include <algorithm>
+#include <climits>
 
 #include <iostream>
 
@@ -89,6 +93,26 @@ int SProjectLoader::createObjects( SProject &project )
 
     // This is kind of brute force loading, as we loop through the tree, instantiate everything
     // we can, removing it from the tree until the tree is empty.
+    // DOCUMENT ORDER of every top-level element, by id, taken BEFORE the loop
+    // below consumes the document. The orphan pins at the end are taken in
+    // this order, so SProject::loadedOrphans() lists them as the file does:
+    // `purge-unused-clips` addresses a row of a sorted list whose last
+    // tie-break is this position (QBX-319), and objectDict_ is a QHash whose
+    // iteration order changes from run to run.
+    QHash<QString, int> filePos;
+    {
+        int ordinal = 0;
+        for( QDomNode m = dom_.documentElement().firstChild(); !m.isNull();
+             m = m.nextSibling() ) {
+            const QDomElement me = m.toElement();
+            if( me.isNull() ) continue;
+            const QString mid = me.attribute( "id" );
+            if( !mid.isEmpty() && !filePos.contains( mid ) )
+                filePos.insert( mid, ordinal );
+            ++ordinal;
+        }
+    }
+
     while(true) {
         // print out the element names of all elements that are a direct child
         // of the outermost element.
@@ -315,16 +339,24 @@ int SProjectLoader::createObjects( SProject &project )
     // Decided HERE and not after the post-load passes, because the take-column
     // pass unlinks collapsed wrappers on purpose and expects them to die; at
     // this point each of those is still placed, so none is pinned.
-    int orphans = 0;
+    //
+    // PINNED IN DOCUMENT ORDER (QBX-319), not in objectDict_'s hash order:
+    // see filePos above.
+    QList<QPair<int, SObject *> > found;
     for( auto it = objectDict_.cbegin(); it != objectDict_.cend(); ++it ) {
         SLink *lk = it.value();
         if( !lk || !windowIds_.contains( it.key() ) ) continue;
         SObject &obj = lk->getSObject();
-        if( obj.refCount() == 1 ) {
-            project_.pinLoadedOrphan( &obj );
-            ++orphans;
-        }
+        if( obj.refCount() == 1 )
+            found.append( qMakePair( filePos.value( it.key(), INT_MAX ), &obj ) );
     }
+    std::stable_sort( found.begin(), found.end(),
+                      []( const QPair<int, SObject *> &a,
+                          const QPair<int, SObject *> &b )
+                      { return a.first < b.first; } );
+    for( const QPair<int, SObject *> &f : found )
+        project_.pinLoadedOrphan( f.second );
+    const int orphans = found.size();
     if( orphans ) {
         qWarning() << QString( "Project holds %1 unplaced clip(s); kept as written "
                                "(the project holds a reference to each)." )

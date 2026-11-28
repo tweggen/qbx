@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PURGE UNUSED CLIPS RELEASES THE CHOSEN LOADED ORPHANS, AND ONLY THOSE (QBX-319).
+
+  Since QBX-314 the project pins every clip a file describes and nothing in it
+  places, so such a clip is written by every save and pinned again by every
+  load. Edit > "Purge unused clips..." is the one command that releases one
+  (model/CONTRACT.md "Loaded orphans"). The author decided (2026-11-27):
+  confirmed and NOT undoable; loaded orphans only; greyed when there is
+  nothing to purge; rows addressed by index in a deterministic sorted list.
+
+  The fixture purge_unused_clips.qxp places one clip and holds three orphans
+  over the same sample, written in the order B, A, C:
+    A  start 0.000 s, 1.000 s long
+    B  start 2.000 s, 0.500 s long
+    C  start 0.500 s, 1.500 s long
+  Sorted by file, start, length the rows are 0=A, 1=C, 2=B. In file order row
+  1 would be A, so purging row 1 tells the sorted list from the pin order.
+
+  Sections:
+   1. The list after the load: three rows in sorted order, the menu enabled.
+   2. A clip deleted IN THIS SESSION is not listed: a MIDI clip is inserted
+      and removed, remove-sample's undo pin keeps it alive and unplaced, and
+      the list stays at three. Undone again, so it is placed in the save.
+   3. The menu path with no rows: the item fires, the confirmation declines
+      headless (it answers NO), and nothing is released.
+   4. The verb refuses whole: an out-of-range row, a repeated row, no rows,
+      and rows= with all= together. Nothing is released by any of them.
+   5. THE PURGE (acceptance criterion 1): row 1 through the gesture. One
+      clip released, the project marked modified with no undo entry, C gone
+      and A and B kept.
+   6. Save and reload: C is not in the file, A and B are, and the reloaded
+      project pins two.
+   7. all="1" empties the list; then the menu item is greyed, the menu seam
+      refuses it, and the verb refuses an empty list.
+-->
+<SActionScript version="1" name="purge_unused_clips">
+
+  <setup project="new"/>
+
+  <actions>
+    <!-- 0. Nothing loaded yet: nothing to purge, the item is greyed. -->
+    <assert-unused-clips count="0" menuEnabled="0"/>
+
+    <load-project path="../purge_unused_clips.qxp"/>
+    <assert-log level="warn" minCount="1"
+                contains="Project holds 3 unplaced clip(s)"/>
+    <drain-pending-deletes/>
+
+    <!-- 1. Three rows, sorted, and the item enabled. -->
+    <assert-unused-clips count="3" menuEnabled="1"
+        contains="count=3|0:test_sawtooth.wav, 1.000 s from 0.000 s|1:test_sawtooth.wav, 1.500 s from 0.500 s|2:test_sawtooth.wav, 0.500 s from 2.000 s"/>
+
+    <!-- 2. A clip deleted in this session belongs to the undo history. A MIDI
+         clip, because remove-sample PINS one for its undo (an audio clip over
+         a file is rebuilt from a recipe instead and really dies), so this one
+         stays alive, unplaced, and a child of the project. -->
+    <insert-midi-clip trackPath="0" timePos="192000" duration="1920" name="SessionClip"/>
+    <remove-sample trackPath="0" clipIndex="1"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="3" absent="|3:"/>
+    <!-- Undone, so the clip is placed again: left deleted, the save below
+         would write it (the undo pin keeps it alive) and the reload would pin
+         it, QBX-314's recorded cost. -->
+    <undo/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="3" absent="SMidiSequence"/>
+
+    <!-- 3. The menu with nobody to answer: declined, nothing released. -->
+    <purge-unused-clips-gesture via="menu"/>
+    <assert-log contains="purge-unused-clips: confirmation declined" minCount="1"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="3"/>
+
+    <!-- 4. The verb's own refusals. -->
+    <purge-unused-clips rows="3" expectReject="true"/>
+    <purge-unused-clips rows="1;1" expectReject="true"/>
+    <purge-unused-clips expectReject="true"/>
+    <purge-unused-clips rows="0" all="1" expectReject="true"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="3"/>
+
+    <!-- 5. THE PURGE. A clean stack first, so "modified" means this did it. -->
+    <save-project path="../../build/test-output/purge_unused_clips/before.qxp"/>
+    <assert-unsaved-changes expect="0" undoEntries="2"/>
+    <purge-unused-clips-gesture via="rows" rows="1" expectPurged="1"/>
+    <assert-unsaved-changes expect="1" undoEntries="2"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="2"
+        contains="count=2|0:test_sawtooth.wav, 1.000 s from 0.000 s|1:test_sawtooth.wav, 0.500 s from 2.000 s"
+        absent="1.500 s from 0.500 s"/>
+
+    <!-- 6. Save and reload. -->
+    <save-project path="../../build/test-output/purge_unused_clips/after.qxp"/>
+    <assert-file-contains path="../../build/test-output/purge_unused_clips/after.qxp"
+                          text="startOffset='24000'" absent="true"/>
+    <assert-file-contains path="../../build/test-output/purge_unused_clips/after.qxp"
+                          text="startOffset='96000'"/>
+    <assert-file-contains path="../../build/test-output/purge_unused_clips/after.qxp"
+                          text="startOffset='0'"/>
+    <load-project path="../../build/test-output/purge_unused_clips/after.qxp"/>
+    <assert-log level="warn" minCount="1"
+                contains="Project holds 2 unplaced clip(s)"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="2" menuEnabled="1"
+        contains="count=2|0:test_sawtooth.wav, 1.000 s from 0.000 s|1:test_sawtooth.wav, 0.500 s from 2.000 s"/>
+
+    <!-- 7. Everything, then nothing left: greyed, refused by menu and verb. -->
+    <purge-unused-clips all="1"/>
+    <drain-pending-deletes/>
+    <assert-unused-clips count="0" menuEnabled="0"/>
+    <purge-unused-clips-gesture via="menu" expectRefused="1"/>
+    <purge-unused-clips all="1" expectReject="true"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="1"/>
+  </assertions>
+
+</SActionScript>

@@ -295,6 +295,28 @@ public:
                              bool includeOriginals, bool files );
 
     /**
+     * TEST ENTRY POINT and the MENU's own route: Edit > "Purge unused
+     * clips..." (QBX-319).
+     *
+     * Reads `sunusedclips::list()`, asks which rows to release, and submits
+     * ONE `purge-unused-clips rows=...`. `scriptedRows` null is the menu:
+     * the confirmation is asked (SPurgeUnusedClipsDialog::ask), and under
+     * `--test-case` it declines, so nothing is released. Non-null supplies
+     * the ticked rows instead of asking, and everything else is the menu's
+     * code. Returns how many clips were released; 0 for nothing to purge,
+     * declined, or nothing ticked, which the log tells apart.
+     */
+    int purgeUnusedClipsGesture( const QList<int> *scriptedRows );
+    /// TEST SEAM: whether the Edit menu item is enabled, read as a user meets
+    /// it -- the Edit menu's aboutToShow() is emitted first, so the seam reads
+    /// what the menu's own refresh decided, through the menu's own connection.
+    bool purgeUnusedClipsMenuEnabled();
+    /// TEST SEAM: trigger the Edit menu item. Emits aboutToShow() and then
+    /// REFUSES a disabled item itself (QAction::trigger() fires a disabled
+    /// action too). Returns whether it fired.
+    bool triggerPurgeUnusedClipsMenu();
+
+    /**
      * TEST ENTRY POINT: "hear one take alone" (QBX-186).
      *
      * The whole of what the take-lane context menu item's handler does, so a
@@ -891,6 +913,8 @@ protected slots:
      * header, which is where that rule is written down.
      */
     void cleanupTakesFromMenu();
+    /// Edit > "Purge unused clips..." (QBX-319): purgeUnusedClipsGesture(nullptr).
+    void purgeUnusedClipsFromMenu();
 
     // AC-a3: Edit -> Select All (Ctrl/Cmd-A). The DEFAULT answer for the
     // keyboard shortcut — selects every clip on every lane of the ACTIVE
@@ -1255,6 +1279,15 @@ private:
     // actually moves.
     class SArmIndicator *armIndicator_ = nullptr;
     QAction *actDisarmAll_ = nullptr;
+    // Edit > "Purge unused clips..." (QBX-319). GREYED unless
+    // sunusedclips::list() has a row: refreshPurgeUnusedClipsEnabled_() runs
+    // on the Edit menu's aboutToShow(), so the state is computed when the
+    // user looks, from the same list the confirmation shows and the verb
+    // indexes. No model signal announces a change to the list, and the menu
+    // opening is the one moment the answer is needed.
+    QMenu   *editMenu_ = nullptr;
+    QAction *actPurgeUnusedClips_ = nullptr;
+    void refreshPurgeUnusedClipsEnabled_();
     QMetaObject::Connection armSetConn_;      // the live set may have moved
     // ATTACH ONCE, NEVER AGAIN -- describeTrackDetailDock's rule and its
     // reason, plus one of its own: if the describe seam re-read the model on
