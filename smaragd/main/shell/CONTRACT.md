@@ -2723,6 +2723,39 @@ rebuilds the plan (`planSignature()` asks only closure members and the master
 lane). Whether that is audible depends on whether the muted lane's root page
 goes silent on its own, which was not measured here; it is a separate ticket.
 
+*Correction, 2026-11-27 (QBX-311):* it does not go silent, and the stale mute
+was heard. A user lane's mute is a property of its mixer CHANNEL
+(`STrack::onTrackMuteChanged`): the summing parent enforces it — the root
+mixer nulls the plug, a folder `setClipMuted`s its entry — and the lane's own
+root pages keep its material on purpose, so an asset can window a muted
+track. The pump reads a frozen input straight out of those root pages, never
+through the folder's `twTrackMix`, so the plan's build-time `isLaneAudible`
+is the only place the live path honours a mute. Measured on main `3670ccab`
+with `mute_rebuilds_live_plan` (A at RMS 0.2749 beside the 0.2309 input):
+`dump-playback-capture` read 0.3591 in every 0.5 s window, muted or not — the
+sum, where the input alone is 0.2309.
+
+So a MUTE flip is a rebuild trigger too. `SProject::muteSetChanged` (readers
+only, like `soloSetChanged`; mute has no scope and no topology half) is raised
+by BOTH summing parents after their own pass — `SStdMixer::trackMuteChanged`
+for a root child, `STrack::childTrackMuteChanged` for a nested lane — and
+`SApplication::setCurrentProject` wires it to `liveLanesChanged()`.
+
+Gate: `mute_rebuilds_live_plan`. With the fix the three windows read 0.3584,
+0.2310 and 0.3584 (before, muted, unmuted), the longest near-silent run is 1
+frame, and the plan reads `frozen=` while muted. Section 3 mutes a TOP-LEVEL
+lane under Closure (a unity master insert), which is the root mixer's raise
+site: `[master live=F frozen=C]` loses `C`. Sabotaged: no `SApplication`
+wire fails sections 1 and 3 and the muted energy (0.3584); no root-mixer raise
+fails section 3 only; no folder raise fails section 1 and the muted energy
+only. The UNMUTE stages bite none of these, by construction — a plan that
+never moved still lists the lane — and stay as the other direction of the
+claim.
+
+Not measured: a mute on a closure MEMBER (the armed lane, or the folder
+itself). Members join the plan whatever their audibility, so that is a
+different question from frozen-input membership.
+
 ## inv. 74 — Edit > "Purge unused clips..." is greyed on the same list it confirms and the verb indexes (QBX-319)
 
 The menu entry for `purge-unused-clips`. Its model side is model/CONTRACT.md

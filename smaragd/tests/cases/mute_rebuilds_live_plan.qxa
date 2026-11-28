@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-311: A MUTE FLIP REBUILDS THE LIVE PLAN, and the stale plan was AUDIBLE.
+
+  THE BUG. The sibling of QBX-307 (solo_rebuilds_live_plan). SLivePlanBuilder
+  decides which of a live folder's unarmed children join the plan as FROZEN
+  INPUTS by asking ssolo::isLaneAudible, which reads isMuted() as well as
+  solo. A plan is a snapshot, and nothing rebuilt it on a mute: mutedChanged
+  reached the summing parent (SStdMixer::trackMuteSoloChanged for a root
+  child, STrack::childTrackMuteChanged for a nested lane), which fixes what
+  THAT parent sums, and never SApplication::liveLanesChanged().
+
+  WHY IT IS HEARD. Mute is a property of the mixer CHANNEL, not of the track
+  (STrack::onTrackMuteChanged): a user lane's own root pages keep carrying
+  its material, on purpose, so an asset can window a muted track. The pump
+  reads a frozen input straight out of those root pages - it does not sum
+  through the folder's twTrackMix, where setClipMuted applies the mute. So
+  a muted sibling still listed as frozen is summed AT FULL LEVEL into the
+  ring. MEASURED on main 3670ccab: channel 0 read RMS 0.3591 in every
+  24000-frame window from 0.5 s to 8 s, muted or not - the sum, never the
+  input alone - and the plan stayed "[F live=Arm frozen=A]". With the fix:
+  0.3584 before, 0.2310 muted, 0.3584 unmuted, longest near-silent run 1
+  frame.
+
+  THE SHAPE. F is a folder holding A and Arm. A carries 8 s of a 100 Hz
+  0.95-amplitude sawtooth at -6 dB (RMS 0.5485 x 0.5012 = 0.2749) and no
+  input; Arm is armed on the file input (0.4/sqrt(3) = 0.2309) with monitor
+  on, so F joins the live closure and A is its frozen input:
+  "[F live=Arm frozen=A]". No insert, linear master: the ring is the output.
+
+  THE CLOSED FORMS. Live with A: two uncorrelated sources, sqrt(0.2749^2 +
+  0.2309^2) = 0.3590. A muted: the input alone, 0.2309. Both bands are
+  TWO-SIDED, so a dead ring (silence) cannot pass the muted one.
+
+  BOTH WAYS. The mute is taken back too, so a fix that only ever REMOVES a
+  frozen input (or a plan that stopped listing A for another reason) fails
+  the last stage.
+
+  KEY WRITTEN: `mixer/monitorArming` (`any`, as in solo_rebuilds_live_plan),
+  restored at the end. RUN_SERIAL with the file input backend, from the live
+  list in smaragd/CMakeLists.txt.
+-->
+<SActionScript version="1" name="mute_rebuilds_live_plan">
+
+  <setup project="new"/>
+
+  <actions>
+    <set-option key="mixer/monitorArming" value="any"/>
+    <assert-mixing-options monitorArming="any"/>
+
+    <add-track index="-1"/>                <!-- 0: becomes the folder F -->
+    <add-track index="-1"/>                <!-- 1: A -->
+    <add-track index="-1"/>                <!-- 2: Arm -->
+    <set-track-name trackPath="0" name="F"/>
+    <set-track-name trackPath="1" name="A"/>
+    <set-track-name trackPath="2" name="Arm"/>
+
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="96000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="192000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="288000"/>
+    <add-sample trackPath="1" filePath="../test_clipsaw.wav" timePos="384000"/>
+    <set-track-volume trackPath="1" volume="-6"/>
+
+    <!-- After these, top level is F (0); F holds A (0,0) and Arm (0,1). -->
+    <reparent-track source="2" destParent="0" destIndex="-1"/>
+    <reparent-track source="1" destParent="0" destIndex="0"/>
+
+    <set-track-input trackPath="0,1" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0,1" mode="on"/>
+    <arm-track trackPath="0,1" armed="1"/>
+    <wait-ms ms="400"/>
+
+    <!-- ===== 0. THE CONTROL: A is a frozen input ===== -->
+    <assert-live-plan contains="[F live=Arm frozen=A]"/>
+
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2500"/>
+
+    <!-- ===== 1. Mute A mid-play: it leaves the plan, and the ring ===== -->
+    <set-track-mute trackPath="0,0" muted="1"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=]" absent="frozen=A"/>
+    <wait-ms ms="2300"/>
+
+    <!-- ===== 2. Unmute A: it comes back ===== -->
+    <set-track-mute trackPath="0,0" muted="0"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[F live=Arm frozen=A]"/>
+    <wait-ms ms="2300"/>
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="mute.wav" minFrames="340000"/>
+
+    <!-- Before the mute (1.0-2.0 s): A + input, 0.3590. -->
+    <assert-audio-energy filename="mute.wav" startFrame="48000" frameCount="48000"
+                         channel="0" minRms="0.320" maxRms="0.400"/>
+    <!-- Muted (3.5-4.5 s): the input alone, 0.2309. On main this read the
+         sum: the muted lane went on sounding through the ring. -->
+    <assert-audio-energy filename="mute.wav" startFrame="168000" frameCount="48000"
+                         channel="0" minRms="0.200" maxRms="0.260"/>
+    <!-- Unmuted (6.5-7.0 s): A + input again, 0.3590. -->
+    <assert-audio-energy filename="mute.wav" startFrame="312000" frameCount="24000"
+                         channel="0" minRms="0.320" maxRms="0.400"/>
+
+    <!-- AND NO HOLE: the input sounds throughout, so a rebuild that dropped
+         the ring for a block would show here as a run of near-zero samples. -->
+    <assert-audio-continuity filename="mute.wav" startFrame="24000"
+                             frameCount="336000" channel="0"
+                             maxGapFrames="1024" silenceLevel="0.002"/>
+
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+
+    <!-- ===== 3. A ROOT CHILD: the other summing parent ===== -->
+    <!-- Sections 1 and 2 mute a NESTED lane, whose mute the folder STrack
+         enforces (childTrackMuteChanged). A TOP-LEVEL lane's mute is the root
+         mixer's (trackMuteChanged), a different raise site. A top-level
+         unarmed lane is a frozen input only under CLOSURE, where the master
+         node reads every unarmed top-level track; a unity insert on the master
+         lane is what makes the master non-linear. Plan only: the capture
+         above is cumulative and was measured once, on purpose. -->
+    <add-track index="-1"/>                <!-- 1: C, top-level -->
+    <set-track-name trackPath="1" name="C"/>
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="1.0"/>
+    <wait-ms ms="400"/>
+    <assert-live-plan contains="[master live=F frozen=C]"/>
+    <set-track-mute trackPath="1" muted="1"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[master live=F frozen=]" absent="frozen=C"/>
+    <set-track-mute trackPath="1" muted="0"/>
+    <wait-ms ms="200"/>
+    <assert-live-plan contains="[master live=F frozen=C]"/>
+
+    <!-- ===== THE RESTORE ===== -->
+    <arm-track trackPath="0,1" armed="0"/>
+    <set-option key="mixer/monitorArming" value="armed-only"/>
+    <assert-mixing-options monitorArming="armed-only"/>
+    <wait-ms ms="400"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

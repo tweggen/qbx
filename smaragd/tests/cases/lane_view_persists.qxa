@@ -132,12 +132,15 @@
          root's arranger, so a gesture writes to the loaded project's track.
          Before the fix this set-lane-view wrote to the previous load's track
          and the assert-lane-view after it read 2.5.
-         NO ROW COUNT HERE, though one is now meaningful: the rebuilt arranger
-         builds 4 rows, not 5, because a SHOWN AUTOMATION LANE does not get
-         its row when an arranger is built from a loaded project (measured
-         with the rebind in place, and with a fresh arranger over the saved
-         file; the take rows do come back). That is its own defect, QBX-317,
-         and a count of 4 here would pin it. -->
+         THE ROW COUNT FIRST (QBX-317): 2 base + 2 take + 1 automation, built
+         by an arranger that was bound to the loaded root and never had a
+         gesture aimed at its automation UI. On main it read 4: the
+         automation row was skipped while the view's lazily-created
+         SAutomationLaneUi did not exist yet, a guard left over from when the
+         shown set lived on that object rather than on STrack. It stands
+         BEFORE the set-lane-view below, which goes through the same view and
+         must not be what creates anything. -->
+    <assert-lane-alignment rows="5"/>
     <set-lane-view laneScaleRow="0" laneScale="1.5"/>
     <assert-lane-view trackPath="0" laneScale="1.5"/>
   </actions>
