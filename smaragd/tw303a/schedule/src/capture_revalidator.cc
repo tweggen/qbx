@@ -416,6 +416,11 @@ void CaptureRevalidator::GraphDemand::wait() {
     cv_.wait(l, [this]() { return outstanding_ == 0 || aborted_; });
 }
 
+bool CaptureRevalidator::GraphDemand::waitFor(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> l(m_);
+    return cv_.wait_for(l, timeout, [this]() { return outstanding_ == 0 || aborted_; });
+}
+
 bool CaptureRevalidator::GraphDemand::done() const {
     std::lock_guard<std::mutex> l(m_);
     return outstanding_ == 0;

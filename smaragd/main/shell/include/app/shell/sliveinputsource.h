@@ -48,6 +48,10 @@ public:
 
     std::size_t pull( float *const *out, std::size_t channels,
                       std::size_t frames, offset_t pos ) override;
+    /// QBX-320: the resync after a clock stall -- drop the oldest `frames` of
+    /// the bridge's live ring. Pump thread, like pull().
+    std::size_t discard( std::size_t frames ) override;
+    bool        isStream() const override { return true; }
 
     /// The peak of everything pulled since the last call, 0..1, then reset.
     /// The pre-FX input meter reads it from the main thread; the pump writes

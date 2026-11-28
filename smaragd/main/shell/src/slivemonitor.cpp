@@ -1683,6 +1683,11 @@ std::uint64_t SLiveMonitor::rateRefusals() const
     return spk ? spk->liveRateRefusals() : 0;
 }
 
+std::uint64_t SLiveMonitor::pumpResyncFrames() const
+{
+    return pump_ ? pump_->resyncFrames() : 0;
+}
+
 QString SLiveMonitor::describe() const
 {
     QString s = QStringLiteral( "live=%1 tracks=%2 sources=%3" )

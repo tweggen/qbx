@@ -66,6 +66,8 @@ void LiveGraphPump::resetStats()
     frozenMisses_.store( 0, std::memory_order_relaxed );
     shortfalls_.store( 0, std::memory_order_relaxed );
     ringFull_.store( 0, std::memory_order_relaxed );
+    resyncFrames_.store( 0, std::memory_order_relaxed );
+    resyncs_.store( 0, std::memory_order_relaxed );
 }
 
 // --------------------------------------------------------------- the thread
@@ -74,6 +76,8 @@ void LiveGraphPump::start()
 {
     if( running_.load( std::memory_order_acquire ) ) return;
     stopFlag_.store( false, std::memory_order_relaxed );
+    stallSynced_ = false;   // QBX-320: no debt carried in from another run
+    resyncDebt_  = 0;
     waiter_.open();
     running_.store( true, std::memory_order_release );
     thread_ = std::thread( [this] { loop(); } );
@@ -222,6 +226,22 @@ bool LiveGraphPump::renderOneBlock()
         // repositions, because havePos_ is false.
     }
 
+    // --- clock stalls (QBX-320) ----------------------------------------------
+    // Folded on every call, before anything can return, so a stall is counted
+    // once however many calls idle after it. The debt is PAID below, right
+    // before the inputs are pulled for a block that is actually rendered.
+    {
+        const std::uint64_t stalled = clock_.stalledFrames();
+        if( !stallSynced_ ) {
+            stallSeen_   = stalled;
+            stallSynced_ = true;
+        } else if( stalled > stallSeen_ ) {
+            resyncDebt_ += stalled - stallSeen_;
+            stallSeen_   = stalled;
+            resyncs_.fetch_add( 1, std::memory_order_relaxed );
+        }
+    }
+
     const twLivePlan *plan = held_.get();
     if( !plan || plan->empty() ) return false;
 
@@ -322,6 +342,34 @@ bool LiveGraphPump::renderOneBlock()
     }
 
     const offset_t pos = nextPos_;
+
+    // --- resync the live input after a clock stall (QBX-320) ----------------
+    // THE CLASS, not the trigger. While the clock stood still the pump, which
+    // paces on it (inv. 16), idled -- and the device input did not: it kept
+    // arriving at the device rate, so every input stream is now exactly the
+    // stalled frames DEEPER than before, and everything monitored from it
+    // would be that much late for the rest of the arm (QBX-318 mechanism B:
+    // one 1024-frame block per stall, measured). Dropping exactly the stall
+    // restores the depth, and therefore the latency, the input had before it.
+    // A source that has not received the whole backlog yet pays what it has;
+    // the rest stays owed to the next block. A plan with no streaming input
+    // owes nothing.
+    if( resyncDebt_ > 0 ) {
+        std::uint64_t paid = 0;
+        bool          any  = false;
+        for( const twLiveTrackPlan &t : plan->tracks ) {
+            if( !t.input || !t.input->isStream() ) continue;
+            const std::uint64_t got = (std::uint64_t)t.input->discard( (std::size_t)resyncDebt_ );
+            paid = any ? std::min( paid, got ) : got;
+            any  = true;
+        }
+        if( !any ) {
+            resyncDebt_ = 0;
+        } else {
+            resyncDebt_ -= std::min( paid, resyncDebt_ );
+            resyncFrames_.fetch_add( paid, std::memory_order_relaxed );
+        }
+    }
 
     // --- the closure, children first ---------------------------------------
     for( std::size_t i = 0; i < plan->tracks.size(); ++i )

@@ -253,6 +253,9 @@ public:
     std::uint64_t rateRefusals() const;
     /// Human-readable state for the head tooltip and the testkit.
     QString describe() const;
+    /// QBX-320: live-input frames the pump dropped to resync after transport
+    /// clock stalls (LiveGraphPump::resyncFrames()); 0 without a pump.
+    std::uint64_t pumpResyncFrames() const;
     /**
      * THE PUBLISHED PLAN, read back off the pump (QBX-307).
      *

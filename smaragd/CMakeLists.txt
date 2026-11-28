@@ -714,7 +714,12 @@ endforeach()
 # every band a closed form. Hence their own entry rather than four more names above.
 foreach(_mc master_closure_linear_ring master_closure_heard_ring
             master_closure_heard_root master_closure_heard_root_raised
-            master_insert_while_monitoring master_closure_attach_hold)
+            master_insert_while_monitoring master_closure_attach_hold
+            # QBX-320: the frozen lane's clock. Same fixture, same reason: the
+            # monitored lag is measured against test_sawtooth.wav, and the
+            # unarmed track carries test_autosaw.wav.
+            master_insert_monitor_clock reroot_warm_stale
+            frozen_stall_resync closure_miss_keeps_clock)
     if(TEST qxa.${_mc})
         set_tests_properties(qxa.${_mc} PROPERTIES
             RUN_SERIAL TRUE

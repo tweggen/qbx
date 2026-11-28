@@ -438,6 +438,36 @@ length_t AudioEngine::pullBlock(float* const* outChannels, std::size_t nChannels
     return produced;
 }
 
+void AudioEngine::advanceWithoutAudio(length_t nFrames) {
+    if (nFrames <= 0) return;
+    uint64_t pos = currentPos_.load(std::memory_order_relaxed);
+    const bool loopValid = cycleEnabled_.load(std::memory_order_relaxed);
+    const uint64_t loopStart = loopStart_.load(std::memory_order_relaxed);
+    const uint64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
+    uint64_t left = (uint64_t) nFrames;
+    // The same wrap rule as the pull's batch loop: a position AT or past the
+    // cycle end goes to the cycle start, and a step never crosses the end.
+    // Bounded by construction: every pass either wraps once or consumes all of
+    // what is left, and a pass that wraps then consumes.
+    for (int guard = 0; left > 0 && guard < 64; ++guard) {
+        if (loopValid && loopEnd > loopStart && pos >= loopEnd) {
+            pos = loopStart;
+            prevFrozenPage_ = nullptr;
+        }
+        uint64_t step = left;
+        if (loopValid && loopEnd > loopStart && pos < loopEnd && pos + step > loopEnd)
+            step = loopEnd - pos;
+        pos  += step;
+        left -= step;
+    }
+    currentPos_.store(pos, std::memory_order_relaxed);
+    // The page in hand no longer covers the playhead's offset as the batch
+    // loop left it; the next pull re-derives the cursor (or drops the page)
+    // in updateFrozenPage(). Wake the readahead: it is behind, or we would
+    // not be here.
+    readaheadCv_.notify_one();
+}
+
 void AudioEngine::updateFrozenPage(uint64_t desiredPos, twComponent *root) {
     // Calculate which page this position belongs to
     uint64_t pageSize = twOutputPage::FRAME_CAPACITY;
@@ -858,11 +888,33 @@ void AudioEngine::readaheadLoop() {
         // reused cannot hide a change.
         const bool rootChanged = lastRoot.owner_before(root) || root.owner_before(lastRoot);
         if (rootChanged && !firstRoot) {
+            // THE RESTARTED FRONTIER IS PROBED, NOT ASSUMED (QBX-320). It used
+            // to be stored as `pageStart` -- at or BEHIND the playhead -- and
+            // only raised again by the window loop below. Between those two
+            // stores pullBlock()'s `readaheadPos > pos` test fails, and a
+            // callback landing there plays a block of silence and stalls the
+            // transport clock, however warm the new root's pages are (twSpeaker
+            // warms them before it publishes a re-root). So the frontier
+            // restarts at the end of the CONTIGUOUS run of the new root's
+            // current pages from the playhead's page, and at pageStart only
+            // when that run is empty -- one store, never a dip.
+            const uint64_t epochNow = root->contentEpochNow();
+            uint64_t restartAt = (uint64_t) pageStart;
+            std::shared_ptr<twOutputPage> lastCurrent;
+            for (int i = 0; i < READAHEAD_PAGES; ++i) {
+                auto pg = root->getPageIfExists((offset_t) restartAt);
+                if (!pg || pg->validAspects == 0 || pg->contentEpoch.load() < epochNow ||
+                    (uint64_t) pg->startPosition != restartAt)
+                    break;
+                lastCurrent = pg;
+                restartAt += pageSize;
+            }
             TW_LOGI( "playback", "[READAHEAD] Frozen root changed: restarting chain at page %llu "
-                    "(frontier was %llu)",
-                    (unsigned long long)pageStart, (unsigned long long)readaheadComputedUpTo_.load(std::memory_order_relaxed) );
-            readaheadPrevPage_ = nullptr;
-            readaheadComputedUpTo_.store((uint64_t) pageStart, std::memory_order_release);
+                    "(frontier was %llu, restarts at %llu)",
+                    (unsigned long long)pageStart, (unsigned long long)readaheadComputedUpTo_.load(std::memory_order_relaxed),
+                    (unsigned long long)restartAt );
+            readaheadPrevPage_ = lastCurrent;
+            readaheadComputedUpTo_.store(restartAt, std::memory_order_release);
             readaheadPostWrapPrevPage_ = nullptr;
             readaheadPostWrapComputedUpTo_.store(0, std::memory_order_release);
             pendingDemand_.reset();

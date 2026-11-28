@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-320 remedy 1: AFTER ANY CLOCK STALL THE LIVE INPUT IS RESYNCED, so a
+  frozen underrun never leaves the monitored input permanently late.
+
+  THE CLASS, forced by a trigger that is NOT a re-root. The plan is LINEAR (no
+  master insert, nothing re-roots, remedy 2 has nothing to do) and the frozen
+  lane's audio is HEARD (remedy 3 does not apply), so `inject-frozen-miss`
+  makes the frozen pull skip one block exactly as a real miss leaves it: the
+  engine position stands still for 1024 frames. The pump, pacing on that
+  clock, idles for the block while the paced file input keeps arriving - its
+  backlog is now one block deeper. Without the resync everything monitored
+  after the stall is one block late until disarm (QBX-318 mechanism B's second
+  half); with it, the pump drops exactly the stalled frames from the input on
+  its next block.
+
+  WHAT IS MEASURED: the DRIFT of the monitored lag between a window before the
+  injection (48000) and one after it (168000), which reads 1024 for one
+  unrepaid block and 0 when it is repaid; and, as the witness only the
+  injection can produce, the counters - a stall of at least one block, and at
+  least that much input resynced. The gap the stall leaves in the monitored
+  signal is NOT asserted: a stall that happened costs that block, and only
+  remedies 2 and 3 prevent stalls (each gated in its own case).
+
+  THE FIXTURE is master_insert_while_monitoring's without the master insert:
+  the armed track carries test_sawtooth.wav through a 0.25 gain, the unarmed
+  one test_autosaw.wav at -60 dB.
+-->
+<SActionScript version="1" name="frozen_stall_resync">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2600"/>
+
+    <!-- THE FAULT: one frozen pull skipped while the lane is LINEAR. -->
+    <inject-frozen-miss blocks="1"/>
+
+    <wait-ms ms="2600"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="0" maxCount="0"/>
+
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="frozen_stall_resync.wav" minFrames="216000"/>
+    <assert-monitor-latency filename="frozen_stall_resync.wav"
+                            inputFile="../test_sawtooth.wav" channel="0"
+                            startFrame="168000" frameCount="24000"
+                            refStartFrame="48000" maxDriftFrames="64"
+                            maxFrames="24000" searchFrames="24000"/>
+    <assert-frozen-lane minStallFrames="1024" minResyncFrames="1024"
+                        maxDiscardedMissFrames="0"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>

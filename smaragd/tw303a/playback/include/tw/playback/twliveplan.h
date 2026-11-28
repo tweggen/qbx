@@ -63,6 +63,17 @@ public:
     // harness) is a pure function of position; a device ring ignores it.
     virtual std::size_t pull( float *const *out, std::size_t channels,
                               std::size_t frames, offset_t pos ) = 0;
+
+    // RESYNC AFTER A CLOCK STALL (QBX-320). A STREAM (a device ring) kept
+    // filling while the transport clock stood still, so its backlog is now
+    // that much deeper and everything monitored from it would stay that much
+    // late until disarm; discard() throws away up to `frames` of its OLDEST
+    // queued frames and returns how many it threw away. A POSITIONAL source
+    // (the harness, the metronome) is a function of `pos`, has no backlog, and
+    // is not asked: isStream() is false, which is the default. Same rules as
+    // pull(): pump thread, no block, no allocation, no lock.
+    virtual bool        isStream() const { return false; }
+    virtual std::size_t discard( std::size_t frames ) { (void)frames; return 0; }
 };
 
 // One member of the live closure, in render order (children before parents).

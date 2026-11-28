@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  QBX-320 remedy 3: UNDER A CLOSURE, A FROZEN PULL THAT MISSES MUST NOT STOP
+  THE TRANSPORT CLOCK.
+
+  Under a Closure plan the pump renders the whole master itself and the RT
+  DISCARDS the frozen root page (playback inv. 21) - but the frozen lane still
+  owns the clock, because the position is published from the engine after the
+  pull. A miss there used to stand the playhead still for the missing frames:
+  the monitored ring then played a block of silence (the entry queued for the
+  next position was in the future) and stayed a block late. Since the audio is
+  thrown away anyway, the remedy advances the playhead across the miss.
+
+  THE MISS IS FORCED, and not by a re-root: the master insert is made BEFORE
+  arming, so the plan is a Closure from its first publication and its re-root
+  lands on an engine that is not playing yet (nothing to warm, remedy 2 idle).
+  `inject-frozen-miss` then skips one frozen pull 2.6 s into the roll.
+
+  WHAT IS MEASURED: continuity of the monitored signal over [100000, 190000),
+  which contains the injection and excludes the input file's silent head at its
+  loop seam (~196000); a stall reads as a 1024-frame gap there. And the
+  counters: the miss was advanced (`discardedMissFrames` >= 1024, the witness
+  only the injection produces) and the clock never stalled (`stallFrames` = 0;
+  under a Closure every short pull is discarded audio, the start included).
+  The drift is NOT the claim here - remedy 1 would repay a stall's lateness,
+  but not its gap.
+-->
+<SActionScript version="1" name="closure_miss_keeps_clock">
+
+  <setup project="new"/>
+
+  <actions>
+    <add-track index="-1"/>
+    <set-track-input trackPath="0" input="audio:file:3"/>
+    <set-monitor-mode trackPath="0" mode="on"/>
+    <insert-plugin trackPath="0" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="0" slotIndex="0" paramId="0" value="0.25"/>
+
+    <add-track index="-1"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="0"/>
+    <add-sample trackPath="1" filePath="../test_autosaw.wav" timePos="192000"/>
+    <set-track-volume trackPath="1" volume="-60"/>
+
+    <!-- The master is built FIRST: the plan is a Closure from the arm on. -->
+    <insert-plugin trackPath="$master" slotIndex="0"
+                   format="clap" uid="tw.test.clap.gain"
+                   name="Smaragd Test Gain" vendor="Smaragd"
+                   path="twtestclap.clap" nIn="2" nOut="2"/>
+    <set-plugin-param trackPath="$master" slotIndex="0" paramId="0" value="2.0"/>
+
+    <arm-track trackPath="0" armed="1"/>
+    <set-locator position="0"/>
+    <toggle-playback play="1"/>
+    <wait-playhead minAdvance="4096" timeoutMs="30000"/>
+    <wait-ms ms="2600"/>
+
+    <!-- THE FAULT: one frozen pull skipped under the Closure. -->
+    <inject-frozen-miss blocks="1"/>
+
+    <wait-ms ms="2600"/>
+    <assert-log level="warn" contains="the RT pops the ring only" minCount="0"/>
+
+    <toggle-playback play="0"/>
+
+    <dump-playback-capture filename="closure_miss_keeps_clock.wav" minFrames="216000"/>
+    <assert-audio-continuity filename="closure_miss_keeps_clock.wav" channel="0"
+                             startFrame="100000" frameCount="90000"
+                             maxGapFrames="256"/>
+    <assert-frozen-lane minDiscardedMissFrames="1024" maxStallFrames="0"/>
+
+    <arm-track trackPath="0" armed="0"/>
+    <assert-render-policy liveThreadRefusals="0" liveOwnedRefusals="0"/>
+  </actions>
+
+  <assertions>
+    <assert-track-count equals="2"/>
+  </assertions>
+
+</SActionScript>
