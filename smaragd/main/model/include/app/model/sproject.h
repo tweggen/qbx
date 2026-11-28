@@ -385,6 +385,20 @@ public:
      */
     void notifySoloSetChanged() { emit soloSetChanged(); }
 
+    /**
+     * A MUTE FLAG MOVED on a user lane, in any root (QBX-311).
+     *
+     * Mute is a property of the mixer CHANNEL (STrack::onTrackMuteChanged),
+     * enforced by whichever parent sums the lane -- SStdMixer for a root
+     * child, the folder STrack for a nested one -- and each of those raises
+     * this after its own pass. Nobody else's audibility changes on a mute,
+     * so there is no topology half to it. Readers only, like
+     * notifySoloSetChanged(): the one consumer is the live plan, whose
+     * frozen-input membership asks ssolo::isLaneAudible, which reads
+     * isMuted().
+     */
+    void notifyMuteSetChanged() { emit muteSetChanged(); }
+
     // Fire arrangementChanged(). Called from the action chokepoint after every
     // applied action so cached renders (asset captures) invalidate transparently
     // on any edit. Coarse by design (every action, not just arrangement edits);
@@ -533,6 +547,9 @@ signals:
     // A solo flag moved, in any root, under EITHER scope — see
     // notifySoloSetChanged(). Readers only; nothing re-wires on this.
     void soloSetChanged();
+    // A mute flag moved on a user lane, in any root -- see
+    // notifyMuteSetChanged(). Readers only; nothing re-wires on this.
+    void muteSetChanged();
     // Any applied action; consumers that cache rendered audio drop their cache.
     void arrangementChanged();
     // An async capture revalidation landed (preview/metadata fresh); views

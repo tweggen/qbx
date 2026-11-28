@@ -2308,7 +2308,12 @@ void STrack::childTrackMuteChanged( bool /*muted*/ )
     // Not the top-down pass, so there is no root being handed down here: a
     // mute gesture on one child starts and ends with us, and the root has to
     // be looked up from our own identity (QBX-245).
-    applyChildTrackAudibility( splacements::rootHolding( getProjectSafe(), this ) );
+    SProject *project = getProjectSafe();
+    applyChildTrackAudibility( splacements::rootHolding( project, this ) );
+    // ...and the LIVE PLAN, which our twTrackMix is not part of: the pump reads
+    // a frozen sibling out of its own root pages, which a mute leaves full, so
+    // only a rebuild drops it (QBX-311, see SStdMixer::trackMuteChanged).
+    if( project ) project->notifyMuteSetChanged();
 }
 
 // A lane at or below one of our child tracks changed its solo flag. Solo is

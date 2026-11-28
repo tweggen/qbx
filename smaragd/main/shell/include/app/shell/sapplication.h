@@ -592,6 +592,9 @@ signals:
      * set never changes on it -- and refreshPlan_()'s `sameSet` path turns
      * such a call into a cheap republish.
      *
+     * A MUTE FLIP raises it as well, for the same reason (QBX-311:
+     * SProject::muteSetChanged), and never moves the arm set either.
+     *
      * It invalidates nothing and re-wires nothing -- SLiveMonitor::refresh()
      * has already done that work by the time this is emitted. The only
      * consumers are readers, the status bar's record-arm badge first.
