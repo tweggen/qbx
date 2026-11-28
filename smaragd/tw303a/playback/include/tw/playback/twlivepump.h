@@ -121,6 +121,20 @@ public:
     // stalled frame was given back, and nothing else was dropped.
     std::uint64_t resyncFrames()      const { return resyncFrames_.load( std::memory_order_relaxed ); }
     std::uint64_t resyncs()           const { return resyncs_.load( std::memory_order_relaxed ); }
+    // QBX-323: frames of live INPUT the pump threw away to resync after its
+    // own CATCH-UPS - the positions a catch-up skipped, which it never pulled
+    // input for. Kept apart from resyncFrames() so "resyncFrames == the
+    // speaker's stall count" still means what it says.
+    std::uint64_t catchUpResyncFrames() const
+    { return catchUpResyncFrames_.load( std::memory_order_relaxed ); }
+    // TEST SEAM (QBX-323): make the pump LATE by at least `frames`. The next
+    // playing call that has a position stops rendering until the clock's next
+    // frame has passed the pump's own position by `frames`, then carries on -
+    // which is a catch-up (or, beyond twPluginSlotProcessor::
+    // kLiveCatchUpMaxFrames, a reposition) exactly as a descheduled pump
+    // meets it. Safe from any thread; one atomic on the pump path.
+    void forceLateForTest( std::int64_t frames )
+    { lateReqForTest_.store( frames, std::memory_order_release ); }
     // The position the last block was rendered at (diagnostics and tests).
     offset_t      lastPosition()      const { return lastPos_.load( std::memory_order_relaxed ); }
     void resetStats();
@@ -180,6 +194,14 @@ private:
     std::uint64_t     stallSeen_   = 0;
     bool              stallSynced_ = false;
     std::uint64_t     resyncDebt_  = 0;
+    // The positions skipped by catch-ups and not yet repaid out of the input
+    // (QBX-323). Paid together with resyncDebt_, after it; re-anchored at
+    // start() like it.
+    std::uint64_t     catchUpDebt_ = 0;
+    // forceLateForTest(): the request, and the clock frame the pump idles
+    // until once it has been taken up (< 0 == not holding). Pump thread only.
+    std::atomic<std::int64_t> lateReqForTest_{ 0 };
+    offset_t          lateUntil_   = -1;
     std::uint64_t     runId_ = 0;
     bool              loggedShallowRing_ = false;
 
@@ -198,6 +220,7 @@ private:
     std::atomic<std::uint64_t> ringFull_{ 0 };
     std::atomic<std::uint64_t> resyncFrames_{ 0 };
     std::atomic<std::uint64_t> resyncs_{ 0 };
+    std::atomic<std::uint64_t> catchUpResyncFrames_{ 0 };
     std::atomic<offset_t>      lastPos_{ 0 };
 };
 

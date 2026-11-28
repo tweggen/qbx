@@ -719,7 +719,9 @@ foreach(_mc master_closure_linear_ring master_closure_heard_ring
             # monitored lag is measured against test_sawtooth.wav, and the
             # unarmed track carries test_autosaw.wav.
             master_insert_monitor_clock reroot_warm_stale
-            frozen_stall_resync closure_miss_keeps_clock)
+            frozen_stall_resync closure_miss_keeps_clock
+            # QBX-323: the pump's catch-up resync, measured the same way.
+            pump_catchup_resync)
     if(TEST qxa.${_mc})
         set_tests_properties(qxa.${_mc} PROPERTIES
             RUN_SERIAL TRUE

@@ -3537,6 +3537,99 @@ int main()
               "QBX-320: exactly the stalled frames were resynced, once");
     }
 
+    // QBX-323: A PUMP CATCH-UP IS REPAID OUT OF THE INPUT BACKLOG, like a
+    // stall. The same stream input and hand-stamped clock as QBX-320's case,
+    // but the CLOCK never stands still: for three callbacks the pump is simply
+    // not run (descheduled), the RT drains the ring, and the clock overtakes
+    // the pump. On waking it CATCHES UP (nextPos_ jumps to the clock) and
+    // pulls no input for the positions it skipped - so without the resync the
+    // material it stamps at a position is that many frames OLDER for the rest
+    // of the arm. With it, the offset is exactly what it was before, and
+    // exactly the skipped frames were dropped, counted apart from a stall's.
+    {
+        printf("\n=== QBX-323: a pump catch-up is repaid out of the input backlog ===\n");
+        const length_t BLOCK = 1024;
+
+        class StreamInput : public twLiveInputSource {
+        public:
+            std::size_t pull(float *const *out, std::size_t channels,
+                             std::size_t frames, offset_t) override {
+                for (std::size_t c = 0; c < channels; ++c)
+                    for (std::size_t i = 0; i < frames; ++i)
+                        out[c][i] = (float)(next_ + i);
+                next_ += frames;
+                return frames;
+            }
+            bool isStream() const override { return true; }
+            std::size_t discard(std::size_t frames) override {
+                next_ += frames; discarded_ += frames; return frames;
+            }
+            std::uint64_t next_ = 0, discarded_ = 0;
+        };
+        auto in = std::make_shared<StreamInput>();
+
+        auto plan = std::make_shared<twLivePlan>();
+        plan->blockFrames = BLOCK;
+        plan->sampleRate  = (int)env.getSRate();
+        plan->leadFrames  = 2 * BLOCK;
+        plan->outputTrack = 0;
+        plan->transport.playing = true;
+        {
+            twLiveTrackPlan t;
+            t.name = "stream"; t.channels = 1; t.input = in;
+            plan->tracks.push_back(std::move(t));
+        }
+        CHECK(plan->finalize(), "QBX-323: the plan finalizes");
+
+        twLiveMixRing ring;
+        ring.reset(1, (std::uint32_t)BLOCK, 4);
+        twEngineClock clock;
+        LiveGraphPump pump(ring, clock);
+        pump.setPlan(plan);
+
+        std::vector<std::pair<std::int64_t, std::int64_t>> seen;
+        std::thread harness([&] {
+            std::int64_t nf = 0;
+            for (int b = 0; b < 24; ++b) {
+                if (b > 0) nf += BLOCK;
+                clock.stamp(nf - BLOCK, nf, 0);
+                const bool descheduled = (b >= 10 && b < 13);   // the pump is late
+                if (!descheduled)
+                    while (pump.renderOneBlock()) {}
+                twLiveRingEntry e;
+                while (ring.peek(e) && e.startPos < nf) {
+                    seen.emplace_back(e.startPos, (std::int64_t)e.channel(0)[0] - e.startPos);
+                    ring.pop();
+                }
+            }
+        });
+        harness.join();
+
+        std::int64_t before = INT64_MIN, after = INT64_MIN;
+        for (const auto &p : seen) {
+            if (p.first < 8 * BLOCK) before = p.second;
+            if (p.first >= 16 * BLOCK && after == INT64_MIN) after = p.second;
+        }
+        printf("     input offset before the catch-up %lld, after %lld; %llu catch-up(s), "
+               "%llu reposition(s), catch-up resync %llu frame(s), stall resync %llu, "
+               "discarded %llu\n", (long long)before, (long long)after,
+               (unsigned long long)pump.catchUps(), (unsigned long long)pump.repositions(),
+               (unsigned long long)pump.catchUpResyncFrames(),
+               (unsigned long long)pump.resyncFrames(), (unsigned long long)in->discarded_);
+        CHECK(pump.catchUps() == 1,
+              "QBX-323: the late pump met exactly one catch-up (the fixture is what it claims)");
+        CHECK(before != INT64_MIN && after != INT64_MIN,
+              "QBX-323: blocks were rendered on both sides of the catch-up");
+        CHECK(after == before,
+              "QBX-323: after the catch-up the input is at the SAME offset from the "
+              "position (the skipped positions' input was dropped, not kept as latency)");
+        CHECK(pump.catchUpResyncFrames() == in->discarded_ && in->discarded_ > 0 &&
+                  in->discarded_ % (std::uint64_t)BLOCK == 0,
+              "QBX-323: exactly the skipped frames were dropped, whole blocks");
+        CHECK(pump.resyncFrames() == 0,
+              "QBX-323: ...and none of it is counted as a stall's resync");
+    }
+
     // QBX-320 remedy 3's engine half: advanceWithoutAudio() moves the playhead
     // by exactly the frames asked for and wraps at the cycle end the way the
     // pull does -- a step never crosses loopEnd, a position at loopEnd goes to
