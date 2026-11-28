@@ -109,9 +109,79 @@
 
     <toggle-playback play="0"/>
 
-    <dump-playback-capture filename="master_insert_while_monitoring.wav" minFrames="216000"/>
+    <!-- minFrames covers the anchored window at the onset bound below:
+         40000 + 137320 + 48000. Every capture measured was 254976 or more. -->
+    <dump-playback-capture filename="master_insert_while_monitoring.wav" minFrames="225320"/>
+
+    <!-- THE ANCHOR'S PRECONDITION, asserted before the anchor is used
+         (QBX-321). An onset anchor assumes that everything after the onset is
+         attached rigidly to it. A clock stall at the flip (QBX-318 mechanism
+         B, fixed by QBX-320) breaks exactly that: the material before the
+         flip stays put, everything after it moves one block later, and the
+         onset, which lies before the flip, does not see it. Anchored, that
+         state reads INSIDE the band: CI's own C+B captures read 0.1671120
+         anchored, against 0.17129 absolute. So the band alone cannot fail a
+         stall once the window is anchored, and narrowing it instead was
+         measured to be too thin (below). These two assertions are
+         master_insert_monitor_clock's, with its windows and bounds, and they
+         are here on purpose rather than as noise: they are what makes the
+         anchor below safe in THIS case.
+           - no silent run of more than 256 frames over [100000, 190000),
+             which holds the flip (B's gap is 1024 frames);
+           - the monitored lag does not DRIFT between a window before the flip
+             and the energy window's own neighbourhood (one stalled block
+             reads as 1024). A capture-head displacement moves both windows
+             alike, so neither assertion sees C.
+         Sabotaged by reverting all three QBX-320 remedies, every one of 38
+         runs in which B fired failed BOTH of these, and the anchored energy
+         window below PASSED in every one of them (0.1665854, or 0.1671120
+         with C as well). Without these two the case would not see B. -->
+    <assert-audio-continuity filename="master_insert_while_monitoring.wav" channel="0"
+                             startFrame="100000" frameCount="90000"
+                             maxGapFrames="256"/>
+    <assert-monitor-latency filename="master_insert_while_monitoring.wav"
+                            inputFile="../test_sawtooth.wav" channel="0"
+                            startFrame="168000" frameCount="24000"
+                            refStartFrame="48000" maxDriftFrames="64"
+                            maxFrames="24000" searchFrames="24000"/>
+
+    <!-- BOUND AND REPORT THE ONSET (the house rule in
+         sdumpplaybackcaptureaction.h). This box puts it at 30680; CI's C
+         captures at 32507. -->
+    <assert-audio-onset filename="master_insert_while_monitoring.wav" channel="0" maxFrame="40000"/>
+
+    <!-- ANCHORED ON THE ONSET, not on frame 0 (QBX-321, removing QBX-318
+         mechanism C). 137320 = the old absolute 168000 minus this box's
+         onset of 30680, so on this box the window is the one it always was.
+         The band is master_closure_heard_ring's and is NOT widened.
+
+         THE DISPLACEMENT IS A PURE SHIFT, checked before anchoring. Matched
+         block by block against a clean local capture, CI's two red captures
+         (runs 46118704137 and 46120153235) are the clean capture moved by
+         exactly 2048 frames up to the flip, with a residual under 0.0005 (C),
+         and by 3072 after it (C plus one stalled block, B). A local capture
+         displaced by 1024 throughout, with no residual, reads 0.1665854
+         absolute and 0.1641429 anchored: the reference, recovered exactly.
+
+         THE ONSET IS A SLIGHTLY IMPRECISE RULER HERE, and that is measured.
+         The capture rises slowly out of silence (test_sawtooth's head
+         through the 0.25 gain), so the 0.02 crossing lies on a gentle ramp,
+         and the -60 dB root track, which does not always move with the ring,
+         nudges it by a few hundred frames: over 160 local runs it read up to 327
+         frames short of the material's own displacement, never past it (CI's C captures:
+         onset +1827 for material +2048). Anchored readings spanned
+         0.1641429 to 0.1649340, +0.48 % at worst, against +2.98 % for an
+         unanchored C. The default threshold is kept: on a linear ramp the
+         error is the root's level over the ramp's slope, whatever the
+         threshold.
+
+         WHY THE BAND WAS NOT NARROWED to catch B itself: an anchored B reads
+         about 0.16659, and the onset's own scatter puts anchored clean
+         readings up to 0.16493. A band between them would keep about half a
+         per cent on either side, which is a flake waiting. The
+         continuity and drift assertions above measure B directly. -->
     <assert-audio-energy filename="master_insert_while_monitoring.wav"
-                         startFrame="168000" frameCount="48000"
+                         anchorOnset="1" startFrame="137320" frameCount="48000"
                          channel="0" minRms="0.1592" maxRms="0.1691"/>
 
     <arm-track trackPath="0" armed="0"/>

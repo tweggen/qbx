@@ -395,7 +395,7 @@ failure is a 37 % shortfall. **But that family is real and has a live member**:
 loadavg >= 12, because it anchors its grid on a first click the capture start
 truncates. That one reproduces on demand and is filed as QBX-227.
 
-## `qxa.master_insert_while_monitoring` — MECHANISM ESTABLISHED; B FIXED by QBX-320, C still open (QBX-321); NOT excluded (QBX-318)
+## `qxa.master_insert_while_monitoring` — MECHANISM ESTABLISHED; B FIXED by QBX-320, C anchored away by QBX-321; NOT excluded (QBX-318)
 
 **Not excluded.** It went red on three unrelated PRs on 2026-11-24, and on two
 `main` pushes on 2026-11-10 that were found later by scanning every CI job
@@ -517,14 +517,94 @@ tolerates up to two blocks of B. That is why B is gated by its own case,
 On a build with all three remedies reverted that case failed 9 of 10 idle and
 7 of 10 under 36 spinners. In the 3 passing runs B did not fire at all.
 
-C is untouched: its onset of 8872 still appears, 1 in 20 on `main` idle. With B
-gone, anchoring the window on the onset no longer hides anything, and that is
-QBX-321.
+C was untouched by QBX-320: its onset of 8872 still appeared, 1 in 20 on
+`main` idle. It is removed by QBX-321, below.
 
 One run in 40 of this case on the fixed build failed `assert-log` rather than
 the audio. The Closure line was logged 4 ms before the `wait-ms` that opens
 the assertion's window. That happened in none of the 40 `main` runs, and it is
 not explained.
+
+### C is anchored (QBX-321)
+
+The energy window is now measured from the capture's onset:
+`anchorOnset="1" startFrame="137320"`, so the window is `[onset + 137320,
++48000)`. On this box the onset is 30680, so the window is still `[168000,
+216000)`. The band `[0.1592, 0.1691]` is **not** widened.
+
+The onset numbers in this section come from the shared `findOnsetFrame` at
+its default threshold (0.02, 64-frame window), which the anchor uses, so they
+are not comparable with the 6823 and 8872 quoted above.
+
+**The displacement is a pure shift.** Checked before anchoring, by matching
+4096-frame blocks against a clean local capture. CI's two red captures
+(`46118704137` and `46120153235`) are that clean capture moved by exactly
+**+2048 up to the flip** (C), with a max-abs residual under 0.0005, and by
++3072 after it (C plus B's one block). A local run displaced by +1024
+throughout, with no residual, reads `0.1665854` absolute and `0.1641429`
+anchored. Shifting the window back by the measured onset recovers the
+reference exactly.
+
+**The onset is a slightly imprecise ruler for this fixture.** The capture
+rises slowly out of silence (test_sawtooth's head through the 0.25 gain), so
+the 0.02 crossing lies on a gentle ramp. The −60 dB root track does not always
+move with the ring, and it nudges the crossing. The onset came out up to
+**327 frames short** of the material's own displacement, and never past it.
+CI's C captures put the onset at 32507, +1827 against a material shift of
++2048. A lower threshold would not help: on a linear ramp the error is the
+root's level divided by the ramp's slope. Over every local capture, anchored
+readings spanned `0.1641429` to `0.1649340`, which is +0.48 % at worst. An
+unanchored C reads +2.98 %.
+
+**Anchoring alone would hide B, so the case now asserts the anchor's
+precondition.** The onset lies before the flip, and a stall at the flip moves
+only what comes after it. Anchored, CI's own C+B captures read `0.1671120`,
+**inside** the band. Narrowing the band to catch B was measured and rejected.
+An anchored B reads about `0.16659`, and clean anchored readings go up to
+`0.16493`, so a band between them would keep about half a per cent on either
+side. Instead, the case asserts `master_insert_monitor_clock`'s two B checks,
+with the same windows and bounds, before the energy window:
+
+- no silent run longer than 256 frames over `[100000, 190000)`;
+- a monitored-lag drift of at most 64 frames between 48000 and 168000.
+
+A capture-head displacement moves both windows alike, so neither check sees C.
+
+Measured with the binary run under ctest's ENVIRONMENT, holding the shared
+heavy-work lock. Every capture was decoded:
+
+| build | regime | runs | result | C seen | B seen |
+|---|---|---|---|---|---|
+| fix (`6d5b40fa` + this case) | idle, load 0.5–1.8 | 40 | **40 PASS** | 0 | 0 |
+| fix | 36 spinners on 12 cores, load 22–63 (0.6 at the first run) | 40 | **40 PASS** | 1 (onset 32507, `0.1690398` absolute → `0.1646661` anchored) | 0 |
+| remedies reverted (sabotage) | idle, load 1.9–10.7 | 20 | **18 FAIL**, 2 PASS | 2 | 18 |
+| remedies reverted + `set-reroot-stale` (scratch copy of the case) | idle, load 2.1–3.0 | 10 | **10 FAIL** | 0 | 10 |
+| remedies reverted | 36 spinners on 12 cores, load 2.3–43 | 20 | **10 FAIL**, 10 PASS | 0 | 10 |
+
+The old unanchored case also ran 80 times on the fixed build before the edit
+(40 idle, 40 under 36 spinners), decoded the same way: no C, no B, 4 runs
+under the spinners with the ring moved +1024 throughout, and drift 0 in every
+run.
+
+**The sabotage** reverts all three QBX-320 remedies in the source: no warm-up
+before the re-root, the frontier restarting at the page start, and a short
+pull that neither advances the clock nor notes a stall. Every run in which B
+fired, failed on **both** `assert-audio-continuity` (the 1024-frame gap at
+132096) and `assert-monitor-latency` (drift 1024). In **every one of them**,
+the anchored energy window **passed**, reading `0.1665854`, or `0.1671120` for
+C+B, which is CI's state. That is the measurement showing that the two
+assertions, not the band, are what keep B visible to this case. The 2
+passing idle runs were ones where B did not fire: one clean, and one C alone
+(anchored `0.1646661`).
+The 10 passing runs under the spinners had no gap and drift 0, so B did not
+fire in them either. One failing spinner run also failed `assert-log`. That is
+the Closure-line timing QBX-320 reported and did not explain.
+
+**If it returns:** the failure message names the resolved window and the
+onset. A failure in continuity or drift is B and belongs to QBX-320's
+mechanism, so read `assert-frozen-lane`'s counters in
+`master_insert_monitor_clock`. An energy failure with both of those green is
+neither B nor C.
 
 ### Why it was not fixed in QBX-318
 
