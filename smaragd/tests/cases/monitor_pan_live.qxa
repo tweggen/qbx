@@ -34,7 +34,7 @@
     <dump-playback-capture filename="mpl_left.wav" minFrames="72000"/>
     <!-- 0.230940, +-3 % -->
     <assert-audio-energy filename="mpl_left.wav" startFrame="48000" frameCount="24000"
-                         channel="0" minRms="0.90000" maxRms="0.95000"/>
+                         channel="0" minRms="0.22401" maxRms="0.23787"/>
     <assert-audio-energy filename="mpl_left.wav" startFrame="48000" frameCount="24000"
                          channel="1" minRms="0.0" maxRms="0.0"/>
     <arm-track trackPath="0" armed="0"/>
